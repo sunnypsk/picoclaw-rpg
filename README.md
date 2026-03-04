@@ -709,7 +709,7 @@ PicoClaw stores data in your configured workspace (default: `~/.picoclaw/workspa
 ```
 ~/.picoclaw/workspace/
 ├── sessions/          # Conversation sessions and history
-├── memory/           # Long-term memory (MEMORY.md)
+├── memory/           # Long-term memory and user profile (MEMORY.md)
 ├── state/            # Persistent state (last channel, etc.)
 ├── cron/             # Scheduled jobs database
 ├── skills/           # Custom skills
@@ -717,8 +717,9 @@ PicoClaw stores data in your configured workspace (default: `~/.picoclaw/workspa
 ├── HEARTBEAT.md      # Periodic task prompts (checked every 30 min)
 ├── IDENTITY.md       # Agent identity
 ├── SOUL.md           # Agent soul
+├── STATE.md          # NPC runtime state (emotion, vitals, relationships)
 ├── TOOLS.md          # Tool descriptions
-└── USER.md           # User preferences
+└── (no USER.md)      # User profile moved to memory/MEMORY.md
 ```
 
 ### Skill Sources
@@ -746,6 +747,7 @@ PicoClaw runs in a sandboxed environment by default. The agent can only access f
   "agents": {
     "defaults": {
       "workspace": "~/.picoclaw/workspace",
+      "persona_preset": "momonga",
       "restrict_to_workspace": true
     }
   }
@@ -755,6 +757,7 @@ PicoClaw runs in a sandboxed environment by default. The agent can only access f
 | Option                  | Default                 | Description                               |
 | ----------------------- | ----------------------- | ----------------------------------------- |
 | `workspace`             | `~/.picoclaw/workspace` | Working directory for the agent           |
+| `persona_preset`        | `momonga`               | Default personality preset for seeded `SOUL.md` and `IDENTITY.md` |
 | `restrict_to_workspace` | `true`                  | Restrict file/command access to workspace |
 
 #### Auto-Provision Dedicated Workspaces (Optional)
@@ -777,6 +780,7 @@ Behavior:
 - Unmatched peers are routed to dedicated auto-created agents.
 - Each auto-created agent gets its own workspace path: `~/.picoclaw/workspace-<agent-id>`.
 - Explicit `bindings` still take precedence over auto-provision routing.
+- If `agents.defaults.persona_preset` is set (for example `momonga`), seeded `SOUL.md` and `IDENTITY.md` use the preset content for new auto-workspaces.
 
 #### Protected Tools
 
