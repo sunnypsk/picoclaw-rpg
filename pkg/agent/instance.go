@@ -15,6 +15,57 @@ import (
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
+var workspaceBootstrapFiles = []string{
+	"AGENTS.md",
+	"SOUL.md",
+	"USER.md",
+	"IDENTITY.md",
+	"STATE.md",
+	"memory/MEMORY.md",
+}
+
+var defaultWorkspaceBootstrapContent = map[string]string{
+	"AGENTS.md": `# Agent Instructions
+
+You are a helpful AI assistant. Be concise, accurate, and friendly.
+`,
+	"SOUL.md": `# Soul
+
+I am picoclaw, a lightweight AI assistant powered by AI.
+
+## Personality
+
+- Helpful and friendly
+- Concise and to the point
+- Honest and transparent
+`,
+	"USER.md": `# User
+
+Information about user goes here.
+
+## Preferences
+
+- Communication style: (casual/formal)
+- Timezone: (your timezone)
+- Language: (your preferred language)
+`,
+	"IDENTITY.md": `# Identity
+
+## Name
+PicoClaw
+
+## Description
+Ultra-lightweight personal AI assistant written in Go.
+`,
+}
+
+var stateTemplateJSON = `{"version":1,"updated_at":"","emotion":{"name":"calm","intensity":35,"reason":""},"location":{"area":"base","scene":"workspace","activity":"observing","moved_at":"","move_reason":""},"relationships":{},"vitals":{"energy":70,"stress":20,"motivation":70},"habits":[],"recent_events":[]}`
+
+var memoryTemplateFallback = `# Long-term Memory
+
+This file stores important information that should persist across sessions.
+`
+
 // AgentInstance represents a fully configured agent with its own workspace,
 // session manager, context builder, and tool registry.
 type AgentInstance struct {
@@ -46,6 +97,7 @@ func NewAgentInstance(
 ) *AgentInstance {
 	workspace := resolveAgentWorkspace(agentCfg, defaults)
 	os.MkdirAll(workspace, 0o755)
+	seedWorkspaceBootstrapFiles(workspace, defaults)
 
 	model := resolveAgentModel(agentCfg, defaults)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
@@ -224,4 +276,66 @@ func expandHome(path string) string {
 		return home
 	}
 	return path
+}
+
+func seedWorkspaceBootstrapFiles(workspace string, defaults *config.AgentDefaults) {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return
+	}
+
+	sourceWorkspace := ""
+	if defaults != nil {
+		sourceWorkspace = expandHome(strings.TrimSpace(defaults.Workspace))
+	}
+
+	for _, relPath := range workspaceBootstrapFiles {
+		targetPath := filepath.Join(workspace, filepath.FromSlash(relPath))
+		if _, err := os.Stat(targetPath); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			continue
+		}
+
+		if sourceWorkspace != "" {
+			sourcePath := filepath.Join(sourceWorkspace, filepath.FromSlash(relPath))
+			if !isSamePath(sourcePath, targetPath) {
+				if data, err := os.ReadFile(sourcePath); err == nil {
+					if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err == nil {
+						if err := os.WriteFile(targetPath, data, 0o644); err == nil {
+							continue
+						}
+					}
+				}
+			}
+		}
+
+		fallback := fallbackBootstrapContent(relPath)
+		if strings.TrimSpace(fallback) == "" {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			continue
+		}
+		_ = os.WriteFile(targetPath, []byte(fallback), 0o644)
+	}
+}
+
+func fallbackBootstrapContent(relPath string) string {
+	if relPath == "STATE.md" {
+		return "# NPC State\n\n```json\n" + stateTemplateJSON + "\n```\n"
+	}
+	if relPath == "memory/MEMORY.md" {
+		return memoryTemplateFallback
+	}
+	return defaultWorkspaceBootstrapContent[relPath]
+}
+
+func isSamePath(a, b string) bool {
+	left := filepath.Clean(a)
+	right := filepath.Clean(b)
+	if os.PathSeparator == '\\' {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
 }

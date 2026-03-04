@@ -2,6 +2,7 @@ package agent
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -158,5 +159,123 @@ func TestNewAgentInstance_ResolveCandidatesFromModelListAlias(t *testing.T) {
 				t.Fatalf("candidate model = %q, want %q", agent.Candidates[0].Model, tt.wantModel)
 			}
 		})
+	}
+}
+
+func TestNewAgentInstance_SeedsBootstrapFilesFromDefaultWorkspace(t *testing.T) {
+	root := t.TempDir()
+	defaultWorkspace := filepath.Join(root, "workspace-main")
+	autoWorkspace := filepath.Join(root, "workspace-auto")
+
+	sourceFiles := map[string]string{
+		"AGENTS.md":        "# source agents\n",
+		"SOUL.md":          "# source soul\n",
+		"USER.md":          "# source user\n",
+		"IDENTITY.md":      "# source identity\n",
+		"STATE.md":         "# source state\n",
+		"memory/MEMORY.md": "# source memory\n",
+	}
+	for rel, content := range sourceFiles {
+		writeWorkspaceFile(t, defaultWorkspace, rel, content)
+	}
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: defaultWorkspace,
+				Model:     "test-model",
+			},
+		},
+	}
+
+	provider := &mockProvider{}
+	agent := NewAgentInstance(&config.AgentConfig{ID: "auto-1", Workspace: autoWorkspace}, &cfg.Agents.Defaults, cfg, provider)
+
+	if agent.Workspace != autoWorkspace {
+		t.Fatalf("workspace = %q, want %q", agent.Workspace, autoWorkspace)
+	}
+
+	for rel, want := range sourceFiles {
+		targetPath := filepath.Join(autoWorkspace, filepath.FromSlash(rel))
+		data, err := os.ReadFile(targetPath)
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		if string(data) != want {
+			t.Fatalf("content of %s = %q, want %q", rel, string(data), want)
+		}
+	}
+}
+
+func TestNewAgentInstance_SeedsFallbackBootstrapFilesWhenDefaultWorkspaceMissing(t *testing.T) {
+	root := t.TempDir()
+	defaultWorkspace := filepath.Join(root, "workspace-main")
+	autoWorkspace := filepath.Join(root, "workspace-auto")
+
+	if err := os.MkdirAll(defaultWorkspace, 0o755); err != nil {
+		t.Fatalf("mkdir default workspace: %v", err)
+	}
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: defaultWorkspace,
+				Model:     "test-model",
+			},
+		},
+	}
+
+	provider := &mockProvider{}
+	NewAgentInstance(&config.AgentConfig{ID: "auto-2", Workspace: autoWorkspace}, &cfg.Agents.Defaults, cfg, provider)
+
+	for _, rel := range workspaceBootstrapFiles {
+		path := filepath.Join(autoWorkspace, filepath.FromSlash(rel))
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("expected %s to exist: %v", rel, err)
+		}
+		if len(data) == 0 {
+			t.Fatalf("expected %s to be non-empty", rel)
+		}
+	}
+}
+
+func TestNewAgentInstance_DoesNotOverwriteExistingBootstrapFile(t *testing.T) {
+	root := t.TempDir()
+	defaultWorkspace := filepath.Join(root, "workspace-main")
+	autoWorkspace := filepath.Join(root, "workspace-auto")
+
+	writeWorkspaceFile(t, defaultWorkspace, "AGENTS.md", "# source\n")
+	writeWorkspaceFile(t, autoWorkspace, "AGENTS.md", "# custom\n")
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: defaultWorkspace,
+				Model:     "test-model",
+			},
+		},
+	}
+
+	provider := &mockProvider{}
+	NewAgentInstance(&config.AgentConfig{ID: "auto-3", Workspace: autoWorkspace}, &cfg.Agents.Defaults, cfg, provider)
+
+	data, err := os.ReadFile(filepath.Join(autoWorkspace, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("read custom AGENTS.md: %v", err)
+	}
+	if string(data) != "# custom\n" {
+		t.Fatalf("AGENTS.md was overwritten: got %q", string(data))
+	}
+}
+
+func writeWorkspaceFile(t *testing.T, workspace, relPath, content string) {
+	t.Helper()
+	fullPath := filepath.Join(workspace, filepath.FromSlash(relPath))
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(fullPath), err)
+	}
+	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", relPath, err)
 	}
 }
