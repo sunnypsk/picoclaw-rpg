@@ -15,6 +15,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
@@ -489,6 +490,67 @@ func TestToolResult_UserFacingToolDoesSendMessage(t *testing.T) {
 	// User-facing tool should include the output in final response
 	if response != "Command output: hello world" {
 		t.Errorf("Expected 'Command output: hello world', got: %s", response)
+	}
+}
+
+func TestProcessMessage_AutoProvisionCreatesDedicatedAgent(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+			AutoProvision: config.AutoProvisionConfig{
+				Enabled: true,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &simpleMockProvider{response: "ok"}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	helper := testHelper{al: al}
+
+	route := al.registry.ResolveRoute(routing.RouteInput{
+		Channel: "telegram",
+		Peer:    &routing.RoutePeer{Kind: "direct", ID: "user42"},
+	})
+	if route.MatchedBy != "auto-provision" {
+		t.Fatalf("MatchedBy = %q, want 'auto-provision'", route.MatchedBy)
+	}
+	if _, exists := al.registry.GetAgent(route.AgentID); exists {
+		t.Fatalf("agent %q should not exist before first message", route.AgentID)
+	}
+
+	response := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
+		Channel:  "telegram",
+		SenderID: "user42",
+		ChatID:   "chat42",
+		Content:  "hello",
+		Peer:     bus.Peer{Kind: "direct", ID: "user42"},
+	})
+
+	if response != "ok" {
+		t.Fatalf("response = %q, want %q", response, "ok")
+	}
+
+	agent, exists := al.registry.GetAgent(route.AgentID)
+	if !exists {
+		t.Fatalf("expected auto-provisioned agent %q to exist", route.AgentID)
+	}
+	if _, ok := agent.Tools.Get("message"); !ok {
+		t.Fatalf("expected shared message tool to be registered on auto-provisioned agent")
+	}
+	if !strings.Contains(agent.Workspace, "workspace-"+route.AgentID) {
+		t.Errorf("workspace = %q, expected to contain %q", agent.Workspace, "workspace-"+route.AgentID)
 	}
 }
 

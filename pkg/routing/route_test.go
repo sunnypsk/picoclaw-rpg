@@ -39,6 +39,96 @@ func TestResolveRoute_DefaultAgent_NoBindings(t *testing.T) {
 	}
 }
 
+func TestResolveRoute_AutoProvision_DirectUnmatched(t *testing.T) {
+	cfg := testConfig([]config.AgentConfig{{ID: "main", Default: true}}, nil)
+	cfg.Agents.AutoProvision = config.AutoProvisionConfig{Enabled: true}
+	r := NewRouteResolver(cfg)
+
+	route := r.ResolveRoute(RouteInput{
+		Channel: "telegram",
+		Peer:    &RoutePeer{Kind: "direct", ID: "user1"},
+	})
+
+	expected := buildAutoProvisionAgentID("telegram", DefaultAccountID, "direct", "user1")
+	if route.AgentID != expected {
+		t.Errorf("AgentID = %q, want %q", route.AgentID, expected)
+	}
+	if route.MatchedBy != "auto-provision" {
+		t.Errorf("MatchedBy = %q, want 'auto-provision'", route.MatchedBy)
+	}
+}
+
+func TestResolveRoute_AutoProvision_GroupEnabled(t *testing.T) {
+	cfg := testConfig([]config.AgentConfig{{ID: "main", Default: true}}, nil)
+	cfg.Agents.AutoProvision = config.AutoProvisionConfig{
+		Enabled:   true,
+		ChatTypes: []string{"direct", "group", "channel"},
+	}
+	r := NewRouteResolver(cfg)
+
+	route := r.ResolveRoute(RouteInput{
+		Channel: "telegram",
+		Peer:    &RoutePeer{Kind: "group", ID: "-100123"},
+	})
+
+	expected := buildAutoProvisionAgentID("telegram", DefaultAccountID, "group", "-100123")
+	if route.AgentID != expected {
+		t.Errorf("AgentID = %q, want %q", route.AgentID, expected)
+	}
+	if route.MatchedBy != "auto-provision" {
+		t.Errorf("MatchedBy = %q, want 'auto-provision'", route.MatchedBy)
+	}
+}
+
+func TestResolveRoute_AutoProvision_GroupDisabledByDefault(t *testing.T) {
+	cfg := testConfig(nil, nil)
+	cfg.Agents.AutoProvision = config.AutoProvisionConfig{Enabled: true}
+	r := NewRouteResolver(cfg)
+
+	route := r.ResolveRoute(RouteInput{
+		Channel: "telegram",
+		Peer:    &RoutePeer{Kind: "group", ID: "grp1"},
+	})
+
+	if route.AgentID != DefaultAgentID {
+		t.Errorf("AgentID = %q, want %q", route.AgentID, DefaultAgentID)
+	}
+	if route.MatchedBy != "default" {
+		t.Errorf("MatchedBy = %q, want 'default'", route.MatchedBy)
+	}
+}
+
+func TestResolveRoute_AutoProvision_DoesNotOverrideBindings(t *testing.T) {
+	agents := []config.AgentConfig{
+		{ID: "main", Default: true},
+		{ID: "telegram-bot"},
+	}
+	bindings := []config.AgentBinding{
+		{
+			AgentID: "telegram-bot",
+			Match: config.BindingMatch{
+				Channel:   "telegram",
+				AccountID: "*",
+			},
+		},
+	}
+	cfg := testConfig(agents, bindings)
+	cfg.Agents.AutoProvision = config.AutoProvisionConfig{Enabled: true}
+	r := NewRouteResolver(cfg)
+
+	route := r.ResolveRoute(RouteInput{
+		Channel: "telegram",
+		Peer:    &RoutePeer{Kind: "direct", ID: "user1"},
+	})
+
+	if route.AgentID != "telegram-bot" {
+		t.Errorf("AgentID = %q, want 'telegram-bot'", route.AgentID)
+	}
+	if route.MatchedBy != "binding.channel" {
+		t.Errorf("MatchedBy = %q, want 'binding.channel'", route.MatchedBy)
+	}
+}
+
 func TestResolveRoute_PeerBinding(t *testing.T) {
 	agents := []config.AgentConfig{
 		{ID: "sales", Default: true},

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync/atomic"
 
 	"github.com/caarlos0/env/v11"
@@ -86,8 +87,40 @@ func (c Config) MarshalJSON() ([]byte, error) {
 }
 
 type AgentsConfig struct {
-	Defaults AgentDefaults `json:"defaults"`
-	List     []AgentConfig `json:"list,omitempty"`
+	Defaults      AgentDefaults       `json:"defaults"`
+	List          []AgentConfig       `json:"list,omitempty"`
+	AutoProvision AutoProvisionConfig `json:"auto_provision,omitempty"`
+}
+
+// AutoProvisionConfig controls runtime auto-creation of dedicated agents/workspaces
+// for unmatched peers.
+type AutoProvisionConfig struct {
+	Enabled   bool     `json:"enabled,omitempty"`
+	ChatTypes []string `json:"chat_types,omitempty"`
+}
+
+// IsPeerKindEnabled reports whether a peer kind is allowed for auto-provisioning.
+// When ChatTypes is empty, only "direct" is enabled by default.
+func (c AutoProvisionConfig) IsPeerKindEnabled(kind string) bool {
+	if !c.Enabled {
+		return false
+	}
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind == "" {
+		return false
+	}
+
+	allowed := c.ChatTypes
+	if len(allowed) == 0 {
+		allowed = []string{"direct"}
+	}
+
+	for i := range allowed {
+		if strings.ToLower(strings.TrimSpace(allowed[i])) == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // AgentModelConfig supports both string and structured model config.

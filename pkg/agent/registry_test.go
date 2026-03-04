@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -201,5 +202,33 @@ func TestAgentInstance_FallbackExplicitEmpty(t *testing.T) {
 	agent, _ := registry.GetAgent("no-fallback")
 	if len(agent.Fallbacks) != 0 {
 		t.Errorf("expected 0 fallbacks (explicit empty), got %d: %v", len(agent.Fallbacks), agent.Fallbacks)
+	}
+}
+
+func TestAgentRegistry_GetOrCreateAgent(t *testing.T) {
+	cfg := testCfg(nil)
+	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
+
+	id := "auto-telegram-direct-user1-abc12345"
+	agent, created := registry.GetOrCreateAgent(id)
+	if !created {
+		t.Fatal("expected first GetOrCreateAgent call to create an agent")
+	}
+	if agent == nil {
+		t.Fatal("expected created agent to be non-nil")
+	}
+	if agent.ID != id {
+		t.Errorf("agent.ID = %q, want %q", agent.ID, id)
+	}
+	if !strings.Contains(agent.Workspace, "workspace-"+id) {
+		t.Errorf("workspace = %q, expected it to contain %q", agent.Workspace, "workspace-"+id)
+	}
+
+	again, createdAgain := registry.GetOrCreateAgent(id)
+	if createdAgain {
+		t.Fatal("expected second GetOrCreateAgent call to reuse existing agent")
+	}
+	if again != agent {
+		t.Fatal("expected GetOrCreateAgent to return the same instance")
 	}
 }

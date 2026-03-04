@@ -13,6 +13,8 @@ import (
 type AgentRegistry struct {
 	agents   map[string]*AgentInstance
 	resolver *routing.RouteResolver
+	cfg      *config.Config
+	provider providers.LLMProvider
 	mu       sync.RWMutex
 }
 
@@ -24,6 +26,8 @@ func NewAgentRegistry(
 	registry := &AgentRegistry{
 		agents:   make(map[string]*AgentInstance),
 		resolver: routing.NewRouteResolver(cfg),
+		cfg:      cfg,
+		provider: provider,
 	}
 
 	agentConfigs := cfg.Agents.List
@@ -52,6 +56,38 @@ func NewAgentRegistry(
 	}
 
 	return registry
+}
+
+// GetOrCreateAgent returns an existing agent or lazily creates one using defaults.
+// It is intended for runtime auto-provisioned agent IDs.
+func (r *AgentRegistry) GetOrCreateAgent(agentID string) (*AgentInstance, bool) {
+	id := routing.NormalizeAgentID(agentID)
+
+	r.mu.RLock()
+	agent, ok := r.agents[id]
+	r.mu.RUnlock()
+	if ok {
+		return agent, false
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if existing, exists := r.agents[id]; exists {
+		return existing, false
+	}
+
+	autoCfg := &config.AgentConfig{ID: id}
+	created := NewAgentInstance(autoCfg, &r.cfg.Agents.Defaults, r.cfg, r.provider)
+	r.agents[id] = created
+
+	logger.InfoCF("agent", "Auto-provisioned agent", map[string]any{
+		"agent_id":  id,
+		"workspace": created.Workspace,
+		"model":     created.Model,
+	})
+
+	return created, true
 }
 
 // GetAgent returns the agent instance for a given ID.

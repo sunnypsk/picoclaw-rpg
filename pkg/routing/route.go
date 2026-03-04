@@ -1,6 +1,8 @@
 package routing
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -23,7 +25,7 @@ type ResolvedRoute struct {
 	AccountID      string
 	SessionKey     string
 	MainSessionKey string
-	MatchedBy      string // "binding.peer", "binding.peer.parent", "binding.guild", "binding.team", "binding.account", "binding.channel", "default"
+	MatchedBy      string // "binding.peer", "binding.peer.parent", "binding.guild", "binding.team", "binding.account", "binding.channel", "auto-provision", "default"
 }
 
 // RouteResolver determines which agent handles a message based on config bindings.
@@ -37,8 +39,8 @@ func NewRouteResolver(cfg *config.Config) *RouteResolver {
 }
 
 // ResolveRoute determines which agent handles the message and constructs session keys.
-// Implements the 7-level priority cascade:
-// peer > parent_peer > guild > team > account > channel_wildcard > default
+// Implements the 8-level priority cascade:
+// peer > parent_peer > guild > team > account > channel_wildcard > auto_provision > default
 func (r *RouteResolver) ResolveRoute(input RouteInput) ResolvedRoute {
 	channel := strings.ToLower(strings.TrimSpace(input.Channel))
 	accountID := NormalizeAccountID(input.AccountID)
@@ -52,8 +54,16 @@ func (r *RouteResolver) ResolveRoute(input RouteInput) ResolvedRoute {
 
 	bindings := r.filterBindings(channel, accountID)
 
-	choose := func(agentID string, matchedBy string) ResolvedRoute {
-		resolvedAgentID := r.pickAgentID(agentID)
+	choose := func(agentID string, matchedBy string, allowUnlisted bool) ResolvedRoute {
+		resolvedAgentID := ""
+		if allowUnlisted {
+			resolvedAgentID = NormalizeAgentID(agentID)
+			if resolvedAgentID == "" {
+				resolvedAgentID = NormalizeAgentID(r.resolveDefaultAgentID())
+			}
+		} else {
+			resolvedAgentID = r.pickAgentID(agentID)
+		}
 		sessionKey := strings.ToLower(BuildAgentPeerSessionKey(SessionKeyParams{
 			AgentID:       resolvedAgentID,
 			Channel:       channel,
@@ -76,7 +86,7 @@ func (r *RouteResolver) ResolveRoute(input RouteInput) ResolvedRoute {
 	// Priority 1: Peer binding
 	if peer != nil && strings.TrimSpace(peer.ID) != "" {
 		if match := r.findPeerMatch(bindings, peer); match != nil {
-			return choose(match.AgentID, "binding.peer")
+			return choose(match.AgentID, "binding.peer", false)
 		}
 	}
 
@@ -84,7 +94,7 @@ func (r *RouteResolver) ResolveRoute(input RouteInput) ResolvedRoute {
 	parentPeer := input.ParentPeer
 	if parentPeer != nil && strings.TrimSpace(parentPeer.ID) != "" {
 		if match := r.findPeerMatch(bindings, parentPeer); match != nil {
-			return choose(match.AgentID, "binding.peer.parent")
+			return choose(match.AgentID, "binding.peer.parent", false)
 		}
 	}
 
@@ -92,7 +102,7 @@ func (r *RouteResolver) ResolveRoute(input RouteInput) ResolvedRoute {
 	guildID := strings.TrimSpace(input.GuildID)
 	if guildID != "" {
 		if match := r.findGuildMatch(bindings, guildID); match != nil {
-			return choose(match.AgentID, "binding.guild")
+			return choose(match.AgentID, "binding.guild", false)
 		}
 	}
 
@@ -100,22 +110,27 @@ func (r *RouteResolver) ResolveRoute(input RouteInput) ResolvedRoute {
 	teamID := strings.TrimSpace(input.TeamID)
 	if teamID != "" {
 		if match := r.findTeamMatch(bindings, teamID); match != nil {
-			return choose(match.AgentID, "binding.team")
+			return choose(match.AgentID, "binding.team", false)
 		}
 	}
 
 	// Priority 5: Account binding
 	if match := r.findAccountMatch(bindings); match != nil {
-		return choose(match.AgentID, "binding.account")
+		return choose(match.AgentID, "binding.account", false)
 	}
 
 	// Priority 6: Channel wildcard binding
 	if match := r.findChannelWildcardMatch(bindings); match != nil {
-		return choose(match.AgentID, "binding.channel")
+		return choose(match.AgentID, "binding.channel", false)
 	}
 
-	// Priority 7: Default agent
-	return choose(r.resolveDefaultAgentID(), "default")
+	// Priority 7: Auto-provisioned dedicated agent for unmatched peers
+	if autoID, ok := r.resolveAutoProvisionAgentID(channel, accountID, peer); ok {
+		return choose(autoID, "auto-provision", true)
+	}
+
+	// Priority 8: Default agent
+	return choose(r.resolveDefaultAgentID(), "default", false)
 }
 
 func (r *RouteResolver) filterBindings(channel, accountID string) []config.AgentBinding {
@@ -230,6 +245,57 @@ func (r *RouteResolver) pickAgentID(agentID string) string {
 		}
 	}
 	return NormalizeAgentID(r.resolveDefaultAgentID())
+}
+
+func (r *RouteResolver) resolveAutoProvisionAgentID(channel, accountID string, peer *RoutePeer) (string, bool) {
+	if peer == nil {
+		return "", false
+	}
+	peerKind := strings.ToLower(strings.TrimSpace(peer.Kind))
+	peerID := strings.TrimSpace(peer.ID)
+	if peerKind == "" || peerID == "" {
+		return "", false
+	}
+	if !r.cfg.Agents.AutoProvision.IsPeerKindEnabled(peerKind) {
+		return "", false
+	}
+	return buildAutoProvisionAgentID(channel, accountID, peerKind, peerID), true
+}
+
+func buildAutoProvisionAgentID(channel, accountID, peerKind, peerID string) string {
+	channelToken := normalizeAutoIDToken(channel, 16, "channel")
+	kindToken := normalizeAutoIDToken(peerKind, 10, "peer")
+	peerToken := normalizeAutoIDToken(peerID, 24, "id")
+	hash := autoIDHash(channel + "|" + accountID + "|" + peerKind + "|" + peerID)
+
+	id := "auto-" + channelToken + "-" + kindToken + "-" + peerToken + "-" + hash
+	return NormalizeAgentID(id)
+}
+
+func normalizeAutoIDToken(raw string, maxLen int, fallback string) string {
+	trimmed := strings.TrimSpace(raw)
+	token := ""
+	if trimmed == "" {
+		token = fallback
+	} else {
+		token = NormalizeAccountID(trimmed)
+		if token == DefaultAccountID && strings.ToLower(trimmed) != DefaultAccountID {
+			token = fallback
+		}
+	}
+	if maxLen > 0 && len(token) > maxLen {
+		token = token[:maxLen]
+	}
+	return token
+}
+
+func autoIDHash(value string) string {
+	sum := sha1.Sum([]byte(strings.ToLower(strings.TrimSpace(value))))
+	encoded := hex.EncodeToString(sum[:])
+	if len(encoded) < 8 {
+		return encoded
+	}
+	return encoded[:8]
 }
 
 func (r *RouteResolver) resolveDefaultAgentID() string {

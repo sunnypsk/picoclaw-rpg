@@ -189,6 +189,28 @@ func TestConfig_BackwardCompat_NoAgentsList(t *testing.T) {
 	}
 }
 
+func TestAutoProvisionConfig_IsPeerKindEnabled_DefaultDirectOnly(t *testing.T) {
+	cfg := AutoProvisionConfig{Enabled: true}
+
+	if !cfg.IsPeerKindEnabled("direct") {
+		t.Fatal("direct should be enabled by default when chat_types is empty")
+	}
+	if cfg.IsPeerKindEnabled("group") {
+		t.Fatal("group should be disabled by default when chat_types is empty")
+	}
+}
+
+func TestAutoProvisionConfig_IsPeerKindEnabled_ExplicitChatTypes(t *testing.T) {
+	cfg := AutoProvisionConfig{Enabled: true, ChatTypes: []string{"direct", "group", "channel"}}
+
+	if !cfg.IsPeerKindEnabled("group") {
+		t.Fatal("group should be enabled when explicitly configured")
+	}
+	if !cfg.IsPeerKindEnabled("channel") {
+		t.Fatal("channel should be enabled when explicitly configured")
+	}
+}
+
 // TestDefaultConfig_HeartbeatEnabled verifies heartbeat is enabled by default
 func TestDefaultConfig_HeartbeatEnabled(t *testing.T) {
 	cfg := DefaultConfig()
