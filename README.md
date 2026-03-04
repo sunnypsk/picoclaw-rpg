@@ -757,6 +757,27 @@ PicoClaw runs in a sandboxed environment by default. The agent can only access f
 | `workspace`             | `~/.picoclaw/workspace` | Working directory for the agent           |
 | `restrict_to_workspace` | `true`                  | Restrict file/command access to workspace |
 
+#### Auto-Provision Dedicated Workspaces (Optional)
+
+To isolate files by chat peer (user/group/channel), enable auto-provisioning:
+
+```json
+{
+  "agents": {
+    "auto_provision": {
+      "enabled": true,
+      "chat_types": ["direct", "group", "channel"]
+    }
+  }
+}
+```
+
+Behavior:
+
+- Unmatched peers are routed to dedicated auto-created agents.
+- Each auto-created agent gets its own workspace path: `~/.picoclaw/workspace-<agent-id>`.
+- Explicit `bindings` still take precedence over auto-provision routing.
+
 #### Protected Tools
 
 When `restrict_to_workspace: true`, the following tools are sandboxed:
