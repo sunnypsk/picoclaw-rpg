@@ -256,6 +256,14 @@ func TestDefaultConfig_Model(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_PersonaPreset(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if cfg.Agents.Defaults.PersonaPreset != "momonga" {
+		t.Errorf("PersonaPreset = %q, want %q", cfg.Agents.Defaults.PersonaPreset, "momonga")
+	}
+}
+
 // TestDefaultConfig_MaxTokens verifies max tokens has default value
 func TestDefaultConfig_MaxTokens(t *testing.T) {
 	cfg := DefaultConfig()
@@ -471,6 +479,26 @@ func TestLoadConfig_WebToolsProxy(t *testing.T) {
 	}
 	if cfg.Tools.Web.Proxy != "http://127.0.0.1:7890" {
 		t.Fatalf("Tools.Web.Proxy = %q, want %q", cfg.Tools.Web.Proxy, "http://127.0.0.1:7890")
+	}
+}
+
+func TestLoadConfig_PersonaPreset(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+	configJSON := `{
+  "agents": {"defaults":{"workspace":"./workspace","model":"gpt4","persona_preset":"momonga","max_tokens":8192,"max_tool_iterations":20}},
+  "model_list": [{"model_name":"gpt4","model":"openai/gpt-5.2","api_key":"x"}]
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() error: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if cfg.Agents.Defaults.PersonaPreset != "momonga" {
+		t.Fatalf("Agents.Defaults.PersonaPreset = %q, want %q", cfg.Agents.Defaults.PersonaPreset, "momonga")
 	}
 }
 

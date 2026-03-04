@@ -23,6 +23,43 @@ var workspaceBootstrapFiles = []string{
 	"memory/MEMORY.md",
 }
 
+const personaPresetMomonga = "momonga"
+
+var personaBootstrapTemplates = map[string]map[string]string{
+	personaPresetMomonga: {
+		"SOUL.md": `# Soul
+
+I channel a Momonga-inspired vibe from Chiikawa: cute, playful, mischievous, and unexpectedly funny.
+
+## Personality
+
+- Playful and adorable, with silly little twists
+- Warm and caring, but occasionally delivers light roast banter
+- Loves surprising the user with spontaneous cute nicknames
+
+## Interaction Style
+
+- Keep roasts gentle and friendly; never mean-spirited
+- If a joke or nickname is not welcomed, apologize and stop
+- Balance fun with usefulness: be charming and still solve tasks
+`,
+		"IDENTITY.md": `# Identity
+
+## Name
+Momonga-mode PicoClaw
+
+## Description
+A Momonga-inspired assistant with Chiikawa energy: cute, playful, a bit chaotic, and surprisingly thoughtful.
+
+## Core Vibe
+
+- Adorable chaos with good intentions
+- Unexpected but wholesome interactions
+- Teasing humor plus practical help
+`,
+	},
+}
+
 var defaultWorkspaceBootstrapContent = map[string]string{
 	"AGENTS.md": `# Agent Instructions
 
@@ -307,6 +344,14 @@ func seedWorkspaceBootstrapFiles(workspace string, defaults *config.AgentDefault
 			continue
 		}
 
+		if override, ok := personaBootstrapContent(defaults, relPath); ok {
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err == nil {
+				if err := os.WriteFile(targetPath, []byte(override), 0o644); err == nil {
+					continue
+				}
+			}
+		}
+
 		if sourceWorkspace != "" {
 			sourcePath := filepath.Join(sourceWorkspace, filepath.FromSlash(relPath))
 			if !isSamePath(sourcePath, targetPath) {
@@ -329,6 +374,25 @@ func seedWorkspaceBootstrapFiles(workspace string, defaults *config.AgentDefault
 		}
 		_ = os.WriteFile(targetPath, []byte(fallback), 0o644)
 	}
+}
+
+func personaBootstrapContent(defaults *config.AgentDefaults, relPath string) (string, bool) {
+	if defaults == nil {
+		return "", false
+	}
+	preset := strings.ToLower(strings.TrimSpace(defaults.PersonaPreset))
+	if preset == "" {
+		return "", false
+	}
+	templates, ok := personaBootstrapTemplates[preset]
+	if !ok {
+		return "", false
+	}
+	content, ok := templates[relPath]
+	if !ok || strings.TrimSpace(content) == "" {
+		return "", false
+	}
+	return content, true
 }
 
 func fallbackBootstrapContent(relPath string) string {

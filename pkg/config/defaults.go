@@ -28,6 +28,7 @@ func DefaultConfig() *Config {
 			Defaults: AgentDefaults{
 				Workspace:           workspacePath,
 				RestrictToWorkspace: true,
+				PersonaPreset:       "momonga",
 				Provider:            "",
 				Model:               "",
 				MaxTokens:           32768,

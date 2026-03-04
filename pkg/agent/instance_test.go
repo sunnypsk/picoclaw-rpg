@@ -211,6 +211,61 @@ func TestNewAgentInstance_SeedsBootstrapFilesFromDefaultWorkspace(t *testing.T) 
 	}
 }
 
+func TestNewAgentInstance_PersonaPresetOverridesCopiedSoulAndIdentity(t *testing.T) {
+	root := t.TempDir()
+	defaultWorkspace := filepath.Join(root, "workspace-main")
+	autoWorkspace := filepath.Join(root, "workspace-auto")
+
+	writeWorkspaceFile(t, defaultWorkspace, "AGENTS.md", "# source agents\n")
+	writeWorkspaceFile(t, defaultWorkspace, "SOUL.md", "# source soul\n")
+	writeWorkspaceFile(t, defaultWorkspace, "IDENTITY.md", "# source identity\n")
+	writeWorkspaceFile(t, defaultWorkspace, "STATE.md", "# source state\n")
+	writeWorkspaceFile(t, defaultWorkspace, "memory/MEMORY.md", "# source memory\n")
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:     defaultWorkspace,
+				Model:         "test-model",
+				PersonaPreset: "momonga",
+			},
+		},
+	}
+
+	provider := &mockProvider{}
+	NewAgentInstance(&config.AgentConfig{ID: "auto-persona", Workspace: autoWorkspace}, &cfg.Agents.Defaults, cfg, provider)
+
+	agentsData, err := os.ReadFile(filepath.Join(autoWorkspace, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	if string(agentsData) != "# source agents\n" {
+		t.Fatalf("AGENTS.md should still come from source workspace")
+	}
+
+	soulData, err := os.ReadFile(filepath.Join(autoWorkspace, "SOUL.md"))
+	if err != nil {
+		t.Fatalf("read SOUL.md: %v", err)
+	}
+	if string(soulData) == "# source soul\n" {
+		t.Fatalf("SOUL.md should be overridden by persona preset")
+	}
+	if !strings.Contains(strings.ToLower(string(soulData)), "momonga") {
+		t.Fatalf("SOUL.md should contain momonga persona content")
+	}
+
+	identityData, err := os.ReadFile(filepath.Join(autoWorkspace, "IDENTITY.md"))
+	if err != nil {
+		t.Fatalf("read IDENTITY.md: %v", err)
+	}
+	if string(identityData) == "# source identity\n" {
+		t.Fatalf("IDENTITY.md should be overridden by persona preset")
+	}
+	if !strings.Contains(strings.ToLower(string(identityData)), "momonga") {
+		t.Fatalf("IDENTITY.md should contain momonga persona content")
+	}
+}
+
 func TestNewAgentInstance_SeedsFallbackBootstrapFilesWhenDefaultWorkspaceMissing(t *testing.T) {
 	root := t.TempDir()
 	defaultWorkspace := filepath.Join(root, "workspace-main")
