@@ -29,6 +29,7 @@ type AgentInstance struct {
 	ContextWindow  int
 	Provider       providers.LLMProvider
 	Sessions       *session.SessionManager
+	StateStore     *NPCStateStore
 	ContextBuilder *ContextBuilder
 	Tools          *tools.ToolRegistry
 	Subagents      *config.SubagentsConfig
@@ -160,6 +161,7 @@ func NewAgentInstance(
 		ContextWindow:  maxTokens,
 		Provider:       provider,
 		Sessions:       sessionsManager,
+		StateStore:     NewNPCStateStore(workspace),
 		ContextBuilder: contextBuilder,
 		Tools:          toolsRegistry,
 		Subagents:      subagents,

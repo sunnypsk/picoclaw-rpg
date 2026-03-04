@@ -10,6 +10,7 @@
     },
     "auto_provision": {
       "enabled": false,
+      "strict_one_to_one": false,
       "chat_types": [
         "direct",
         "group",

@@ -39,8 +39,9 @@ func NewRouteResolver(cfg *config.Config) *RouteResolver {
 }
 
 // ResolveRoute determines which agent handles the message and constructs session keys.
-// Implements the 8-level priority cascade:
-// peer > parent_peer > guild > team > account > channel_wildcard > auto_provision > default
+// Priority cascade:
+// 1) strict auto_provision (when enabled)
+// 2) peer > parent_peer > guild > team > account > channel_wildcard > auto_provision > default
 func (r *RouteResolver) ResolveRoute(input RouteInput) ResolvedRoute {
 	channel := strings.ToLower(strings.TrimSpace(input.Channel))
 	accountID := NormalizeAccountID(input.AccountID)
@@ -80,6 +81,14 @@ func (r *RouteResolver) ResolveRoute(input RouteInput) ResolvedRoute {
 			SessionKey:     sessionKey,
 			MainSessionKey: mainSessionKey,
 			MatchedBy:      matchedBy,
+		}
+	}
+
+	// Strict one-to-one mode: for enabled peer kinds, force deterministic dedicated
+	// auto-provisioned agent IDs and bypass binding rules.
+	if r.cfg.Agents.AutoProvision.StrictOneToOne {
+		if autoID, ok := r.resolveAutoProvisionAgentID(channel, accountID, peer); ok {
+			return choose(autoID, "auto-provision", true)
 		}
 	}
 

@@ -95,8 +95,9 @@ type AgentsConfig struct {
 // AutoProvisionConfig controls runtime auto-creation of dedicated agents/workspaces
 // for unmatched peers.
 type AutoProvisionConfig struct {
-	Enabled   bool     `json:"enabled,omitempty"`
-	ChatTypes []string `json:"chat_types,omitempty"`
+	Enabled        bool     `json:"enabled,omitempty"`
+	ChatTypes      []string `json:"chat_types,omitempty"`
+	StrictOneToOne bool     `json:"strict_one_to_one,omitempty"`
 }
 
 // IsPeerKindEnabled reports whether a peer kind is allowed for auto-provisioning.

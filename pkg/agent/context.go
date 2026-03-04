@@ -75,6 +75,7 @@ You are picoclaw, a helpful AI assistant.
 
 ## Workspace
 Your workspace is at: %s
+- State: %s/STATE.md
 - Memory: %s/memory/MEMORY.md
 - Daily Notes: %s/memory/YYYYMM/YYYYMMDD.md
 - Skills: %s/skills/{skill-name}/SKILL.md
@@ -88,7 +89,7 @@ Your workspace is at: %s
 3. **Memory** - When interacting with me if something seems memorable, update %s/memory/MEMORY.md
 
 4. **Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.`,
-		workspacePath, workspacePath, workspacePath, workspacePath, workspacePath)
+		workspacePath, workspacePath, workspacePath, workspacePath, workspacePath, workspacePath)
 }
 
 func (cb *ContextBuilder) BuildSystemPrompt() string {
@@ -190,6 +191,7 @@ func (cb *ContextBuilder) sourcePaths() []string {
 		filepath.Join(cb.workspace, "SOUL.md"),
 		filepath.Join(cb.workspace, "USER.md"),
 		filepath.Join(cb.workspace, "IDENTITY.md"),
+		filepath.Join(cb.workspace, "STATE.md"),
 		filepath.Join(cb.workspace, "memory", "MEMORY.md"),
 	}
 }
@@ -400,6 +402,7 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 		"SOUL.md",
 		"USER.md",
 		"IDENTITY.md",
+		"STATE.md",
 	}
 
 	var sb strings.Builder

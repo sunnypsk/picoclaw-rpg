@@ -211,6 +211,24 @@ func TestAutoProvisionConfig_IsPeerKindEnabled_ExplicitChatTypes(t *testing.T) {
 	}
 }
 
+func TestAutoProvisionConfig_UnmarshalStrictOneToOne(t *testing.T) {
+	var cfg AutoProvisionConfig
+	data := `{"enabled":true,"chat_types":["direct","group"],"strict_one_to_one":true}`
+	if err := json.Unmarshal([]byte(data), &cfg); err != nil {
+		t.Fatalf("unmarshal auto_provision: %v", err)
+	}
+
+	if !cfg.Enabled {
+		t.Fatal("Enabled should be true")
+	}
+	if !cfg.StrictOneToOne {
+		t.Fatal("StrictOneToOne should be true")
+	}
+	if len(cfg.ChatTypes) != 2 {
+		t.Fatalf("ChatTypes len = %d, want 2", len(cfg.ChatTypes))
+	}
+}
+
 // TestDefaultConfig_HeartbeatEnabled verifies heartbeat is enabled by default
 func TestDefaultConfig_HeartbeatEnabled(t *testing.T) {
 	cfg := DefaultConfig()

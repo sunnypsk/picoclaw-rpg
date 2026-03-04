@@ -556,7 +556,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			"matched_by":  route.MatchedBy,
 		})
 
-	return al.runAgentLoop(ctx, agent, processOptions{
+	response, err := al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey:      sessionKey,
 		Channel:         msg.Channel,
 		ChatID:          msg.ChatID,
@@ -566,6 +566,14 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		EnableSummary:   true,
 		SendResponse:    false,
 	})
+	if err == nil {
+		updateCtx := context.Background()
+		if ctx != nil {
+			updateCtx = context.WithoutCancel(ctx)
+		}
+		go al.maybeUpdateNPCStateAndMemory(updateCtx, agent, msg, route.MatchedBy, response)
+	}
+	return response, err
 }
 
 func (al *AgentLoop) processSystemMessage(
