@@ -1,0 +1,47 @@
+# Repository Guidelines
+
+## Project Structure & Module Organization
+- `cmd/picoclaw/`: main CLI entrypoint and command groups.
+- `cmd/picoclaw-launcher/`: web launcher process; `cmd/picoclaw-launcher-tui/`: terminal UI launcher.
+- `pkg/`: core runtime modules (agent loop, tools, providers, channels, config, auth, session, migration).
+- Tests are colocated with code as `*_test.go`.
+- `config/config.example.json`: configuration template.
+- `docker/`: compose files and Dockerfiles for agent/gateway images.
+- `docs/`: channel setup guides, migration notes, and design docs.
+- `assets/`: repository media; `workspace/`: sample workspace files and skills.
+
+## Build, Test, and Development Commands
+```bash
+make deps        # Download and verify Go modules
+make build       # Run go generate, then build current-platform binary into build/
+make test        # Run all tests (go test ./...)
+make fmt         # Apply gofmt/gofumpt/goimports/gci/golines via golangci-lint
+make lint        # Run linters
+make check       # Pre-PR baseline: deps + fmt + vet + test
+make run ARGS="status"   # Build and run picoclaw with arguments
+```
+Use `make build-all` for multi-platform artifacts. Docker workflows are exposed as `make docker-build`, `make docker-run`, and related `docker-*` targets.
+
+## Coding Style & Naming Conventions
+- Use Go `1.25.x` (see `go.mod`).
+- Keep lines within 120 chars (configured in `.golangci.yaml`).
+- Follow idiomatic Go naming:
+  - Exported identifiers: `PascalCase`
+  - Internal identifiers: `camelCase`
+  - Package names: lowercase, short, domain-oriented
+- Keep file names lowercase and descriptive (for example, `codex_provider.go`, `shell_process_windows.go`).
+- Run `make fmt` and `make lint` before pushing.
+
+## Testing Guidelines
+- Primary framework: Go `testing`; `testify` is available for assertions/mocks.
+- Name tests `TestXxx` and keep them next to implementation in `*_test.go`.
+- Run focused tests with `go test -run TestName -v ./pkg/<module>/`.
+- Integration suites use build tags (e.g., `go test -tags integration ./pkg/providers/...`).
+- No fixed coverage percentage is enforced; ensure new/changed behavior is covered.
+
+## Commit & Pull Request Guidelines
+- Match existing history style: `feat(...)`, `fix(...)`, `chore(...)`, `docs(...)` with imperative summaries.
+- Keep one logical change per commit; use descriptive branch names like `fix/telegram-timeout`.
+- Before opening a PR, run `make check`.
+- Complete the PR template: description, change type, related issue, AI disclosure, and test environment.
+- Link issues, include logs/screenshots when useful, and ensure CI is green before review.
