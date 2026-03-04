@@ -40,6 +40,8 @@ type AgentLoop struct {
 	state          *state.Manager
 	running        atomic.Bool
 	summarizing    sync.Map
+	globalTools    map[string]tools.Tool
+	globalToolsMu  sync.RWMutex
 	fallback       *providers.FallbackChain
 	channelManager *channels.Manager
 	mediaStore     media.MediaStore
@@ -87,6 +89,7 @@ func NewAgentLoop(
 		registry:    registry,
 		state:       stateManager,
 		summarizing: sync.Map{},
+		globalTools: make(map[string]tools.Tool),
 		fallback:    fallbackChain,
 	}
 }
@@ -218,28 +221,19 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			servers := mcpManager.GetServers()
 			uniqueTools := 0
 			totalRegistrations := 0
-			agentIDs := al.registry.ListAgentIDs()
-			agentCount := len(agentIDs)
-
 			for serverName, conn := range servers {
 				uniqueTools += len(conn.Tools)
 				for _, tool := range conn.Tools {
-					for _, agentID := range agentIDs {
-						agent, ok := al.registry.GetAgent(agentID)
-						if !ok {
-							continue
-						}
-						mcpTool := tools.NewMCPTool(mcpManager, serverName, tool)
-						agent.Tools.Register(mcpTool)
-						totalRegistrations++
-						logger.DebugCF("agent", "Registered MCP tool",
-							map[string]any{
-								"agent_id": agentID,
-								"server":   serverName,
-								"tool":     tool.Name,
-								"name":     mcpTool.Name(),
-							})
-					}
+					mcpTool := tools.NewMCPTool(mcpManager, serverName, tool)
+					registeredTo := al.registerGlobalToolForAllAgents(mcpTool)
+					totalRegistrations += registeredTo
+					logger.DebugCF("agent", "Registered MCP tool",
+						map[string]any{
+							"server":        serverName,
+							"tool":          tool.Name,
+							"name":          mcpTool.Name(),
+							"registered_to": registeredTo,
+						})
 				}
 			}
 			logger.InfoCF("agent", "MCP tools registered successfully",
@@ -247,7 +241,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 					"server_count":        len(servers),
 					"unique_tools":        uniqueTools,
 					"total_registrations": totalRegistrations,
-					"agent_count":         agentCount,
+					"agent_count":         len(al.registry.ListAgentIDs()),
 				})
 		}
 	}
@@ -328,10 +322,54 @@ func (al *AgentLoop) Stop() {
 }
 
 func (al *AgentLoop) RegisterTool(tool tools.Tool) {
+	al.registerGlobalToolForAllAgents(tool)
+}
+
+func (al *AgentLoop) rememberGlobalTool(tool tools.Tool) {
+	if tool == nil {
+		return
+	}
+
+	al.globalToolsMu.Lock()
+	defer al.globalToolsMu.Unlock()
+	al.globalTools[tool.Name()] = tool
+}
+
+func (al *AgentLoop) registerGlobalToolForAllAgents(tool tools.Tool) int {
+	if tool == nil {
+		return 0
+	}
+
+	al.rememberGlobalTool(tool)
+	registrations := 0
+	toolName := tool.Name()
+
 	for _, agentID := range al.registry.ListAgentIDs() {
 		if agent, ok := al.registry.GetAgent(agentID); ok {
+			if _, exists := agent.Tools.Get(toolName); exists {
+				continue
+			}
 			agent.Tools.Register(tool)
+			registrations++
 		}
+	}
+
+	return registrations
+}
+
+func (al *AgentLoop) registerGlobalToolsForAgent(agent *AgentInstance) {
+	if agent == nil {
+		return
+	}
+
+	al.globalToolsMu.RLock()
+	defer al.globalToolsMu.RUnlock()
+
+	for name, tool := range al.globalTools {
+		if _, exists := agent.Tools.Get(name); exists {
+			continue
+		}
+		agent.Tools.Register(tool)
 	}
 }
 
@@ -482,6 +520,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		if created {
 			registerSharedToolsForAgent(al.cfg, al.bus, al.registry, al.registry.provider, route.AgentID)
 		}
+		al.registerGlobalToolsForAgent(agent)
 	} else {
 		var ok bool
 		agent, ok = al.registry.GetAgent(route.AgentID)

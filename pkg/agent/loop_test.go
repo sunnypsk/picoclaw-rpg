@@ -554,6 +554,62 @@ func TestProcessMessage_AutoProvisionCreatesDedicatedAgent(t *testing.T) {
 	}
 }
 
+func TestProcessMessage_AutoProvisionInheritsRegisteredTools(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+			AutoProvision: config.AutoProvisionConfig{
+				Enabled: true,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &simpleMockProvider{response: "ok"}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	al.RegisterTool(&mockCustomTool{})
+	help := testHelper{al: al}
+
+	route := al.registry.ResolveRoute(routing.RouteInput{
+		Channel: "telegram",
+		Peer:    &routing.RoutePeer{Kind: "direct", ID: "user99"},
+	})
+	if route.MatchedBy != "auto-provision" {
+		t.Fatalf("MatchedBy = %q, want 'auto-provision'", route.MatchedBy)
+	}
+
+	response := help.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
+		Channel:  "telegram",
+		SenderID: "user99",
+		ChatID:   "chat99",
+		Content:  "hello",
+		Peer:     bus.Peer{Kind: "direct", ID: "user99"},
+	})
+
+	if response != "ok" {
+		t.Fatalf("response = %q, want %q", response, "ok")
+	}
+
+	agent, exists := al.registry.GetAgent(route.AgentID)
+	if !exists {
+		t.Fatalf("expected auto-provisioned agent %q to exist", route.AgentID)
+	}
+	if _, ok := agent.Tools.Get("mock_custom"); !ok {
+		t.Fatalf("expected registered global tool to be available on auto-provisioned agent")
+	}
+}
+
 // failFirstMockProvider fails on the first N calls with a specific error
 type failFirstMockProvider struct {
 	failures    int
