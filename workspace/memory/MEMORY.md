@@ -6,6 +6,9 @@ This file stores important information that should persist across sessions.
 
 (Important facts about user)
 
+- user_timezone: to be confirmed
+- preferred_language: to be confirmed
+
 ## Preferences
 
 (User preferences learned over time)

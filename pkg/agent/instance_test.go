@@ -3,6 +3,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -237,6 +238,19 @@ func TestNewAgentInstance_SeedsFallbackBootstrapFilesWhenDefaultWorkspaceMissing
 		if len(data) == 0 {
 			t.Fatalf("expected %s to be non-empty", rel)
 		}
+	}
+
+	memoryPath := filepath.Join(autoWorkspace, "memory", "MEMORY.md")
+	memoryData, err := os.ReadFile(memoryPath)
+	if err != nil {
+		t.Fatalf("read memory template: %v", err)
+	}
+	memoryText := string(memoryData)
+	if !strings.Contains(memoryText, "user_timezone: to be confirmed") {
+		t.Fatalf("memory template missing timezone placeholder")
+	}
+	if !strings.Contains(memoryText, "preferred_language: to be confirmed") {
+		t.Fatalf("memory template missing preferred language placeholder")
 	}
 }
 
