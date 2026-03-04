@@ -171,7 +171,6 @@ func TestNewAgentInstance_SeedsBootstrapFilesFromDefaultWorkspace(t *testing.T) 
 	sourceFiles := map[string]string{
 		"AGENTS.md":        "# source agents\n",
 		"SOUL.md":          "# source soul\n",
-		"USER.md":          "# source user\n",
 		"IDENTITY.md":      "# source identity\n",
 		"STATE.md":         "# source state\n",
 		"memory/MEMORY.md": "# source memory\n",
@@ -205,6 +204,10 @@ func TestNewAgentInstance_SeedsBootstrapFilesFromDefaultWorkspace(t *testing.T) 
 		if string(data) != want {
 			t.Fatalf("content of %s = %q, want %q", rel, string(data), want)
 		}
+	}
+
+	if _, err := os.Stat(filepath.Join(autoWorkspace, "USER.md")); !os.IsNotExist(err) {
+		t.Fatalf("USER.md should not be seeded, got err=%v", err)
 	}
 }
 

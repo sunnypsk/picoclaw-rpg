@@ -18,7 +18,6 @@ import (
 var workspaceBootstrapFiles = []string{
 	"AGENTS.md",
 	"SOUL.md",
-	"USER.md",
 	"IDENTITY.md",
 	"STATE.md",
 	"memory/MEMORY.md",
@@ -38,16 +37,6 @@ I am picoclaw, a lightweight AI assistant powered by AI.
 - Helpful and friendly
 - Concise and to the point
 - Honest and transparent
-`,
-	"USER.md": `# User
-
-Information about user goes here.
-
-## Preferences
-
-- Communication style: (casual/formal)
-- Timezone: (your timezone)
-- Language: (your preferred language)
 `,
 	"IDENTITY.md": `# Identity
 

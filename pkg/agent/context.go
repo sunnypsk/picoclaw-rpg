@@ -189,7 +189,6 @@ func (cb *ContextBuilder) sourcePaths() []string {
 	return []string{
 		filepath.Join(cb.workspace, "AGENTS.md"),
 		filepath.Join(cb.workspace, "SOUL.md"),
-		filepath.Join(cb.workspace, "USER.md"),
 		filepath.Join(cb.workspace, "IDENTITY.md"),
 		filepath.Join(cb.workspace, "STATE.md"),
 		filepath.Join(cb.workspace, "memory", "MEMORY.md"),
@@ -400,7 +399,6 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 	bootstrapFiles := []string{
 		"AGENTS.md",
 		"SOUL.md",
-		"USER.md",
 		"IDENTITY.md",
 		"STATE.md",
 	}
