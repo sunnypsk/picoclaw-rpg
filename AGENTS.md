@@ -22,6 +22,11 @@ make run ARGS="status"   # Build and run picoclaw with arguments
 ```
 Use `make build-all` for multi-platform artifacts. Docker workflows are exposed as `make docker-build`, `make docker-run`, and related `docker-*` targets.
 
+### Local Docker image workflow (user preference)
+- For local code changes, rebuild and run from local source instead of pulling remote `latest`:
+  - `docker build -t docker.io/sipeed/picoclaw:latest -f docker/Dockerfile .`
+- With current `docker/docker-compose.yml` volume path (`/root/.picoclaw`), run the gateway container as root when using the locally built image.
+
 ## Coding Style & Naming Conventions
 - Use Go `1.25.x` (see `go.mod`).
 - Keep lines within 120 chars (configured in `.golangci.yaml`).
