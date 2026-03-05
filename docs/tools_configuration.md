@@ -25,6 +25,11 @@ PicoClaw provides a built-in `memory_search` agent tool for keyword lookup in:
 
 The tool uses local SQLite FTS5 with dual tokenizers (`unicode61` + `trigram`).
 
+### Preference Notes Pattern
+
+For reminder personalization, keep per-user preference/interest notes in `memory/MEMORY.md` using a `channel:user_id` label pattern in free-form text.
+These notes are then discoverable through `memory_search` during future conversations.
+
 ### Tool Parameters
 
 | Parameter     | Type   | Required | Description                                             |
@@ -119,6 +124,11 @@ The cron tool is used for scheduling periodic tasks.
 | Config                 | Type | Default | Description                                    |
 | ---------------------- | ---- | ------- | ---------------------------------------------- |
 | `exec_timeout_minutes` | int  | 5       | Execution timeout in minutes, 0 means no limit |
+
+### Usage Notes
+
+- Proactive reminder behavior is controlled by workspace prompt rules (for example, `workspace/AGENTS.md`).
+- For reminders that should stay in the same conversational context, create cron jobs with `deliver=false`.
 
 ## MCP Tool
 

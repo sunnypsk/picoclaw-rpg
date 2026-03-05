@@ -713,11 +713,11 @@ PicoClaw stores data in your configured workspace (default: `~/.picoclaw/workspa
 ├── state/            # Persistent state (last channel, etc.)
 ├── cron/             # Scheduled jobs database
 ├── skills/           # Custom skills
-├── AGENTS.md         # Agent behavior guide
+├── AGENTS.md         # Agent behavior guide (including proactive reminder policy)
 ├── HEARTBEAT.md      # Periodic task prompts (checked every 30 min)
 ├── IDENTITY.md       # Agent identity
 ├── SOUL.md           # Agent soul
-├── STATE.md          # NPC runtime state (emotion, vitals, relationships)
+├── STATE.md          # NPC runtime state (emotion, location, relationships)
 ├── TOOLS.md          # Tool descriptions
 └── (no USER.md)      # User profile moved to memory/MEMORY.md
 ```
@@ -1367,6 +1367,8 @@ PicoClaw supports scheduled reminders and recurring tasks through the `cron` too
 * **One-time reminders**: "Remind me in 10 minutes" → triggers once after 10min
 * **Recurring tasks**: "Remind me every 2 hours" → triggers every 2 hours
 * **Cron expressions**: "Remind me at 9am daily" → uses cron expression
+* **Proactive reminders**: You can define proactive reminder behavior in `workspace/AGENTS.md` (for example, implicit future-intent reminders)
+* **Conversation continuity**: For reminder follow-ups in the same context, create jobs with `deliver=false`
 
 Jobs are stored in `~/.picoclaw/workspace/cron/` and processed automatically.
 
