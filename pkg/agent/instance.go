@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/memorysearch"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
@@ -152,6 +153,7 @@ type AgentInstance struct {
 	StateStore     *NPCStateStore
 	ContextBuilder *ContextBuilder
 	Tools          *tools.ToolRegistry
+	MemoryIndex    *memorysearch.Index
 	Subagents      *config.SubagentsConfig
 	SkillsFilter   []string
 	Candidates     []providers.FallbackCandidate
@@ -179,9 +181,11 @@ func NewAgentInstance(
 	allowWritePaths := compilePatterns(cfg.Tools.AllowWritePaths)
 
 	toolsRegistry := tools.NewToolRegistry()
+	memoryIndex := memorysearch.NewIndex(workspace)
 	toolsRegistry.Register(tools.NewReadFileTool(workspace, readRestrict, allowReadPaths))
 	toolsRegistry.Register(tools.NewWriteFileTool(workspace, restrict, allowWritePaths))
 	toolsRegistry.Register(tools.NewListDirTool(workspace, readRestrict, allowReadPaths))
+	toolsRegistry.Register(tools.NewMemorySearchTool(memoryIndex))
 	execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg)
 	if err != nil {
 		log.Fatalf("Critical error: unable to initialize exec tool: %v", err)
@@ -285,6 +289,7 @@ func NewAgentInstance(
 		StateStore:     NewNPCStateStore(workspace),
 		ContextBuilder: contextBuilder,
 		Tools:          toolsRegistry,
+		MemoryIndex:    memoryIndex,
 		Subagents:      subagents,
 		SkillsFilter:   skillsFilter,
 		Candidates:     candidates,

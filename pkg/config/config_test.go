@@ -535,3 +535,25 @@ func TestDefaultConfig_WorkspacePath_WithPicoclawHome(t *testing.T) {
 		t.Errorf("Workspace path with PICOCLAW_HOME = %q, want %q", cfg.Agents.Defaults.Workspace, want)
 	}
 }
+
+func TestMemoryAutoRecallConfig_EffectiveDefaults(t *testing.T) {
+	var cfg MemoryAutoRecallConfig
+
+	if got := cfg.EffectiveTopK(); got != 3 {
+		t.Fatalf("EffectiveTopK() = %d, want %d", got, 3)
+	}
+	if got := cfg.EffectiveMaxChars(); got != 1200 {
+		t.Fatalf("EffectiveMaxChars() = %d, want %d", got, 1200)
+	}
+}
+
+func TestMemoryAutoRecallConfig_EffectiveBounds(t *testing.T) {
+	cfg := MemoryAutoRecallConfig{TopK: 99, MaxChars: 99999}
+
+	if got := cfg.EffectiveTopK(); got != 10 {
+		t.Fatalf("EffectiveTopK() = %d, want %d", got, 10)
+	}
+	if got := cfg.EffectiveMaxChars(); got != 8000 {
+		t.Fatalf("EffectiveMaxChars() = %d, want %d", got, 8000)
+	}
+}

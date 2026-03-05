@@ -40,6 +40,8 @@ type AgentLoop struct {
 	state          *state.Manager
 	running        atomic.Bool
 	summarizing    sync.Map
+	sessionRotates sync.Map
+	dailyLogDedupe sync.Map
 	globalTools    map[string]tools.Tool
 	globalToolsMu  sync.RWMutex
 	fallback       *providers.FallbackChain
@@ -544,9 +546,15 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	}
 
 	// Use routed session key, but honor pre-set agent-scoped keys (for ProcessDirect/cron)
-	sessionKey := route.SessionKey
-	if msg.SessionKey != "" && strings.HasPrefix(msg.SessionKey, "agent:") {
-		sessionKey = msg.SessionKey
+	sessionKey := al.resolveSessionKey(route, msg)
+
+	trimmedContent := strings.TrimSpace(msg.Content)
+	parts := strings.Fields(trimmedContent)
+	if len(parts) > 0 && parts[0] == "/new" {
+		if len(parts) > 1 {
+			return "Usage: /new", nil
+		}
+		return al.handleNewSessionCommand(agent, route, msg, sessionKey)
 	}
 
 	logger.InfoCF("agent", "Routed message",
@@ -671,6 +679,16 @@ func (al *AgentLoop) runAgentLoop(
 	if !opts.NoHistory {
 		history = agent.Sessions.GetHistory(opts.SessionKey)
 		summary = agent.Sessions.GetSummary(opts.SessionKey)
+		if len(history) == 0 {
+			al.appendDailyLogJSONL(
+				agent,
+				opts.SessionKey,
+				opts.Channel,
+				opts.ChatID,
+				dailyLogEventSessionStarted,
+				nil,
+			)
+		}
 	}
 	messages := agent.ContextBuilder.BuildMessages(
 		history,
@@ -680,6 +698,7 @@ func (al *AgentLoop) runAgentLoop(
 		opts.Channel,
 		opts.ChatID,
 	)
+	messages = injectAutoRecallHints(messages, al.buildAutoRecallHints(ctx, agent, opts.UserMessage))
 
 	// Resolve media:// refs to base64 data URLs (streaming)
 	maxMediaSize := al.cfg.Agents.Defaults.GetMaxMediaSize()
@@ -933,7 +952,7 @@ func (al *AgentLoop) runLLMIteration(
 					})
 				}
 
-				al.forceCompression(agent, opts.SessionKey)
+				al.forceCompression(agent, opts.SessionKey, opts.Channel, opts.ChatID)
 				newHistory := agent.Sessions.GetHistory(opts.SessionKey)
 				newSummary := agent.Sessions.GetSummary(opts.SessionKey)
 				messages = agent.ContextBuilder.BuildMessages(
@@ -1168,7 +1187,7 @@ func (al *AgentLoop) maybeSummarize(agent *AgentInstance, sessionKey, channel, c
 
 // forceCompression aggressively reduces context when the limit is hit.
 // It drops the oldest 50% of messages (keeping system prompt and last user message).
-func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) {
+func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey, channel, chatID string) {
 	history := agent.Sessions.GetHistory(sessionKey)
 	if len(history) <= 4 {
 		return
@@ -1191,7 +1210,10 @@ func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) {
 	// 3. Last message
 
 	droppedCount := mid
+	droppedSegment := conversation[:mid]
 	keptConversation := conversation[mid:]
+
+	al.appendDailyLogJSONL(agent, sessionKey, channel, chatID, dailyLogEventPreCompression, droppedSegment)
 
 	newHistory := make([]providers.Message, 0, 1+len(keptConversation)+1)
 
