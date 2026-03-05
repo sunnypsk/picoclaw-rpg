@@ -119,12 +119,6 @@ type NPCRelationship struct {
 	Notes             string   `json:"notes,omitempty"`
 }
 
-type NPCVitals struct {
-	Energy     int `json:"energy,omitempty"`
-	Stress     int `json:"stress,omitempty"`
-	Motivation int `json:"motivation,omitempty"`
-}
-
 type NPCRecentEvent struct {
 	At      string `json:"at,omitempty"`
 	Type    string `json:"type,omitempty"`
@@ -137,7 +131,6 @@ type NPCState struct {
 	Emotion       NPCEmotion                 `json:"emotion,omitempty"`
 	Location      NPCLocation                `json:"location,omitempty"`
 	Relationships map[string]NPCRelationship `json:"relationships,omitempty"`
-	Vitals        NPCVitals                  `json:"vitals,omitempty"`
 	Habits        []string                   `json:"habits,omitempty"`
 	RecentEvents  []NPCRecentEvent           `json:"recent_events,omitempty"`
 }
@@ -262,11 +255,6 @@ func defaultNPCState() NPCState {
 			Activity: "observing",
 		},
 		Relationships: map[string]NPCRelationship{},
-		Vitals: NPCVitals{
-			Energy:     70,
-			Stress:     20,
-			Motivation: 70,
-		},
 	})
 }
 
@@ -295,10 +283,6 @@ func normalizeNPCState(state NPCState) NPCState {
 		state.Location.Activity = "observing"
 	}
 	state.Location.MoveReason = strings.TrimSpace(state.Location.MoveReason)
-
-	state.Vitals.Energy = clamp(state.Vitals.Energy, 0, 100)
-	state.Vitals.Stress = clamp(state.Vitals.Stress, 0, 100)
-	state.Vitals.Motivation = clamp(state.Vitals.Motivation, 0, 100)
 
 	if state.Relationships == nil {
 		state.Relationships = make(map[string]NPCRelationship)
@@ -732,7 +716,6 @@ Output shape:
     "relationships": {
       "<channel:user_id>": {"affinity": "low|mid|high", "trust": "low|mid|high", "familiarity": "low|mid|high", "last_interaction_at": "RFC3339 timestamp", "notes": "string"}
     },
-    "vitals": {"energy": 0-100, "stress": 0-100, "motivation": 0-100},
     "habits": ["string"],
     "recent_events": [{"at": "RFC3339", "type": "string", "summary": "string"}]
   },

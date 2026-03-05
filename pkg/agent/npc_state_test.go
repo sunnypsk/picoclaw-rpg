@@ -26,7 +26,6 @@ func TestNPCStateStore_SaveLoadRoundTrip(t *testing.T) {
 	state.Relationships = map[string]NPCRelationship{
 		"telegram:user1": {Affinity: NPCLevelHigh, Trust: NPCLevelMid, Familiarity: NPCLevelLow},
 	}
-	state.Vitals = NPCVitals{Energy: 80, Stress: 30, Motivation: 84}
 	state.Habits = []string{"keeps notes", "greets politely"}
 
 	if err := store.SaveState(state); err != nil {
@@ -195,7 +194,6 @@ func (m *npcStateTestProvider) Chat(
 						Familiarity: NPCLevelLow,
 					},
 				},
-				Vitals:       NPCVitals{Energy: 72, Stress: 24, Motivation: 81},
 				Habits:       []string{"greets politely"},
 				RecentEvents: []NPCRecentEvent{{At: "2026-01-01T00:00:00Z", Type: "chat", Summary: "talked with " + sender}},
 			},

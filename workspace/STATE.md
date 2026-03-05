@@ -25,11 +25,6 @@
       "notes": ""
     }
   },
-  "vitals": {
-    "energy": 70,
-    "stress": 20,
-    "motivation": 70
-  },
   "habits": [],
   "recent_events": []
 }
