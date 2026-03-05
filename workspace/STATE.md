@@ -16,7 +16,15 @@
     "moved_at": "",
     "move_reason": ""
   },
-  "relationships": {},
+  "relationships": {
+    "channel:user_id": {
+      "affinity": "mid",
+      "trust": "mid",
+      "familiarity": "low",
+      "last_interaction_at": "",
+      "notes": ""
+    }
+  },
   "vitals": {
     "energy": 70,
     "stress": 20,

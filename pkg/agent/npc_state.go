@@ -32,10 +32,16 @@ const (
 
 type NPCEmotionIntensity string
 
+type NPCLevel string
+
 const (
 	NPCEmotionIntensityLow  NPCEmotionIntensity = "low"
 	NPCEmotionIntensityMid  NPCEmotionIntensity = "mid"
 	NPCEmotionIntensityHigh NPCEmotionIntensity = "high"
+
+	NPCLevelLow  NPCLevel = "low"
+	NPCLevelMid  NPCLevel = "mid"
+	NPCLevelHigh NPCLevel = "high"
 )
 
 var npcAllowedEmotionNames = []string{
@@ -106,11 +112,11 @@ type NPCLocation struct {
 }
 
 type NPCRelationship struct {
-	Affinity          int    `json:"affinity,omitempty"`
-	Trust             int    `json:"trust,omitempty"`
-	Familiarity       int    `json:"familiarity,omitempty"`
-	LastInteractionAt string `json:"last_interaction_at,omitempty"`
-	Notes             string `json:"notes,omitempty"`
+	Affinity          NPCLevel `json:"affinity,omitempty"`
+	Trust             NPCLevel `json:"trust,omitempty"`
+	Familiarity       NPCLevel `json:"familiarity,omitempty"`
+	LastInteractionAt string   `json:"last_interaction_at,omitempty"`
+	Notes             string   `json:"notes,omitempty"`
 }
 
 type NPCVitals struct {
@@ -303,9 +309,9 @@ func normalizeNPCState(state NPCState) NPCState {
 		if normalizedKey == "" {
 			continue
 		}
-		rel.Affinity = clamp(rel.Affinity, 0, 100)
-		rel.Trust = clamp(rel.Trust, 0, 100)
-		rel.Familiarity = clamp(rel.Familiarity, 0, 100)
+		rel.Affinity = normalizeNPCLevel(rel.Affinity, NPCLevelMid)
+		rel.Trust = normalizeNPCLevel(rel.Trust, NPCLevelMid)
+		rel.Familiarity = normalizeNPCLevel(rel.Familiarity, NPCLevelLow)
 		rel.LastInteractionAt = strings.TrimSpace(rel.LastInteractionAt)
 		rel.Notes = strings.TrimSpace(rel.Notes)
 		normalizedRelationships[normalizedKey] = rel
@@ -429,6 +435,31 @@ func normalizeEmotionIntensity(level NPCEmotionIntensity) NPCEmotionIntensity {
 		return NPCEmotionIntensityHigh
 	default:
 		return NPCEmotionIntensityMid
+	}
+}
+
+func normalizeNPCLevel(level NPCLevel, fallback NPCLevel) NPCLevel {
+	normalized := strings.ToLower(strings.TrimSpace(string(level)))
+	switch normalized {
+	case string(NPCLevelLow):
+		return NPCLevelLow
+	case "medium", "middle", string(NPCLevelMid):
+		return NPCLevelMid
+	case string(NPCLevelHigh):
+		return NPCLevelHigh
+	default:
+		return fallback
+	}
+}
+
+func promoteNPCLevel(level NPCLevel) NPCLevel {
+	switch normalizeNPCLevel(level, NPCLevelLow) {
+	case NPCLevelLow:
+		return NPCLevelMid
+	case NPCLevelMid:
+		return NPCLevelHigh
+	default:
+		return NPCLevelHigh
 	}
 }
 
@@ -699,7 +730,7 @@ Output shape:
     "emotion": {"name": "string", "intensity": "low|mid|high", "reason": "string"},
     "location": {"area": "string", "scene": "string", "activity": "string", "moved_at": "RFC3339 timestamp", "move_reason": "string"},
     "relationships": {
-      "<channel:user_id>": {"affinity": 0-100, "trust": 0-100, "familiarity": 0-100, "last_interaction_at": "RFC3339 timestamp", "notes": "string"}
+      "<channel:user_id>": {"affinity": "low|mid|high", "trust": "low|mid|high", "familiarity": "low|mid|high", "last_interaction_at": "RFC3339 timestamp", "notes": "string"}
     },
     "vitals": {"energy": 0-100, "stress": 0-100, "motivation": 0-100},
     "habits": ["string"],
@@ -713,6 +744,9 @@ Rules:
 - emotion.name must be one of: %s.
 - emotion.intensity must be one of: low, mid, high.
 - Intensity behavior guide: low=subtle cues and mostly neutral language; mid=clear but balanced emotional expression; high=strong and direct expression matching context.
+- Emotion transition rule: emotion.name may change only when previous_state.emotion.intensity is low.
+- If previous_state.emotion.intensity is mid or high, keep emotion.name the same as previous_state.emotion.name.
+- Example: previous_state angry/high cannot become calm in one update; lower intensity first.
 - Ensure relationship key %q exists and is updated.
 - Keep memory_notes concise, deduplicated, and <= %d.
 - Merge/edit existing notes when possible instead of blind append.
@@ -772,12 +806,12 @@ func ensureRelationshipPresent(state *NPCState, msg bus.InboundMessage) {
 	rel, ok := state.Relationships[relationshipKey]
 	if !ok {
 		rel = NPCRelationship{
-			Affinity:    50,
-			Trust:       50,
-			Familiarity: 1,
+			Affinity:    NPCLevelMid,
+			Trust:       NPCLevelMid,
+			Familiarity: NPCLevelLow,
 		}
 	} else {
-		rel.Familiarity = clamp(rel.Familiarity+1, 0, 100)
+		rel.Familiarity = promoteNPCLevel(rel.Familiarity)
 	}
 	rel.LastInteractionAt = now
 	state.Relationships[relationshipKey] = rel

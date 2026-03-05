@@ -24,7 +24,7 @@ func TestNPCStateStore_SaveLoadRoundTrip(t *testing.T) {
 	state.Emotion = NPCEmotion{Name: "excited", Intensity: NPCEmotionIntensityHigh, Reason: "met a new traveler"}
 	state.Location = NPCLocation{Area: "harbor", Scene: "boardwalk", Activity: "walking"}
 	state.Relationships = map[string]NPCRelationship{
-		"telegram:user1": {Affinity: 68, Trust: 63, Familiarity: 22},
+		"telegram:user1": {Affinity: NPCLevelHigh, Trust: NPCLevelMid, Familiarity: NPCLevelLow},
 	}
 	state.Vitals = NPCVitals{Energy: 80, Stress: 30, Motivation: 84}
 	state.Habits = []string{"keeps notes", "greets politely"}
@@ -49,6 +49,9 @@ func TestNPCStateStore_SaveLoadRoundTrip(t *testing.T) {
 	}
 	if _, ok := loaded.Relationships["telegram:user1"]; !ok {
 		t.Fatalf("expected relationship key telegram:user1")
+	}
+	if rel := loaded.Relationships["telegram:user1"]; rel.Affinity != NPCLevelHigh || rel.Trust != NPCLevelMid || rel.Familiarity != NPCLevelLow {
+		t.Fatalf("unexpected relationship levels: %+v", rel)
 	}
 }
 
@@ -88,6 +91,27 @@ func TestNormalizeEmotionName_AllowsRequestedMoodNames(t *testing.T) {
 		if got := normalizeEmotionName(tc.input); got != tc.want {
 			t.Fatalf("normalizeEmotionName(%q) = %q, want %q", tc.input, got, tc.want)
 		}
+	}
+}
+
+func TestNormalizeNPCLevel(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    NPCLevel
+		fallback NPCLevel
+		want     NPCLevel
+	}{
+		{name: "low", input: NPCLevelLow, fallback: NPCLevelMid, want: NPCLevelLow},
+		{name: "middle alias", input: "middle", fallback: NPCLevelLow, want: NPCLevelMid},
+		{name: "invalid uses fallback", input: "unknown", fallback: NPCLevelHigh, want: NPCLevelHigh},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeNPCLevel(tc.input, tc.fallback); got != tc.want {
+				t.Fatalf("normalizeNPCLevel(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -166,9 +190,9 @@ func (m *npcStateTestProvider) Chat(
 				},
 				Relationships: map[string]NPCRelationship{
 					relationshipKey: {
-						Affinity:    58,
-						Trust:       54,
-						Familiarity: 18,
+						Affinity:    NPCLevelMid,
+						Trust:       NPCLevelMid,
+						Familiarity: NPCLevelLow,
 					},
 				},
 				Vitals:       NPCVitals{Energy: 72, Stress: 24, Motivation: 81},
