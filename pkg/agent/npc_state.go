@@ -712,7 +712,7 @@ Rules:
 - Keep continuity from previous state unless interaction indicates change.
 - emotion.name must be one of: %s.
 - emotion.intensity must be one of: low, mid, high.
-- Intensity behavior guide: low=subtle cues and mostly neutral language; mid=clear but balanced emotional expression; high=strong but controlled expression while staying polite and task-focused.
+- Intensity behavior guide: low=subtle cues and mostly neutral language; mid=clear but balanced emotional expression; high=strong and direct expression matching context.
 - Ensure relationship key %q exists and is updated.
 - Keep memory_notes concise, deduplicated, and <= %d.
 - Merge/edit existing notes when possible instead of blind append.
