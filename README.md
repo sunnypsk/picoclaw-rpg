@@ -709,7 +709,7 @@ PicoClaw stores data in your configured workspace (default: `~/.picoclaw/workspa
 ```
 ~/.picoclaw/workspace/
 ├── sessions/          # Conversation sessions and history
-├── memory/           # Long-term memory and user profile (MEMORY.md)
+├── memory/           # Long-term memory + daily JSONL logs (MEMORY.md, YYYYMM/YYYYMMDD.md)
 ├── state/            # Persistent state (last channel, etc.)
 ├── cron/             # Scheduled jobs database
 ├── skills/           # Custom skills
@@ -720,6 +720,24 @@ PicoClaw stores data in your configured workspace (default: `~/.picoclaw/workspa
 ├── STATE.md          # NPC runtime state (emotion, vitals, relationships)
 ├── TOOLS.md          # Tool descriptions
 └── (no USER.md)      # User profile moved to memory/MEMORY.md
+```
+
+### Session Rotation and Daily Logs
+
+- Use `/new` in chat to rotate to a fresh session key while keeping the previous session file in `sessions/`.
+- Daily logs are appended to `memory/YYYYMM/YYYYMMDD.md` in JSONL format (one JSON object per line).
+- Flush events:
+  - `session_started`
+  - `session_closed_by_new`
+  - `pre_compression` (only the dropped conversation segment)
+- Message lines in daily logs include only `user` and `assistant` roles.
+
+Example JSONL lines:
+
+```json
+{"type":"session_event","event":"session_closed_by_new","session_key":"agent:main:main"}
+{"type":"message","role":"user","content":"hello"}
+{"type":"message","role":"assistant","content":"hi there"}
 ```
 
 ### Skill Sources
@@ -760,6 +778,28 @@ PicoClaw runs in a sandboxed environment by default. The agent can only access f
 | `persona_preset`        | `momonga`               | Default personality preset for seeded `SOUL.md` and `IDENTITY.md` |
 | `restrict_to_workspace` | `true`                  | Restrict file/command access to workspace |
 
+Optional memory auto-recall (inject keyword memory hits into prompt):
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "memory_search": {
+        "auto_recall": {
+          "enabled": true,
+          "top_k": 3,
+          "max_chars": 1200
+        }
+      }
+    }
+  }
+}
+```
+
+- `enabled`: turn prompt injection on/off (default `false`)
+- `top_k`: max recalled snippets per turn (default `3`, max `10`)
+- `max_chars`: max injected characters (default `1200`, max `8000`)
+
 #### Auto-Provision Dedicated Workspaces (Optional)
 
 To isolate files by chat peer (user/group/channel), enable auto-provisioning:
@@ -791,9 +831,23 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 | `read_file`   | Read files       | Only files within workspace            |
 | `write_file`  | Write files      | Only files within workspace            |
 | `list_dir`    | List directories | Only directories within workspace      |
+| `memory_search` | Search memory notes | Reads indexed `MEMORY.md` and `memory/**/*.md` in workspace |
 | `edit_file`   | Edit files       | Only files within workspace            |
 | `append_file` | Append to files  | Only files within workspace            |
 | `exec`        | Execute commands | Command paths must be within workspace |
+
+### Memory Search Tool
+
+PicoClaw includes a built-in `memory_search` tool backed by local SQLite FTS5 (`unicode61` + `trigram`) for keyword recall across:
+
+- `MEMORY.md`
+- `memory/**/*.md` (including daily notes)
+
+Parameters:
+
+- `query` (required): search query
+- `limit` (optional): number of results (default `5`)
+- `path_prefix` (optional): filter by relative path prefix (for example `memory/202603/`)
 
 #### Additional Exec Protection
 
@@ -1212,7 +1266,14 @@ picoclaw agent -m "Hello"
 {
   "agents": {
     "defaults": {
-      "model": "anthropic/claude-opus-4-5"
+      "model": "anthropic/claude-opus-4-5",
+      "memory_search": {
+        "auto_recall": {
+          "enabled": false,
+          "top_k": 3,
+          "max_chars": 1200
+        }
+      }
     }
   },
   "providers": {
@@ -1292,6 +1353,12 @@ picoclaw agent -m "Hello"
 | `picoclaw status`         | Show status                   |
 | `picoclaw cron list`      | List all scheduled jobs       |
 | `picoclaw cron add ...`   | Add a scheduled job           |
+
+### Chat Session Commands
+
+| Command | Description |
+| --- | --- |
+| `/new` | Rotate to a new chat session key and keep previous session history |
 
 ### Scheduled Tasks / Reminders
 

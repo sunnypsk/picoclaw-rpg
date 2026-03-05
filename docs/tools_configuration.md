@@ -16,6 +16,31 @@ PicoClaw's tools configuration is located in the `tools` field of `config.json`.
 }
 ```
 
+## Memory Search Tool
+
+PicoClaw provides a built-in `memory_search` agent tool for keyword lookup in:
+
+- `MEMORY.md`
+- `memory/**/*.md` (including daily notes)
+
+The tool uses local SQLite FTS5 with dual tokenizers (`unicode61` + `trigram`).
+
+### Tool Parameters
+
+| Parameter     | Type   | Required | Description                                             |
+| ------------- | ------ | -------- | ------------------------------------------------------- |
+| `query`       | string | yes      | Search query                                            |
+| `limit`       | int    | no       | Max results (default: `5`)                             |
+| `path_prefix` | string | no       | Filter by relative path prefix (for example `memory/`) |
+
+### Auto Recall Injection
+
+`memory_search` itself does not use `tools.*` config. Optional automatic memory injection is configured under:
+
+- `agents.defaults.memory_search.auto_recall.enabled`
+- `agents.defaults.memory_search.auto_recall.top_k`
+- `agents.defaults.memory_search.auto_recall.max_chars`
+
 ## Web Tools
 
 Web tools are used for web search and fetching.
