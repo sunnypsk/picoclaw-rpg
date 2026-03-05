@@ -6,7 +6,7 @@
   "updated_at": "",
   "emotion": {
     "name": "calm",
-    "intensity": 35,
+    "intensity": "mid",
     "reason": ""
   },
   "location": {

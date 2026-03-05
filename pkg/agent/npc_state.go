@@ -26,12 +26,75 @@ const (
 	maxNPCMemoryNotes   = 50
 	npcUpdaterTimeout   = 25 * time.Second
 	npcUpdaterPromptTag = "NPC_STATE_MEMORY_UPDATER_V1"
+
+	defaultNPCEmotionName = "calm"
 )
 
+type NPCEmotionIntensity string
+
+const (
+	NPCEmotionIntensityLow  NPCEmotionIntensity = "low"
+	NPCEmotionIntensityMid  NPCEmotionIntensity = "mid"
+	NPCEmotionIntensityHigh NPCEmotionIntensity = "high"
+)
+
+var npcAllowedEmotionNames = []string{
+	"calm",
+	"cheerful",
+	"excited",
+	"playful",
+	"focused",
+	"curious",
+	"concerned",
+	"frustrated",
+	"naughty",
+	"angry",
+	"withdrawn",
+}
+
+var npcAllowedEmotionNameSet = map[string]struct{}{
+	"calm":       {},
+	"cheerful":   {},
+	"excited":    {},
+	"playful":    {},
+	"focused":    {},
+	"curious":    {},
+	"concerned":  {},
+	"frustrated": {},
+	"naughty":    {},
+	"angry":      {},
+	"withdrawn":  {},
+}
+
+func (i *NPCEmotionIntensity) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		*i = ""
+		return nil
+	}
+
+	if strings.HasPrefix(trimmed, `"`) {
+		var level string
+		if err := json.Unmarshal(data, &level); err != nil {
+			return err
+		}
+		*i = normalizeEmotionIntensity(NPCEmotionIntensity(level))
+		return nil
+	}
+
+	var numeric float64
+	if err := json.Unmarshal(data, &numeric); err == nil {
+		*i = intensityFromNumeric(numeric)
+		return nil
+	}
+
+	return fmt.Errorf("invalid emotion intensity: %s", trimmed)
+}
+
 type NPCEmotion struct {
-	Name      string `json:"name,omitempty"`
-	Intensity int    `json:"intensity,omitempty"`
-	Reason    string `json:"reason,omitempty"`
+	Name      string              `json:"name,omitempty"`
+	Intensity NPCEmotionIntensity `json:"intensity,omitempty"`
+	Reason    string              `json:"reason,omitempty"`
 }
 
 type NPCLocation struct {
@@ -184,8 +247,8 @@ func defaultNPCState() NPCState {
 		Version:   npcStateVersion,
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 		Emotion: NPCEmotion{
-			Name:      "calm",
-			Intensity: 35,
+			Name:      defaultNPCEmotionName,
+			Intensity: NPCEmotionIntensityMid,
 		},
 		Location: NPCLocation{
 			Area:     "base",
@@ -209,11 +272,8 @@ func normalizeNPCState(state NPCState) NPCState {
 		state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	}
 
-	state.Emotion.Name = strings.TrimSpace(state.Emotion.Name)
-	if state.Emotion.Name == "" {
-		state.Emotion.Name = "calm"
-	}
-	state.Emotion.Intensity = clamp(state.Emotion.Intensity, 0, 100)
+	state.Emotion.Name = normalizeEmotionName(state.Emotion.Name)
+	state.Emotion.Intensity = normalizeEmotionIntensity(state.Emotion.Intensity)
 	state.Emotion.Reason = strings.TrimSpace(state.Emotion.Reason)
 
 	state.Location.Area = strings.TrimSpace(state.Location.Area)
@@ -347,6 +407,40 @@ func normalizeMemoryNote(note string) string {
 	n = strings.TrimPrefix(n, "*")
 	n = strings.TrimSpace(n)
 	return n
+}
+
+func normalizeEmotionName(name string) string {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	normalized = strings.Join(strings.Fields(normalized), " ")
+	if _, ok := npcAllowedEmotionNameSet[normalized]; ok {
+		return normalized
+	}
+	return defaultNPCEmotionName
+}
+
+func normalizeEmotionIntensity(level NPCEmotionIntensity) NPCEmotionIntensity {
+	normalized := strings.ToLower(strings.TrimSpace(string(level)))
+	switch normalized {
+	case string(NPCEmotionIntensityLow):
+		return NPCEmotionIntensityLow
+	case "medium", "middle", string(NPCEmotionIntensityMid):
+		return NPCEmotionIntensityMid
+	case string(NPCEmotionIntensityHigh):
+		return NPCEmotionIntensityHigh
+	default:
+		return NPCEmotionIntensityMid
+	}
+}
+
+func intensityFromNumeric(value float64) NPCEmotionIntensity {
+	switch {
+	case value <= 33:
+		return NPCEmotionIntensityLow
+	case value <= 66:
+		return NPCEmotionIntensityMid
+	default:
+		return NPCEmotionIntensityHigh
+	}
 }
 
 func buildRelationshipKey(channel, senderID string) string {
@@ -602,7 +696,7 @@ Output shape:
   "state": {
     "version": 1,
     "updated_at": "RFC3339 timestamp",
-    "emotion": {"name": "string", "intensity": 0-100, "reason": "string"},
+    "emotion": {"name": "string", "intensity": "low|mid|high", "reason": "string"},
     "location": {"area": "string", "scene": "string", "activity": "string", "moved_at": "RFC3339 timestamp", "move_reason": "string"},
     "relationships": {
       "<channel:user_id>": {"affinity": 0-100, "trust": 0-100, "familiarity": 0-100, "last_interaction_at": "RFC3339 timestamp", "notes": "string"}
@@ -616,10 +710,13 @@ Output shape:
 
 Rules:
 - Keep continuity from previous state unless interaction indicates change.
+- emotion.name must be one of: %s.
+- emotion.intensity must be one of: low, mid, high.
+- Intensity behavior guide: low=subtle cues and mostly neutral language; mid=clear but balanced emotional expression; high=strong but controlled expression while staying polite and task-focused.
 - Ensure relationship key %q exists and is updated.
 - Keep memory_notes concise, deduplicated, and <= %d.
 - Merge/edit existing notes when possible instead of blind append.
-- Return valid JSON object only.`, npcUpdaterPromptTag, relationshipKey, maxNPCMemoryNotes)
+- Return valid JSON object only.`, npcUpdaterPromptTag, strings.Join(npcAllowedEmotionNames, ", "), relationshipKey, maxNPCMemoryNotes)
 
 	response, err := agent.Provider.Chat(
 		ctx,

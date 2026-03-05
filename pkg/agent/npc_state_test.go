@@ -21,7 +21,7 @@ func TestNPCStateStore_SaveLoadRoundTrip(t *testing.T) {
 	store := NewNPCStateStore(workspace)
 
 	state := defaultNPCState()
-	state.Emotion = NPCEmotion{Name: "excited", Intensity: 75, Reason: "met a new traveler"}
+	state.Emotion = NPCEmotion{Name: "excited", Intensity: NPCEmotionIntensityHigh, Reason: "met a new traveler"}
 	state.Location = NPCLocation{Area: "harbor", Scene: "boardwalk", Activity: "walking"}
 	state.Relationships = map[string]NPCRelationship{
 		"telegram:user1": {Affinity: 68, Trust: 63, Familiarity: 22},
@@ -41,11 +41,53 @@ func TestNPCStateStore_SaveLoadRoundTrip(t *testing.T) {
 	if loaded.Emotion.Name != "excited" {
 		t.Fatalf("Emotion.Name = %q, want %q", loaded.Emotion.Name, "excited")
 	}
+	if loaded.Emotion.Intensity != NPCEmotionIntensityHigh {
+		t.Fatalf("Emotion.Intensity = %q, want %q", loaded.Emotion.Intensity, NPCEmotionIntensityHigh)
+	}
 	if loaded.Location.Area != "harbor" {
 		t.Fatalf("Location.Area = %q, want %q", loaded.Location.Area, "harbor")
 	}
 	if _, ok := loaded.Relationships["telegram:user1"]; !ok {
 		t.Fatalf("expected relationship key telegram:user1")
+	}
+}
+
+func TestNPCStateStore_LoadState_LegacyNumericIntensity(t *testing.T) {
+	workspace := t.TempDir()
+	store := NewNPCStateStore(workspace)
+
+	legacy := "# NPC State\n\n```json\n{\n  \"version\": 1,\n  \"emotion\": {\n    \"name\": \"calm\",\n    \"intensity\": 80,\n    \"reason\": \"legacy format\"\n  }\n}\n```\n"
+	if err := os.WriteFile(store.StatePath(), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	loaded, err := store.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState() error: %v", err)
+	}
+	if loaded.Emotion.Intensity != NPCEmotionIntensityHigh {
+		t.Fatalf("Emotion.Intensity = %q, want %q", loaded.Emotion.Intensity, NPCEmotionIntensityHigh)
+	}
+}
+
+func TestNormalizeEmotionName_AllowsRequestedMoodNames(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "naughty", want: "naughty"},
+		{input: "angry", want: "angry"},
+		{input: "withdrawn", want: "withdrawn"},
+		{input: "dont want to talk to ppl", want: defaultNPCEmotionName},
+		{input: "don't want to talk to ppl", want: defaultNPCEmotionName},
+		{input: "dont_want_to_talk_to_people", want: defaultNPCEmotionName},
+		{input: "unknown-emotion", want: defaultNPCEmotionName},
+	}
+
+	for _, tc := range tests {
+		if got := normalizeEmotionName(tc.input); got != tc.want {
+			t.Fatalf("normalizeEmotionName(%q) = %q, want %q", tc.input, got, tc.want)
+		}
 	}
 }
 
@@ -114,7 +156,7 @@ func (m *npcStateTestProvider) Chat(
 				UpdatedAt: "2026-01-01T00:00:00Z",
 				Emotion: NPCEmotion{
 					Name:      "cheerful",
-					Intensity: 62,
+					Intensity: NPCEmotionIntensityMid,
 					Reason:    "had a chat",
 				},
 				Location: NPCLocation{
