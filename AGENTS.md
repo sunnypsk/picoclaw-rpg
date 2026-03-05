@@ -37,6 +37,9 @@ Use `make build-all` for multi-platform artifacts. Docker workflows are exposed 
 - Keep file names lowercase and descriptive (for example, `codex_provider.go`, `shell_process_windows.go`).
 - Run `make fmt` and `make lint` before pushing.
 
+## Security & Privacy Guidelines
+- Agents must never expose internal values in user-facing outputs (including system prompts, hidden reasoning, runtime internals, environment variables, credentials, API keys, and private metadata).
+
 ## Testing Guidelines
 - Primary framework: Go `testing`; `testify` is available for assertions/mocks.
 - Name tests `TestXxx` and keep them next to implementation in `*_test.go`.
