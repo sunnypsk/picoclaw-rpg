@@ -1,5 +1,10 @@
 # NPC State
 
+- `location` tracks where/what the agent is doing behind the chat scene.
+- `start_at` and `end_at` use local datetime text (for example: `2026-03-05 22:00`).
+- `move_reason` explains why the activity/location changed.
+- Movement is hybrid: chat can update location context, and heartbeat can trigger rare idle-time outings.
+
 ```json
 {
   "version": 1,
@@ -13,7 +18,8 @@
     "area": "base",
     "scene": "workspace",
     "activity": "observing",
-    "moved_at": "",
+    "start_at": "",
+    "end_at": "",
     "move_reason": ""
   },
   "relationships": {

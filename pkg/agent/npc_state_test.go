@@ -22,7 +22,14 @@ func TestNPCStateStore_SaveLoadRoundTrip(t *testing.T) {
 
 	state := defaultNPCState()
 	state.Emotion = NPCEmotion{Name: "excited", Intensity: NPCEmotionIntensityHigh, Reason: "met a new traveler"}
-	state.Location = NPCLocation{Area: "harbor", Scene: "boardwalk", Activity: "walking"}
+	state.Location = NPCLocation{
+		Area:       "harbor",
+		Scene:      "boardwalk",
+		Activity:   "walking",
+		StartAt:    "2026-03-05 18:30",
+		EndAt:      "2026-03-05 20:00",
+		MoveReason: "evening exploration",
+	}
 	state.Relationships = map[string]NPCRelationship{
 		"telegram:user1": {Affinity: NPCLevelHigh, Trust: NPCLevelMid, Familiarity: NPCLevelLow},
 	}
@@ -45,6 +52,12 @@ func TestNPCStateStore_SaveLoadRoundTrip(t *testing.T) {
 	}
 	if loaded.Location.Area != "harbor" {
 		t.Fatalf("Location.Area = %q, want %q", loaded.Location.Area, "harbor")
+	}
+	if loaded.Location.StartAt != "2026-03-05 18:30" {
+		t.Fatalf("Location.StartAt = %q, want %q", loaded.Location.StartAt, "2026-03-05 18:30")
+	}
+	if loaded.Location.EndAt != "2026-03-05 20:00" {
+		t.Fatalf("Location.EndAt = %q, want %q", loaded.Location.EndAt, "2026-03-05 20:00")
 	}
 	if _, ok := loaded.Relationships["telegram:user1"]; !ok {
 		t.Fatalf("expected relationship key telegram:user1")
@@ -69,6 +82,128 @@ func TestNPCStateStore_LoadState_LegacyNumericIntensity(t *testing.T) {
 	}
 	if loaded.Emotion.Intensity != NPCEmotionIntensityHigh {
 		t.Fatalf("Emotion.Intensity = %q, want %q", loaded.Emotion.Intensity, NPCEmotionIntensityHigh)
+	}
+}
+
+func TestNPCStateStore_LoadState_LegacyMovedAtMapsToStartAt(t *testing.T) {
+	workspace := t.TempDir()
+	store := NewNPCStateStore(workspace)
+
+	legacy := "# NPC State\n\n```json\n{\n  \"version\": 1,\n  \"location\": {\n    \"area\": \"town\",\n    \"scene\": \"gate\",\n    \"activity\": \"traveling\",\n    \"moved_at\": \"2026-03-05 18:30\",\n    \"move_reason\": \"daily stroll\"\n  }\n}\n```\n"
+	if err := os.WriteFile(store.StatePath(), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	loaded, err := store.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState() error: %v", err)
+	}
+
+	if loaded.Location.StartAt != "2026-03-05 18:30" {
+		t.Fatalf("Location.StartAt = %q, want %q", loaded.Location.StartAt, "2026-03-05 18:30")
+	}
+	if loaded.Location.MoveReason != "daily stroll" {
+		t.Fatalf("Location.MoveReason = %q, want %q", loaded.Location.MoveReason, "daily stroll")
+	}
+
+	if err := store.SaveState(loaded); err != nil {
+		t.Fatalf("SaveState() error: %v", err)
+	}
+
+	raw, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatalf("ReadFile() error: %v", err)
+	}
+	if strings.Contains(string(raw), "\"moved_at\"") {
+		t.Fatalf("saved state should not contain legacy moved_at field: %s", string(raw))
+	}
+}
+
+func TestPreserveActiveOutingDuringChat_PreservesLocationAndMarksRemote(t *testing.T) {
+	now := time.Date(2026, 3, 5, 20, 0, 0, 0, time.Local)
+	previous := NPCLocation{
+		Area:       "park",
+		Scene:      "riverside path",
+		Activity:   "out for a walk",
+		StartAt:    now.Add(-20 * time.Minute).Format(npcLocationTimeLayout),
+		EndAt:      now.Add(40 * time.Minute).Format(npcLocationTimeLayout),
+		MoveReason: "evening walk",
+	}
+	next := NPCLocation{Area: "base", Scene: "workspace", Activity: "observing"}
+
+	preserveActiveOutingDuringChat(previous, &next, now)
+
+	if next.Area != "park" || next.Scene != "riverside path" {
+		t.Fatalf("expected outing location to be preserved, got area=%q scene=%q", next.Area, next.Scene)
+	}
+	if !strings.Contains(strings.ToLower(next.Activity), "chatting remotely") {
+		t.Fatalf("expected remote chat marker in activity, got %q", next.Activity)
+	}
+	if next.StartAt != previous.StartAt || next.EndAt != previous.EndAt {
+		t.Fatalf("expected start/end to be preserved, got start=%q end=%q", next.StartAt, next.EndAt)
+	}
+}
+
+func TestApplyHeartbeatLocationPolicy_StartsOutingWhenIdle(t *testing.T) {
+	now := time.Date(2026, 3, 5, 21, 0, 0, 0, time.Local)
+	state := defaultNPCState()
+	state.Relationships = map[string]NPCRelationship{
+		"telegram:user1": {
+			LastInteractionAt: now.Add(-3 * time.Hour).UTC().Format(time.RFC3339),
+		},
+	}
+
+	next, changed := applyHeartbeatLocationPolicy(state, now, 0.01, 1, 50)
+	if !changed {
+		t.Fatalf("expected heartbeat policy to start an outing")
+	}
+	if next.Location.StartAt == "" || next.Location.EndAt == "" {
+		t.Fatalf("expected outing start/end to be populated, got start=%q end=%q", next.Location.StartAt, next.Location.EndAt)
+	}
+	if next.Location.MoveReason != npcHeartbeatMoveReason {
+		t.Fatalf("MoveReason = %q, want %q", next.Location.MoveReason, npcHeartbeatMoveReason)
+	}
+	if !isActiveOutingWindow(next.Location, now) {
+		t.Fatalf("expected active outing window after heartbeat move: %+v", next.Location)
+	}
+}
+
+func TestApplyHeartbeatLocationPolicy_NoOutingWhenRollHigh(t *testing.T) {
+	now := time.Date(2026, 3, 5, 21, 0, 0, 0, time.Local)
+	state := defaultNPCState()
+	state.Relationships = map[string]NPCRelationship{
+		"telegram:user1": {
+			LastInteractionAt: now.Add(-3 * time.Hour).UTC().Format(time.RFC3339),
+		},
+	}
+
+	next, changed := applyHeartbeatLocationPolicy(state, now, 0.9, 0, 45)
+	if changed {
+		t.Fatalf("expected no movement when random roll is high, got %+v", next.Location)
+	}
+}
+
+func TestApplyHeartbeatLocationPolicy_ReturnsToBaseAfterOutingEnds(t *testing.T) {
+	now := time.Date(2026, 3, 5, 22, 0, 0, 0, time.Local)
+	state := defaultNPCState()
+	state.Location = NPCLocation{
+		Area:       "park",
+		Scene:      "riverside path",
+		Activity:   "out for a walk",
+		StartAt:    now.Add(-2 * time.Hour).Format(npcLocationTimeLayout),
+		EndAt:      now.Add(-5 * time.Minute).Format(npcLocationTimeLayout),
+		MoveReason: npcHeartbeatMoveReason,
+	}
+
+	next, changed := applyHeartbeatLocationPolicy(state, now, 0.9, 0, 45)
+	if !changed {
+		t.Fatalf("expected heartbeat policy to return to base after outing end")
+	}
+	if next.Location.Area != "base" || next.Location.Scene != "workspace" || next.Location.Activity != "observing" {
+		t.Fatalf("expected return to base/workspace/observing, got %+v", next.Location)
+	}
+	if next.Location.StartAt != "" || next.Location.EndAt != "" {
+		t.Fatalf("expected outing times to be cleared after return, got start=%q end=%q", next.Location.StartAt, next.Location.EndAt)
 	}
 }
 

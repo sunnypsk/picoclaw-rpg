@@ -464,7 +464,7 @@ func (al *AgentLoop) ProcessHeartbeat(
 	if agent == nil {
 		return "", fmt.Errorf("no default agent for heartbeat")
 	}
-	return al.runAgentLoop(ctx, agent, processOptions{
+	response, err := al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey:      "heartbeat",
 		Channel:         channel,
 		ChatID:          chatID,
@@ -474,6 +474,12 @@ func (al *AgentLoop) ProcessHeartbeat(
 		SendResponse:    false,
 		NoHistory:       true, // Don't load session history for heartbeat
 	})
+	if err != nil {
+		return "", err
+	}
+
+	al.maybeApplyHeartbeatLocationPolicy(agent)
+	return response, nil
 }
 
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, error) {

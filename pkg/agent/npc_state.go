@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,8 +28,30 @@ const (
 	npcUpdaterTimeout   = 25 * time.Second
 	npcUpdaterPromptTag = "NPC_STATE_MEMORY_UPDATER_V1"
 
+	npcLocationTimeLayout              = "2006-01-02 15:04"
+	npcHeartbeatIdleThreshold          = 2 * time.Hour
+	npcHeartbeatMoveProbability        = 0.08
+	npcHeartbeatMinDurationMinutes     = 35
+	npcHeartbeatDurationRangeMinutes   = 40
+	npcActivityRemoteChatSuffix        = " (multitasking, chatting remotely)"
+	npcHeartbeatMoveReason             = "idle heartbeat walk"
+	npcHeartbeatReturnMoveReasonPrefix = "finished "
+
 	defaultNPCEmotionName = "calm"
 )
+
+type npcHeartbeatOuting struct {
+	Area     string
+	Scene    string
+	Activity string
+}
+
+var npcHeartbeatOutings = []npcHeartbeatOuting{
+	{Area: "park", Scene: "tree-lined trail", Activity: "out for a walk"},
+	{Area: "harbor", Scene: "boardwalk", Activity: "taking a slow walk"},
+	{Area: "town", Scene: "side streets", Activity: "exploring nearby"},
+	{Area: "market", Scene: "quiet alley", Activity: "stretching legs"},
+}
 
 type NPCEmotionIntensity string
 
@@ -107,8 +130,48 @@ type NPCLocation struct {
 	Area       string `json:"area,omitempty"`
 	Scene      string `json:"scene,omitempty"`
 	Activity   string `json:"activity,omitempty"`
-	MovedAt    string `json:"moved_at,omitempty"`
+	StartAt    string `json:"start_at,omitempty"`
+	EndAt      string `json:"end_at,omitempty"`
 	MoveReason string `json:"move_reason,omitempty"`
+}
+
+func (l *NPCLocation) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		*l = NPCLocation{}
+		return nil
+	}
+
+	type rawNPCLocation struct {
+		Area       string `json:"area,omitempty"`
+		Scene      string `json:"scene,omitempty"`
+		Activity   string `json:"activity,omitempty"`
+		StartAt    string `json:"start_at,omitempty"`
+		EndAt      string `json:"end_at,omitempty"`
+		MovedAt    string `json:"moved_at,omitempty"`
+		MoveReason string `json:"move_reason,omitempty"`
+	}
+
+	var raw rawNPCLocation
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	startAt := raw.StartAt
+	if strings.TrimSpace(startAt) == "" {
+		startAt = raw.MovedAt
+	}
+
+	*l = NPCLocation{
+		Area:       raw.Area,
+		Scene:      raw.Scene,
+		Activity:   raw.Activity,
+		StartAt:    startAt,
+		EndAt:      raw.EndAt,
+		MoveReason: raw.MoveReason,
+	}
+
+	return nil
 }
 
 type NPCRelationship struct {
@@ -282,6 +345,8 @@ func normalizeNPCState(state NPCState) NPCState {
 	if state.Location.Activity == "" {
 		state.Location.Activity = "observing"
 	}
+	state.Location.StartAt = strings.TrimSpace(state.Location.StartAt)
+	state.Location.EndAt = strings.TrimSpace(state.Location.EndAt)
 	state.Location.MoveReason = strings.TrimSpace(state.Location.MoveReason)
 
 	if state.Relationships == nil {
@@ -631,13 +696,15 @@ func (al *AgentLoop) updateNPCStateAndMemory(
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
 	}
+	previousState := normalizeNPCState(state)
 	memoryNotes, err := agent.StateStore.LoadMemoryNotes()
 	if err != nil {
 		return fmt.Errorf("load memory notes: %w", err)
 	}
 
-	fallbackState := state
+	fallbackState := previousState
 	applyMinimalTurnUpdate(&fallbackState, msg, assistantReply)
+	preserveActiveOutingDuringChat(previousState.Location, &fallbackState.Location, time.Now())
 	fallbackNotes := normalizeMemoryNotes(memoryNotes)
 
 	update, err := al.requestNPCStateUpdate(ctx, agent, fallbackState, fallbackNotes, msg, assistantReply)
@@ -653,6 +720,7 @@ func (al *AgentLoop) updateNPCStateAndMemory(
 
 	nextState := normalizeNPCState(update.State)
 	ensureRelationshipPresent(&nextState, msg)
+	preserveActiveOutingDuringChat(previousState.Location, &nextState.Location, time.Now())
 	if err := agent.StateStore.SaveState(nextState); err != nil {
 		return fmt.Errorf("save state: %w", err)
 	}
@@ -666,6 +734,36 @@ func (al *AgentLoop) updateNPCStateAndMemory(
 	}
 
 	return nil
+}
+
+func (al *AgentLoop) maybeApplyHeartbeatLocationPolicy(agent *AgentInstance) {
+	if agent == nil || agent.StateStore == nil {
+		return
+	}
+
+	state, err := agent.StateStore.LoadState()
+	if err != nil {
+		logger.WarnCF("agent", "Failed to load state for heartbeat location policy",
+			map[string]any{"agent_id": agent.ID, "error": err.Error()})
+		return
+	}
+
+	roll := rand.Float64()
+	outingIndex := 0
+	if len(npcHeartbeatOutings) > 0 {
+		outingIndex = rand.IntN(len(npcHeartbeatOutings))
+	}
+	durationMinutes := npcHeartbeatMinDurationMinutes + rand.IntN(npcHeartbeatDurationRangeMinutes+1)
+
+	nextState, changed := applyHeartbeatLocationPolicy(state, time.Now(), roll, outingIndex, durationMinutes)
+	if !changed {
+		return
+	}
+
+	if err := agent.StateStore.SaveState(nextState); err != nil {
+		logger.WarnCF("agent", "Failed to save heartbeat location policy update",
+			map[string]any{"agent_id": agent.ID, "error": err.Error()})
+	}
 }
 
 func (al *AgentLoop) requestNPCStateUpdate(
@@ -712,7 +810,7 @@ Output shape:
     "version": 1,
     "updated_at": "RFC3339 timestamp",
     "emotion": {"name": "string", "intensity": "low|mid|high", "reason": "string"},
-    "location": {"area": "string", "scene": "string", "activity": "string", "moved_at": "RFC3339 timestamp", "move_reason": "string"},
+    "location": {"area": "string", "scene": "string", "activity": "string", "start_at": "local datetime text (e.g. 2026-03-05 22:00)", "end_at": "local datetime text (e.g. 2026-03-05 23:30)", "move_reason": "string"},
     "relationships": {
       "<channel:user_id>": {"affinity": "low|mid|high", "trust": "low|mid|high", "familiarity": "low|mid|high", "last_interaction_at": "RFC3339 timestamp", "notes": "string"}
     },
@@ -730,6 +828,8 @@ Rules:
 - Emotion transition rule: emotion.name may change only when previous_state.emotion.intensity is low.
 - If previous_state.emotion.intensity is mid or high, keep emotion.name the same as previous_state.emotion.name.
 - Example: previous_state angry/high cannot become calm in one update; lower intensity first.
+- location tracks off-chat activity and whereabouts; use start_at/end_at as local datetime text when available.
+- If previous_state.location indicates an active outing window (between start_at and end_at), keep the outing location/activity and add a multitasking cue for chatting remotely.
 - Ensure relationship key %q exists and is updated.
 - Keep memory_notes concise, deduplicated, and <= %d.
 - Merge/edit existing notes when possible instead of blind append.
@@ -826,4 +926,222 @@ func applyMinimalTurnUpdate(state *NPCState, msg bus.InboundMessage, assistantRe
 	state.RecentEvents = append(state.RecentEvents, event)
 	state.RecentEvents = normalizeRecentEvents(state.RecentEvents)
 	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+}
+
+func preserveActiveOutingDuringChat(previous NPCLocation, next *NPCLocation, now time.Time) {
+	if next == nil || !isActiveOutingWindow(previous, now) {
+		return
+	}
+
+	activity := strings.TrimSpace(previous.Activity)
+	if activity == "" {
+		activity = strings.TrimSpace(next.Activity)
+	}
+	if activity == "" {
+		activity = "out and about"
+	}
+
+	next.Area = strings.TrimSpace(previous.Area)
+	next.Scene = strings.TrimSpace(previous.Scene)
+	next.Activity = ensureRemoteChatSuffix(activity)
+	next.StartAt = strings.TrimSpace(previous.StartAt)
+	next.EndAt = strings.TrimSpace(previous.EndAt)
+
+	if strings.TrimSpace(next.MoveReason) == "" {
+		if previousReason := strings.TrimSpace(previous.MoveReason); previousReason != "" {
+			next.MoveReason = previousReason
+		} else {
+			next.MoveReason = "continuing outing while chatting"
+		}
+	}
+}
+
+func ensureRemoteChatSuffix(activity string) string {
+	trimmed := strings.TrimSpace(activity)
+	if trimmed == "" {
+		trimmed = "out and about"
+	}
+
+	lower := strings.ToLower(trimmed)
+	if strings.Contains(lower, "chatting remotely") || strings.Contains(lower, "multitasking") {
+		return trimmed
+	}
+
+	return trimmed + npcActivityRemoteChatSuffix
+}
+
+func parseLocationLocalTime(value string) (time.Time, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return time.Time{}, false
+	}
+
+	parsed, err := time.ParseInLocation(npcLocationTimeLayout, trimmed, time.Local)
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	return parsed, true
+}
+
+func isActiveOutingWindow(location NPCLocation, now time.Time) bool {
+	nowLocal := now.In(time.Local)
+	startAt, hasStart := parseLocationLocalTime(location.StartAt)
+	endAt, hasEnd := parseLocationLocalTime(location.EndAt)
+
+	if !hasStart && !hasEnd {
+		return false
+	}
+	if hasStart && nowLocal.Before(startAt) {
+		return false
+	}
+	if hasEnd && !nowLocal.Before(endAt) {
+		return false
+	}
+
+	return true
+}
+
+func parseRFC3339(value string) (time.Time, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return time.Time{}, false
+	}
+
+	parsed, err := time.Parse(time.RFC3339, trimmed)
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	return parsed, true
+}
+
+func latestInteractionAt(state NPCState) (time.Time, bool) {
+	var latest time.Time
+	hasLatest := false
+
+	for _, rel := range state.Relationships {
+		parsed, ok := parseRFC3339(rel.LastInteractionAt)
+		if !ok {
+			continue
+		}
+		if !hasLatest || parsed.After(latest) {
+			latest = parsed
+			hasLatest = true
+		}
+	}
+
+	for _, event := range state.RecentEvents {
+		eventType := strings.ToLower(strings.TrimSpace(event.Type))
+		if eventType != "" && eventType != "chat" {
+			continue
+		}
+		parsed, ok := parseRFC3339(event.At)
+		if !ok {
+			continue
+		}
+		if !hasLatest || parsed.After(latest) {
+			latest = parsed
+			hasLatest = true
+		}
+	}
+
+	if !hasLatest {
+		if parsed, ok := parseRFC3339(state.UpdatedAt); ok {
+			latest = parsed
+			hasLatest = true
+		}
+	}
+
+	return latest, hasLatest
+}
+
+func appendLocationEvent(state *NPCState, at time.Time, summary string) {
+	if state == nil {
+		return
+	}
+	trimmed := strings.TrimSpace(summary)
+	if trimmed == "" {
+		return
+	}
+
+	state.RecentEvents = append(state.RecentEvents, NPCRecentEvent{
+		At:      at.UTC().Format(time.RFC3339),
+		Type:    "location",
+		Summary: trimmed,
+	})
+	state.RecentEvents = normalizeRecentEvents(state.RecentEvents)
+}
+
+func applyHeartbeatLocationPolicy(
+	state NPCState,
+	now time.Time,
+	roll float64,
+	outingIndex int,
+	durationMinutes int,
+) (NPCState, bool) {
+	next := normalizeNPCState(state)
+	nowLocal := now.In(time.Local)
+
+	if endAt, hasEnd := parseLocationLocalTime(next.Location.EndAt); hasEnd && !nowLocal.Before(endAt) {
+		previousActivity := strings.TrimSpace(next.Location.Activity)
+		moveReason := "returned from outing"
+		if previousActivity != "" && strings.ToLower(previousActivity) != "observing" {
+			moveReason = npcHeartbeatReturnMoveReasonPrefix + previousActivity
+		}
+
+		next.Location = NPCLocation{
+			Area:       "base",
+			Scene:      "workspace",
+			Activity:   "observing",
+			MoveReason: moveReason,
+		}
+		appendLocationEvent(&next, now, moveReason)
+		next.UpdatedAt = now.UTC().Format(time.RFC3339)
+		return next, true
+	}
+
+	if isActiveOutingWindow(next.Location, nowLocal) {
+		return next, false
+	}
+
+	lastInteraction, ok := latestInteractionAt(next)
+	if !ok {
+		return next, false
+	}
+	if now.UTC().Sub(lastInteraction) < npcHeartbeatIdleThreshold {
+		return next, false
+	}
+	if roll >= npcHeartbeatMoveProbability {
+		return next, false
+	}
+	if len(npcHeartbeatOutings) == 0 {
+		return next, false
+	}
+
+	if outingIndex < 0 || outingIndex >= len(npcHeartbeatOutings) {
+		outingIndex = 0
+	}
+	minDuration := npcHeartbeatMinDurationMinutes
+	maxDuration := npcHeartbeatMinDurationMinutes + npcHeartbeatDurationRangeMinutes
+	if durationMinutes < minDuration || durationMinutes > maxDuration {
+		durationMinutes = minDuration
+	}
+
+	plan := npcHeartbeatOutings[outingIndex]
+	startAt := nowLocal.Format(npcLocationTimeLayout)
+	endAt := nowLocal.Add(time.Duration(durationMinutes) * time.Minute).Format(npcLocationTimeLayout)
+
+	next.Location = NPCLocation{
+		Area:       plan.Area,
+		Scene:      plan.Scene,
+		Activity:   plan.Activity,
+		StartAt:    startAt,
+		EndAt:      endAt,
+		MoveReason: npcHeartbeatMoveReason,
+	}
+	appendLocationEvent(&next, now, fmt.Sprintf("went out: %s", plan.Activity))
+	next.UpdatedAt = now.UTC().Format(time.RFC3339)
+
+	return next, true
 }

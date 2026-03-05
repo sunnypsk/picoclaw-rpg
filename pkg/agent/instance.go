@@ -120,7 +120,7 @@ A Momonga-inspired character from Chiikawa energy: cute, playful, a bit chaotic,
 `,
 }
 
-var stateTemplateJSON = `{"version":1,"updated_at":"","emotion":{"name":"calm","intensity":"mid","reason":""},"location":{"area":"base","scene":"workspace","activity":"observing","moved_at":"","move_reason":""},"relationships":{},"habits":[],"recent_events":[]}`
+var stateTemplateJSON = `{"version":1,"updated_at":"","emotion":{"name":"calm","intensity":"mid","reason":""},"location":{"area":"base","scene":"workspace","activity":"observing","start_at":"","end_at":"","move_reason":""},"relationships":{},"habits":[],"recent_events":[]}`
 
 var memoryTemplateFallback = `# Long-term Memory
 

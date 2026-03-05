@@ -717,7 +717,7 @@ PicoClaw stores data in your configured workspace (default: `~/.picoclaw/workspa
 ├── HEARTBEAT.md      # Periodic task prompts (checked every 30 min)
 ├── IDENTITY.md       # Agent identity
 ├── SOUL.md           # Agent soul
-├── STATE.md          # NPC runtime state (emotion, location, relationships)
+├── STATE.md          # NPC runtime state (emotion, location/activity timing, relationships)
 ├── TOOLS.md          # Tool descriptions
 └── (no USER.md)      # User profile moved to memory/MEMORY.md
 ```
