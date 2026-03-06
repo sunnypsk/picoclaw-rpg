@@ -1,8 +1,8 @@
----
+﻿---
 name: huggingface-spaces
 description: Call Gradio-based Hugging Face Spaces with HF_TOKEN using bundled Python helpers; inspect endpoints, send multimodal inputs, and return JSON/file outputs.
 homepage: https://huggingface.co/spaces
-metadata: {"nanobot":{"emoji":"🤗","requires":{"bins":["python3"]}}}
+metadata: {"nanobot":{"emoji":"ðŸ¤—","requires":{"bins":["python3"]}}}
 ---
 
 # Hugging Face Spaces
@@ -20,6 +20,8 @@ Use it when the user asks to:
 ## Setup
 
 - Set `HF_TOKEN` before use
+- The helpers auto-load `~/.picoclaw/.env` by default, or `$PICOCLAW_HOME/.env` when `PICOCLAW_HOME` is set.
+- In the default Docker Compose setup, that persistent env file path is `docker/data/.env` on the host.
 - Install `gradio_client`:
 
 ```bash
@@ -78,3 +80,5 @@ Example payload:
 - Always inspect first unless the endpoint is already known
 - For private or gated Spaces, `HF_TOKEN` must have access
 - Prefer `call_space.py` over hand-written curl for queue handling and file uploads
+
+

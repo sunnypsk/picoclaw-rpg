@@ -1,7 +1,7 @@
----
+﻿---
 name: stt
 description: Transcribe local audio files into raw speech-to-text by sending them to the CPA OpenAI-compatible endpoint with model google/gemini-3-flash-preview. Use when the user asks to transcribe audio, do speech-to-text, STT, voice-note transcription, or wants the original spoken text only with no translation or summary.
-metadata: {"nanobot":{"emoji":"🎙️","requires":{"bins":["python3"]}}}
+metadata: {"nanobot":{"emoji":"ðŸŽ™ï¸","requires":{"bins":["python3"]}}}
 ---
 
 # STT
@@ -13,6 +13,8 @@ Use this skill to turn a local audio file into a plain transcript.
 - Set `CPA_API_KEY` before use.
 - Optional: set `CPA_API_BASE` to override the default `https://your-openai-compatible-endpoint.example/v1`.
 - Optional: set `CPA_STT_MODEL` to override the default `google/gemini-3-flash-preview`.
+- The helper auto-loads `~/.picoclaw/.env` by default, or `$PICOCLAW_HOME/.env` when `PICOCLAW_HOME` is set.
+- In the default Docker Compose setup, that persistent env file path is `docker/data/.env` on the host.
 - Never print, echo, or expose `CPA_API_KEY`.
 
 ## Workflow
@@ -53,3 +55,5 @@ On Windows, use `py -3` if `python3` is unavailable.
 
 - The helper already includes the base transcription prompt; use `--speaker-labels` and `--timestamps` when the user asks for those extras.
 - If the audio is partly unclear, `[inaudible]` is acceptable only for genuinely unclear segments.
+
+

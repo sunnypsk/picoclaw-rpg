@@ -29,6 +29,35 @@ BASE_PROMPT = (
 )
 
 
+def get_picoclaw_home() -> Path:
+    configured = os.getenv("PICOCLAW_HOME", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (Path.home() / ".picoclaw").resolve()
+
+
+def load_persistent_env() -> None:
+    env_path = get_picoclaw_home() / ".env"
+    if not env_path.is_file():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8-sig").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+
+        if len(value) >= 2 and ((value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")):
+            value = value[1:-1]
+
+        os.environ.setdefault(key, value)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Transcribe a local audio file with the CPA endpoint.")
     parser.add_argument("audio_path", help="Path to a local audio file")
@@ -212,6 +241,7 @@ def main() -> int:
     args = parse_args()
 
     try:
+        load_persistent_env()
         api_key, api_base, model = resolve_config()
         audio_path, audio_format = resolve_audio(args.audio_path)
         audio_data = read_audio_base64(audio_path)
@@ -228,3 +258,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
