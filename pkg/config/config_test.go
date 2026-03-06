@@ -557,3 +557,17 @@ func TestMemoryAutoRecallConfig_EffectiveBounds(t *testing.T) {
 		t.Fatalf("EffectiveMaxChars() = %d, want %d", got, 8000)
 	}
 }
+
+func TestDefaultConfig_MemoryAutoRecallEnabled(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if !cfg.Agents.Defaults.MemorySearch.AutoRecall.Enabled {
+		t.Fatal("DefaultConfig().Agents.Defaults.MemorySearch.AutoRecall.Enabled should be true")
+	}
+	if got := cfg.Agents.Defaults.MemorySearch.AutoRecall.TopK; got != 3 {
+		t.Fatalf("DefaultConfig().Agents.Defaults.MemorySearch.AutoRecall.TopK = %d, want %d", got, 3)
+	}
+	if got := cfg.Agents.Defaults.MemorySearch.AutoRecall.MaxChars; got != 1200 {
+		t.Fatalf("DefaultConfig().Agents.Defaults.MemorySearch.AutoRecall.MaxChars = %d, want %d", got, 1200)
+	}
+}

@@ -10,7 +10,7 @@
       "max_tool_iterations": 20,
       "memory_search": {
         "auto_recall": {
-          "enabled": false,
+          "enabled": true,
           "top_k": 3,
           "max_chars": 1200
         }

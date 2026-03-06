@@ -34,6 +34,13 @@ func DefaultConfig() *Config {
 				MaxTokens:           32768,
 				Temperature:         nil, // nil means use provider default
 				MaxToolIterations:   50,
+				MemorySearch: MemorySearchConfig{
+					AutoRecall: MemoryAutoRecallConfig{
+						Enabled:  true,
+						TopK:     3,
+						MaxChars: 1200,
+					},
+				},
 			},
 		},
 		Bindings: []AgentBinding{},
