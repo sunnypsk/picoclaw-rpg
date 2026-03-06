@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 
 import argparse
 import contextlib
@@ -10,6 +10,35 @@ import sys
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
+
+
+def get_picoclaw_home() -> Path:
+    configured = os.getenv("PICOCLAW_HOME", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (Path.home() / ".picoclaw").resolve()
+
+
+def load_persistent_env() -> None:
+    env_path = get_picoclaw_home() / ".env"
+    if not env_path.is_file():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8-sig").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+
+        if len(value) >= 2 and ((value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")):
+            value = value[1:-1]
+
+        os.environ.setdefault(key, value)
 
 
 def normalize_space_id(value: str) -> str:
@@ -191,6 +220,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        load_persistent_env()
         space_id = normalize_space_id(args.space)
         payload = read_payload(args)
         result = call_space(space_id, args.api_name, payload, args.timeout)
@@ -205,3 +235,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
