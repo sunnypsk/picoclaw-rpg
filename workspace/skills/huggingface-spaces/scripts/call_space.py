@@ -1,8 +1,6 @@
 ﻿#!/usr/bin/env python3
 
 import argparse
-import contextlib
-import io
 import json
 import os
 import re
@@ -121,57 +119,75 @@ def make_json_safe(value):
 
 
 def inspect_api(client):
-    buffer = io.StringIO()
-    with contextlib.redirect_stdout(buffer):
-        api_info = client.view_api()
-    return api_info, buffer.getvalue().strip()
+    api_info = client.view_api(print_info=False, return_format="dict")
+    api_stdout = client.view_api(print_info=False, return_format="str") or ""
+    return api_info, api_stdout.strip()
 
 
 def extract_endpoints_from_stdout(text: str):
     endpoints = []
     for line in text.splitlines():
-        match = re.search(r'api_name="([^"]+)"', line)
-        if not match:
+        api_name_match = re.search(r'api_name="([^"]+)"', line)
+        if api_name_match:
+            endpoints.append({"name": api_name_match.group(1), "summary": line.strip()})
             continue
-        endpoints.append({"name": match.group(1), "summary": line.strip()})
+
+        fn_index_match = re.search(r'fn_index=(\d+)', line)
+        if fn_index_match:
+            endpoints.append({"fn_index": int(fn_index_match.group(1)), "summary": line.strip()})
     return endpoints
 
 
 def extract_endpoints(api_info, api_stdout: str):
+    endpoints = []
+
     if isinstance(api_info, dict):
-        if isinstance(api_info.get("api"), list):
-            return api_info["api"]
-        if isinstance(api_info.get("named_endpoints"), dict):
-            endpoints = []
-            for name, endpoint in api_info["named_endpoints"].items():
+        named_endpoints = api_info.get("named_endpoints")
+        if isinstance(named_endpoints, dict):
+            for name, endpoint in named_endpoints.items():
                 if isinstance(endpoint, dict):
                     item = dict(endpoint)
                     item.setdefault("name", name)
                 else:
                     item = {"name": name, "value": endpoint}
                 endpoints.append(item)
+
+        unnamed_endpoints = api_info.get("unnamed_endpoints")
+        if isinstance(unnamed_endpoints, dict):
+            for fn_index, endpoint in unnamed_endpoints.items():
+                if isinstance(endpoint, dict):
+                    item = dict(endpoint)
+                    item.setdefault("fn_index", int(fn_index))
+                else:
+                    item = {"fn_index": int(fn_index), "value": endpoint}
+                endpoints.append(item)
+
+        if endpoints:
             return endpoints
 
-        endpoints = []
-        for name, endpoint in api_info.items():
-            if not isinstance(name, str) or not name.startswith("/"):
-                continue
-            if isinstance(endpoint, dict):
-                item = dict(endpoint)
-                item.setdefault("name", name)
-            else:
-                item = {"name": name, "value": endpoint}
-            endpoints.append(item)
-        return endpoints
     return extract_endpoints_from_stdout(api_stdout)
 
 
-def resolve_api_name(requested_api_name: Optional[str], endpoints) -> str:
+def resolve_endpoint(requested_api_name: Optional[str], requested_fn_index: Optional[int], endpoints):
+    if requested_api_name and requested_fn_index is not None:
+        raise ValueError("pass either --api-name or --fn-index, not both")
+
     if requested_api_name:
-        return requested_api_name
-    if len(endpoints) == 1 and endpoints[0].get("name"):
-        return endpoints[0]["name"]
-    raise ValueError("could not determine api_name automatically; inspect the Space first or pass --api-name")
+        return {"api_name": requested_api_name}
+
+    if requested_fn_index is not None:
+        return {"fn_index": requested_fn_index}
+
+    if len(endpoints) == 1:
+        endpoint = endpoints[0]
+        if endpoint.get("name"):
+            return {"api_name": endpoint["name"]}
+        if endpoint.get("fn_index") is not None:
+            return {"fn_index": endpoint["fn_index"]}
+
+    raise ValueError(
+        "could not determine endpoint automatically; inspect the Space first or pass --api-name/--fn-index"
+    )
 
 
 def build_call_args(payload, handle_file):
@@ -183,23 +199,32 @@ def build_call_args(payload, handle_file):
     return [converted], {}
 
 
-def call_space(space_id: str, api_name: Optional[str], payload, timeout_seconds: float):
+def call_space(
+    space_id: str,
+    api_name: Optional[str],
+    fn_index: Optional[int],
+    payload,
+    timeout_seconds: float,
+):
     client = load_client(space_id, timeout_seconds)
     api_info, api_stdout = inspect_api(client)
     endpoints = extract_endpoints(api_info, api_stdout)
-    resolved_api_name = resolve_api_name(api_name, endpoints)
+    resolved_endpoint = resolve_endpoint(api_name, fn_index, endpoints)
 
     handle_file = load_handle_file()
     call_args, call_kwargs = build_call_args(payload, handle_file)
 
-    job = client.submit(*call_args, api_name=resolved_api_name, **call_kwargs)
+    job = client.submit(*call_args, **resolved_endpoint, **call_kwargs)
     result = job.result()
 
     output = {
         "space": space_id,
-        "api_name": resolved_api_name,
         "result": make_json_safe(result),
     }
+    if resolved_endpoint.get("api_name"):
+        output["api_name"] = resolved_endpoint["api_name"]
+    if resolved_endpoint.get("fn_index") is not None:
+        output["fn_index"] = resolved_endpoint["fn_index"]
     if api_stdout:
         output["view_api_stdout"] = api_stdout
     if endpoints:
@@ -211,6 +236,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Call a Hugging Face Space with gradio_client.")
     parser.add_argument("space", help="Space slug (owner/space) or full Hugging Face Space URL")
     parser.add_argument("--api-name", help="Gradio API name such as /predict")
+    parser.add_argument("--fn-index", type=int, help="Unnamed Gradio endpoint index such as 0")
     parser.add_argument("--timeout", type=float, default=120.0, help="HTTP timeout in seconds (default: 120)")
 
     payload_group = parser.add_mutually_exclusive_group()
@@ -223,7 +249,7 @@ def main() -> int:
         load_persistent_env()
         space_id = normalize_space_id(args.space)
         payload = read_payload(args)
-        result = call_space(space_id, args.api_name, payload, args.timeout)
+        result = call_space(space_id, args.api_name, args.fn_index, payload, args.timeout)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
