@@ -20,7 +20,14 @@ RUN make build
 # ============================================================
 FROM alpine:3.23
 
-RUN apk add --no-cache ca-certificates tzdata curl
+ENV VIRTUAL_ENV=/opt/picoclaw-python
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+
+RUN apk add --no-cache ca-certificates tzdata curl python3 py3-pip && \
+    python3 -m venv "${VIRTUAL_ENV}" && \
+    "${VIRTUAL_ENV}/bin/pip" install --no-cache-dir gradio_client==2.2.0 && \
+    ln -sf "${VIRTUAL_ENV}/bin/python" /usr/local/bin/python3 && \
+    ln -sf "${VIRTUAL_ENV}/bin/pip" /usr/local/bin/pip3
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

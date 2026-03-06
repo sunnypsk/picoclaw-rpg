@@ -25,7 +25,8 @@ Use `make build-all` for multi-platform artifacts. Docker workflows are exposed 
 ### Local Docker image workflow (user preference)
 - For local code changes, rebuild and run from local source instead of pulling remote `latest`:
   - `docker build -t docker.io/sipeed/picoclaw:latest -f docker/Dockerfile .`
-- With current `docker/docker-compose.yml` volume path (`/root/.picoclaw`), run the gateway container as root when using the locally built image.
+- The single-image runtime now includes `python3` plus `gradio_client` for workspace skills such as `huggingface-spaces`.
+- `docker/docker-compose.yml` persists Picoclaw data at `./docker/data`, mounted to `/home/picoclaw/.picoclaw` in the container.
 
 ## Coding Style & Naming Conventions
 - Use Go `1.25.x` (see `go.mod`).

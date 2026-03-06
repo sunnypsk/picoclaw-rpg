@@ -184,6 +184,13 @@ docker compose -f docker/docker-compose.yml --profile gateway up -d
 ```
 
 > [!TIP]
+> If you are testing local source changes, rebuild the image first instead of pulling remote `latest`:
+> `docker build -t docker.io/sipeed/picoclaw:latest -f docker/Dockerfile .`
+>
+> The default Compose setup stores Picoclaw data in `docker/data/`, mounted to `/home/picoclaw/.picoclaw`
+> inside the container.
+
+> [!TIP]
 > **Docker Users**: By default, the Gateway listens on `127.0.0.1` which is not accessible from the host. If you need to access the health endpoints or expose ports, set `PICOCLAW_GATEWAY_HOST=0.0.0.0` in your environment or update `config.json`.
 
 ```bash
