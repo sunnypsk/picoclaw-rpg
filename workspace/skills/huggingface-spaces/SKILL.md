@@ -1,7 +1,6 @@
-﻿---
+---
 name: huggingface-spaces
 description: Call Gradio-based Hugging Face Spaces with HF_TOKEN using bundled Python helpers; inspect endpoints, send multimodal inputs, and return JSON/file outputs.
-homepage: https://huggingface.co/spaces
 metadata: {"nanobot":{"emoji":"ðŸ¤—","requires":{"bins":["python3"]}}}
 ---
 
@@ -53,6 +52,15 @@ python3 workspace/skills/huggingface-spaces/scripts/call_space.py \
   --payload-file payload.json
 ```
 
+For unnamed endpoints, pass `--fn-index` instead:
+
+```bash
+python3 workspace/skills/huggingface-spaces/scripts/call_space.py \
+  "owner/space" \
+  --fn-index 0 \
+  --payload-file payload.json
+```
+
 ## Payload rules
 
 - A JSON list is treated as positional inputs
@@ -73,7 +81,8 @@ Example payload:
 
 - The helper prints normalized JSON to stdout
 - File-like outputs keep returned paths and URLs
-- If `--api-name` is omitted and the Space only exposes one endpoint, the helper uses it automatically
+- `inspect_space.py` returns structured `api` metadata plus parsed endpoint selectors
+- If endpoint selection is omitted and the Space exposes exactly one named or unnamed endpoint, the helper uses it automatically
 
 ## Notes
 

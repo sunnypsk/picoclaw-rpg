@@ -1,8 +1,6 @@
 ﻿#!/usr/bin/env python3
 
 import argparse
-import contextlib
-import io
 import json
 import os
 import re
@@ -75,11 +73,44 @@ def make_json_safe(value):
 def extract_endpoints_from_stdout(text: str):
     endpoints = []
     for line in text.splitlines():
-        match = re.search(r'api_name="([^"]+)"', line)
-        if not match:
+        api_name_match = re.search(r'api_name="([^"]+)"', line)
+        if api_name_match:
+            endpoints.append({"name": api_name_match.group(1), "summary": line.strip()})
             continue
-        endpoints.append({"name": match.group(1), "summary": line.strip()})
+
+        fn_index_match = re.search(r'fn_index=(\d+)', line)
+        if fn_index_match:
+            endpoints.append({"fn_index": int(fn_index_match.group(1)), "summary": line.strip()})
     return endpoints
+
+
+def inspect_api(client):
+    api_info = client.view_api(print_info=False, return_format="dict")
+    api_stdout = client.view_api(print_info=False, return_format="str") or ""
+    return api_info, api_stdout.strip()
+
+
+def extract_endpoints(api_info, api_stdout: str):
+    endpoints = []
+
+    if isinstance(api_info, dict):
+        named_endpoints = api_info.get("named_endpoints")
+        if isinstance(named_endpoints, dict):
+            for name, endpoint in named_endpoints.items():
+                item = dict(endpoint) if isinstance(endpoint, dict) else {"value": endpoint}
+                item.setdefault("name", name)
+                endpoints.append(item)
+
+        unnamed_endpoints = api_info.get("unnamed_endpoints")
+        if isinstance(unnamed_endpoints, dict):
+            for fn_index, endpoint in unnamed_endpoints.items():
+                item = dict(endpoint) if isinstance(endpoint, dict) else {"value": endpoint}
+                item.setdefault("fn_index", int(fn_index))
+                endpoints.append(item)
+
+    if endpoints:
+        return endpoints
+    return extract_endpoints_from_stdout(api_stdout)
 
 
 def load_client(space_id: str, timeout_seconds: float):
@@ -97,20 +128,18 @@ def load_client(space_id: str, timeout_seconds: float):
 
 def inspect_space(space_id: str, timeout_seconds: float):
     client = load_client(space_id, timeout_seconds)
-    buffer = io.StringIO()
-    with contextlib.redirect_stdout(buffer):
-        api_info = client.view_api()
-    captured = buffer.getvalue().strip()
+    api_info, api_stdout = inspect_api(client)
 
     result = {
         "space": space_id,
         "api": make_json_safe(api_info),
     }
-    if captured:
-        result["view_api_stdout"] = captured
-        endpoints = extract_endpoints_from_stdout(captured)
-        if endpoints:
-            result["endpoints"] = endpoints
+    if api_stdout:
+        result["view_api_stdout"] = api_stdout
+
+    endpoints = extract_endpoints(api_info, api_stdout)
+    if endpoints:
+        result["endpoints"] = make_json_safe(endpoints)
     return result
 
 
