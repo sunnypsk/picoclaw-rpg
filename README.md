@@ -761,6 +761,18 @@ For advanced/test setups, you can override the builtin skills root with:
 export PICOCLAW_BUILTIN_SKILLS=/path/to/skills
 ```
 
+Sample workspace skills in this repo include:
+
+- `weather` for forecasts without an API key
+- `summarize` for URL/file/video summaries and transcript extraction
+- `huggingface-spaces` / `hf-image` for Gradio-based Hugging Face Space workflows
+- `stt` for local audio transcription via the CPA OpenAI-compatible endpoint using `CPA_API_KEY`
+
+The `stt` sample skill lives at `workspace/skills/stt` and sends local audio files to
+`https://cpa.littlething.uk/v1` with model `google/gemini-3-flash-preview`.
+It defaults to raw transcription only, with optional speaker labels and timestamps when requested.
+Set `CPA_API_KEY` before use, and optionally override `CPA_API_BASE` / `CPA_STT_MODEL`.
+
 ### 🔒 Security Sandbox
 
 PicoClaw runs in a sandboxed environment by default. The agent can only access files and execute commands within the configured workspace.
