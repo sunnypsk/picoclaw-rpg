@@ -34,6 +34,10 @@ coverage.html
 # OS
 .DS_Store
 
+# Python
+__pycache__/
+*.pyc
+
 # Ralph workspace
 ralph/
 .ralph/
