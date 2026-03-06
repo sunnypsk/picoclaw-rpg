@@ -184,6 +184,10 @@ func (t *CronTool) addJob(args map[string]any) *ToolResult {
 		}
 	}
 
+	if message == "" && naturalRequest != "" {
+		message = resolveNaturalMessage(naturalRequest, "")
+	}
+
 	if message == "" {
 		return ErrorResult("message is required for add")
 	}

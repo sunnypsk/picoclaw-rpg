@@ -311,6 +311,127 @@ func TestProcessMessage_NewCommandRotatesExplicitSessionKey(t *testing.T) {
 	}
 }
 
+func TestProcessMessage_NewCommandRoutesToLatestSessionAfterMultipleRotations(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-new-multi-rotation-*")
+	if err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	provider := &captureProvider{response: "assistant reply"}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+
+	ctx := context.Background()
+	explicitSessionKey := "agent:main:manual-session"
+
+	if _, err := al.processMessage(ctx, bus.InboundMessage{
+		Channel:    "test",
+		SenderID:   "u1",
+		ChatID:     "chat1",
+		SessionKey: explicitSessionKey,
+		Content:    "hello",
+	}); err != nil {
+		t.Fatalf("first message failed: %v", err)
+	}
+
+	const prefix = "Started a new session. New session key: "
+
+	firstResp, err := al.processMessage(ctx, bus.InboundMessage{
+		Channel:    "test",
+		SenderID:   "u1",
+		ChatID:     "chat1",
+		SessionKey: explicitSessionKey,
+		Content:    "/new",
+	})
+	if err != nil {
+		t.Fatalf("first /new failed: %v", err)
+	}
+	if !strings.HasPrefix(firstResp, prefix) {
+		t.Fatalf("unexpected first /new response: %q", firstResp)
+	}
+	firstRotatedKey := strings.TrimSpace(strings.TrimPrefix(firstResp, prefix))
+
+	if _, err := al.processMessage(ctx, bus.InboundMessage{
+		Channel:    "test",
+		SenderID:   "u1",
+		ChatID:     "chat1",
+		SessionKey: explicitSessionKey,
+		Content:    "first follow up",
+	}); err != nil {
+		t.Fatalf("first follow-up failed: %v", err)
+	}
+
+	secondResp, err := al.processMessage(ctx, bus.InboundMessage{
+		Channel:    "test",
+		SenderID:   "u1",
+		ChatID:     "chat1",
+		SessionKey: explicitSessionKey,
+		Content:    "/new",
+	})
+	if err != nil {
+		t.Fatalf("second /new failed: %v", err)
+	}
+	if !strings.HasPrefix(secondResp, prefix) {
+		t.Fatalf("unexpected second /new response: %q", secondResp)
+	}
+	secondRotatedKey := strings.TrimSpace(strings.TrimPrefix(secondResp, prefix))
+	if secondRotatedKey == "" || secondRotatedKey == firstRotatedKey {
+		t.Fatalf("expected second rotated key to differ from first, got first=%q second=%q", firstRotatedKey, secondRotatedKey)
+	}
+
+	if _, err := al.processMessage(ctx, bus.InboundMessage{
+		Channel:    "test",
+		SenderID:   "u1",
+		ChatID:     "chat1",
+		SessionKey: explicitSessionKey,
+		Content:    "second follow up",
+	}); err != nil {
+		t.Fatalf("second follow-up failed: %v", err)
+	}
+
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("default agent is nil")
+	}
+
+	firstHistory := agent.Sessions.GetHistory(firstRotatedKey)
+	foundFirstFollowUp := false
+	for _, msg := range firstHistory {
+		if msg.Role == "user" && msg.Content == "first follow up" {
+			foundFirstFollowUp = true
+		}
+		if msg.Role == "user" && msg.Content == "second follow up" {
+			t.Fatalf("second follow-up should not stay in previous rotated session %q", firstRotatedKey)
+		}
+	}
+	if !foundFirstFollowUp {
+		t.Fatalf("first rotated session missing first follow-up: %+v", firstHistory)
+	}
+
+	secondHistory := agent.Sessions.GetHistory(secondRotatedKey)
+	foundSecondFollowUp := false
+	for _, msg := range secondHistory {
+		if msg.Role == "user" && msg.Content == "second follow up" {
+			foundSecondFollowUp = true
+			break
+		}
+	}
+	if !foundSecondFollowUp {
+		t.Fatalf("latest rotated session missing second follow-up: %+v", secondHistory)
+	}
+}
+
 func TestAppendDailyLogJSONL_RetriesAfterWriteFailure(t *testing.T) {
 	al, _, _, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()

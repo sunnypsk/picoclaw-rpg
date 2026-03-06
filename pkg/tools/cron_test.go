@@ -36,6 +36,34 @@ func TestCronTool_AddJob_WithNaturalRequest(t *testing.T) {
 	}
 }
 
+func TestCronTool_AddJob_DerivesMessageFromNaturalRequestWithExplicitSchedule(t *testing.T) {
+	tool, service := newTestCronTool(t)
+	tool.SetContext("telegram", "chat-1")
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":          "add",
+		"at_seconds":      600,
+		"natural_request": "remind me to stretch",
+	})
+
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+
+	jobs := service.ListJobs(false)
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(jobs))
+	}
+
+	job := jobs[0]
+	if job.Schedule.Kind != "at" {
+		t.Fatalf("expected one-time schedule, got %s", job.Schedule.Kind)
+	}
+	if !strings.Contains(strings.ToLower(job.Payload.Message), "stretch") {
+		t.Fatalf("expected derived message to include 'stretch', got %q", job.Payload.Message)
+	}
+}
+
 func TestCronTool_AddJob_WithAmbiguousNaturalRequest(t *testing.T) {
 	tool, _ := newTestCronTool(t)
 	tool.SetContext("telegram", "chat-1")

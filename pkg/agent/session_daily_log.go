@@ -61,13 +61,49 @@ func (al *AgentLoop) resolveRotatedSessionKey(agentID, baseSessionKey string) st
 		return base
 	}
 
-	if rotated, ok := al.sessionRotates.Load(al.sessionRotationKey(agentID, base)); ok {
-		if key, ok := rotated.(string); ok && strings.TrimSpace(key) != "" {
-			return key
+	current := base
+	path := []string{base}
+	seen := map[string]struct{}{base: {}}
+	cycleDetected := false
+
+	for {
+		rotated, ok := al.sessionRotates.Load(al.sessionRotationKey(agentID, current))
+		if !ok {
+			break
+		}
+
+		next, ok := rotated.(string)
+		next = strings.ToLower(strings.TrimSpace(next))
+		if !ok || next == "" {
+			break
+		}
+
+		if _, exists := seen[next]; exists {
+			cycleDetected = true
+			logger.WarnCF("agent", "Detected session rotation cycle", map[string]any{
+				"agent_id":         agentID,
+				"base_session_key": base,
+				"current":          current,
+				"next":             next,
+			})
+			break
+		}
+
+		path = append(path, next)
+		seen[next] = struct{}{}
+		current = next
+	}
+
+	if !cycleDetected && current != base {
+		for _, key := range path[:len(path)-1] {
+			if key == current {
+				continue
+			}
+			al.sessionRotates.Store(al.sessionRotationKey(agentID, key), current)
 		}
 	}
 
-	return base
+	return current
 }
 
 func (al *AgentLoop) setSessionRotation(agentID, baseSessionKey, rotatedSessionKey string) {
