@@ -375,6 +375,8 @@ func seedWorkspaceBootstrapFiles(workspace string, defaults *config.AgentDefault
 		sourceWorkspace = expandHome(strings.TrimSpace(defaults.Workspace))
 	}
 
+	seedWorkspaceSkills(workspace, sourceWorkspace)
+
 	for _, relPath := range workspaceBootstrapFiles {
 		targetPath := filepath.Join(workspace, filepath.FromSlash(relPath))
 		if _, err := os.Stat(targetPath); err == nil {
@@ -413,6 +415,75 @@ func seedWorkspaceBootstrapFiles(workspace string, defaults *config.AgentDefault
 		}
 		_ = os.WriteFile(targetPath, []byte(fallback), 0o644)
 	}
+}
+
+func seedWorkspaceSkills(workspace, sourceWorkspace string) {
+	destSkillsDir := filepath.Join(workspace, "skills")
+	if err := os.MkdirAll(destSkillsDir, 0o755); err != nil {
+		return
+	}
+
+	if strings.TrimSpace(sourceWorkspace) == "" {
+		return
+	}
+
+	sourceSkillsDir := filepath.Join(sourceWorkspace, "skills")
+	if isSamePath(sourceSkillsDir, destSkillsDir) {
+		return
+	}
+
+	info, err := os.Stat(sourceSkillsDir)
+	if err != nil || !info.IsDir() {
+		return
+	}
+
+	_ = filepath.WalkDir(sourceSkillsDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(sourceSkillsDir, path)
+		if err != nil || relPath == "." {
+			return nil
+		}
+
+		targetPath := filepath.Join(destSkillsDir, relPath)
+		if d.IsDir() {
+			if _, err := os.Stat(targetPath); err == nil {
+				return nil
+			} else if !os.IsNotExist(err) {
+				return nil
+			}
+
+			perm := os.FileMode(0o755)
+			if entryInfo, err := d.Info(); err == nil && entryInfo.Mode().Perm() != 0 {
+				perm = entryInfo.Mode().Perm()
+			}
+			_ = os.MkdirAll(targetPath, perm)
+			return nil
+		}
+
+		if _, err := os.Stat(targetPath); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
+			return nil
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			return nil
+		}
+
+		perm := os.FileMode(0o644)
+		if entryInfo, err := d.Info(); err == nil && entryInfo.Mode().Perm() != 0 {
+			perm = entryInfo.Mode().Perm()
+		}
+		_ = os.WriteFile(targetPath, data, perm)
+		return nil
+	})
 }
 
 func personaBootstrapContent(defaults *config.AgentDefaults, relPath string) (string, bool) {

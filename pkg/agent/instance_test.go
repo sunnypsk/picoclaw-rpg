@@ -179,6 +179,15 @@ func TestNewAgentInstance_SeedsBootstrapFilesFromDefaultWorkspace(t *testing.T) 
 		writeWorkspaceFile(t, defaultWorkspace, rel, content)
 	}
 
+	sourceSkillFiles := map[string]string{
+		"skills/weather/SKILL.md":          "# source weather\n",
+		"skills/weather/scripts/run.sh":    "echo source\n",
+		"skills/weather/references/doc.txt": "hello\n",
+	}
+	for rel, content := range sourceSkillFiles {
+		writeWorkspaceFile(t, defaultWorkspace, rel, content)
+	}
+
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
@@ -196,6 +205,23 @@ func TestNewAgentInstance_SeedsBootstrapFilesFromDefaultWorkspace(t *testing.T) 
 	}
 
 	for rel, want := range sourceFiles {
+		targetPath := filepath.Join(autoWorkspace, filepath.FromSlash(rel))
+		data, err := os.ReadFile(targetPath)
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		if string(data) != want {
+			t.Fatalf("content of %s = %q, want %q", rel, string(data), want)
+		}
+	}
+
+	if info, err := os.Stat(filepath.Join(autoWorkspace, "skills")); err != nil {
+		t.Fatalf("skills directory should be created: %v", err)
+	} else if !info.IsDir() {
+		t.Fatalf("skills path should be a directory")
+	}
+
+	for rel, want := range sourceSkillFiles {
 		targetPath := filepath.Join(autoWorkspace, filepath.FromSlash(rel))
 		data, err := os.ReadFile(targetPath)
 		if err != nil {
@@ -338,6 +364,45 @@ func TestNewAgentInstance_DoesNotOverwriteExistingBootstrapFile(t *testing.T) {
 	}
 	if string(data) != "# custom\n" {
 		t.Fatalf("AGENTS.md was overwritten: got %q", string(data))
+	}
+}
+
+func TestNewAgentInstance_DoesNotOverwriteExistingSkillFiles(t *testing.T) {
+	root := t.TempDir()
+	defaultWorkspace := filepath.Join(root, "workspace-main")
+	autoWorkspace := filepath.Join(root, "workspace-auto")
+
+	writeWorkspaceFile(t, defaultWorkspace, "skills/weather/SKILL.md", "# source weather\n")
+	writeWorkspaceFile(t, defaultWorkspace, "skills/weather/scripts/run.sh", "echo source\n")
+
+	writeWorkspaceFile(t, autoWorkspace, "skills/weather/SKILL.md", "# custom weather\n")
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: defaultWorkspace,
+				Model:     "test-model",
+			},
+		},
+	}
+
+	provider := &mockProvider{}
+	NewAgentInstance(&config.AgentConfig{ID: "auto-4", Workspace: autoWorkspace}, &cfg.Agents.Defaults, cfg, provider)
+
+	skillData, err := os.ReadFile(filepath.Join(autoWorkspace, "skills", "weather", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read custom skill file: %v", err)
+	}
+	if string(skillData) != "# custom weather\n" {
+		t.Fatalf("skill file was overwritten: got %q", string(skillData))
+	}
+
+	scriptData, err := os.ReadFile(filepath.Join(autoWorkspace, "skills", "weather", "scripts", "run.sh"))
+	if err != nil {
+		t.Fatalf("read inherited script file: %v", err)
+	}
+	if string(scriptData) != "echo source\n" {
+		t.Fatalf("missing inherited script content: got %q", string(scriptData))
 	}
 }
 

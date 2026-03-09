@@ -198,6 +198,21 @@ docker compose -f docker/docker-compose.yml --profile gateway up -d
 > `docker/data/.env` on the host.
 
 > [!TIP]
+> On Windows, you can use the interactive helper script to build, run, start, stop, remove, and tail logs for the
+> gateway container:
+> `powershell -ExecutionPolicy Bypass -File .\docker\manage-container.ps1`
+>
+> The helper defaults to `--user root` with `docker/data` mounted to `/root/.picoclaw`, which is often the least
+> troublesome option for local bind mounts on Docker Desktop.
+
+> [!TIP]
+> On Linux, you can use the Bash helper for the same workflow:
+> `chmod +x ./docker/manage-container.sh && ./docker/manage-container.sh`
+>
+> The Linux helper defaults to the image's normal non-root user and mounts `docker/data` to
+> `/home/picoclaw/.picoclaw`. If you want the root-style behavior instead, run `./docker/manage-container.sh --root`.
+
+> [!TIP]
 > **Docker Users**: By default, the Gateway listens on `127.0.0.1` which is not accessible from the host. If you need to access the health endpoints or expose ports, set `PICOCLAW_GATEWAY_HOST=0.0.0.0` in your environment or update `config.json`.
 
 ```bash
@@ -1469,7 +1484,5 @@ This happens when another instance of the bot is running. Make sure only one `pi
 | **Brave Search** | 2000 queries/month  | Web search functionality              |
 | **Groq**         | Free tier available | Fast inference (Llama, Mixtral)       |
 | **Cerebras**     | Free tier available | Fast inference (Llama, Qwen, etc.)    |
-
-
 
 

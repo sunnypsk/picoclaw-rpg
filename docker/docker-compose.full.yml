@@ -14,7 +14,7 @@ services:
       - ../config/config.json:/root/.picoclaw/config.json:ro
       - picoclaw-workspace:/root/.picoclaw/workspace
       - picoclaw-npm-cache:/root/.npm # npm cache for faster MCP server installs
-    entrypoint: ["picoclaw", "agent"]
+    command: ["agent"]
     stdin_open: true
     tty: true
 

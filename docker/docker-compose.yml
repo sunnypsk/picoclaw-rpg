@@ -13,7 +13,7 @@ services:
     #  - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/home/picoclaw/.picoclaw
-    entrypoint: ["picoclaw", "agent"]
+    command: ["agent"]
     stdin_open: true
     tty: true
 
@@ -32,3 +32,4 @@ services:
     #  - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/home/picoclaw/.picoclaw
+    command: ["gateway"]

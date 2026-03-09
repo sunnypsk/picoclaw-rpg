@@ -35,6 +35,9 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 # Copy binary
 COPY --from=builder /src/build/picoclaw /usr/local/bin/picoclaw
+COPY docker/entrypoint.sh /usr/local/bin/picoclaw-entrypoint
+
+RUN chmod +x /usr/local/bin/picoclaw-entrypoint
 
 # Create non-root user and group
 RUN addgroup -g 1000 picoclaw && \
@@ -46,5 +49,5 @@ USER picoclaw
 # Run onboard to create initial directories and config
 RUN /usr/local/bin/picoclaw onboard
 
-ENTRYPOINT ["picoclaw"]
+ENTRYPOINT ["/usr/local/bin/picoclaw-entrypoint"]
 CMD ["gateway"]
