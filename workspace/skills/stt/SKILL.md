@@ -11,7 +11,7 @@ Use this skill to turn a local audio file into a plain transcript.
 ## Setup
 
 - Set `CPA_API_KEY` before use.
-- Optional: set `CPA_API_BASE` to override the default `https://your-openai-compatible-endpoint.example/v1`.
+- Set `CPA_API_BASE` to your CPA OpenAI-compatible endpoint before use.
 - Optional: set `CPA_STT_MODEL` to override the default `google/gemini-3-flash-preview`.
 - The helper auto-loads `~/.picoclaw/.env` by default, or `$PICOCLAW_HOME/.env` when `PICOCLAW_HOME` is set.
 - In the default Docker Compose setup, that persistent env file path is `docker/data/.env` on the host.

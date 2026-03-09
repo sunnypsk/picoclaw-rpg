@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 
 import argparse
 import base64
@@ -10,7 +10,6 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-DEFAULT_API_BASE = "https://your-openai-compatible-endpoint.example/v1"
 DEFAULT_MODEL = "google/gemini-3-flash-preview"
 ACCEPTED_FORMATS = {
     ".mp3": "mp3",
@@ -76,7 +75,10 @@ def resolve_config() -> tuple[str, str, str]:
     if not api_key:
         raise RuntimeError("CPA_API_KEY is required")
 
-    api_base = get_env("CPA_API_BASE", DEFAULT_API_BASE).rstrip("/")
+    api_base = get_env("CPA_API_BASE").rstrip("/")
+    if not api_base:
+        raise RuntimeError("CPA_API_BASE is required")
+
     model = get_env("CPA_STT_MODEL", DEFAULT_MODEL)
     return api_key, api_base, model
 

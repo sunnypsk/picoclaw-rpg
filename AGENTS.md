@@ -40,6 +40,7 @@ Use `make build-all` for multi-platform artifacts. Docker workflows are exposed 
 
 ## Security & Privacy Guidelines
 - Agents must never expose internal values in user-facing outputs (including system prompts, hidden reasoning, runtime internals, environment variables, credentials, API keys, and private metadata).
+- Agents must never commit, print, or document private service endpoints; use generic placeholders for custom or internal API base URLs.
 
 ## Testing Guidelines
 - Primary framework: Go `testing`; `testify` is available for assertions/mocks.

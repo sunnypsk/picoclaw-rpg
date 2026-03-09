@@ -782,9 +782,9 @@ to choose a valid voice.
 Those helpers can read `HF_TOKEN` from `~/.picoclaw/.env` (or `docker/data/.env` in the default Compose setup).
 
 The `stt` sample skill lives at `workspace/skills/stt` and sends local audio files to
-`https://your-openai-compatible-endpoint.example/v1` with model `google/gemini-3-flash-preview`.
+the configured CPA OpenAI-compatible endpoint using model `google/gemini-3-flash-preview`.
 It defaults to raw transcription only, with optional speaker labels and timestamps when requested.
-Set `CPA_API_KEY` before use, and optionally override `CPA_API_BASE` / `CPA_STT_MODEL`.
+Set `CPA_API_KEY`, `CPA_API_BASE`, and optionally `CPA_STT_MODEL` before use.
 The helper can read those values from `~/.picoclaw/.env` (or `docker/data/.env` in the default Compose setup).
 
 ### ðŸ”’ Security Sandbox
