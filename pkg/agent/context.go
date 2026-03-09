@@ -91,7 +91,9 @@ Your workspace is at: %s
 
 3. **Memory** - When interacting with me if something seems memorable, update %s/memory/MEMORY.md
 
-4. **Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.`,
+4. **Workspace hygiene** - Keep STATE.md and memory/MEMORY.md concise working documents. Aim to keep each within about 10000 tokens when practical. This is a soft limit, not a hard cap. If either file grows too large, summarize older content and remove outdated or redundant details while preserving important current context.
+
+5. **Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.`,
 		workspacePath, workspacePath, workspacePath, workspacePath, workspacePath, workspacePath)
 }
 

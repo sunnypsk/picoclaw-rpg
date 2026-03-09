@@ -126,6 +126,30 @@ func TestSingleSystemMessage(t *testing.T) {
 	}
 }
 
+func TestSystemPromptIncludesSoftMemoryAndStateGuidance(t *testing.T) {
+	tmpDir := setupWorkspace(t, nil)
+	defer os.RemoveAll(tmpDir)
+
+	cb := NewContextBuilder(tmpDir)
+	prompt := cb.BuildSystemPrompt()
+
+	if !strings.Contains(prompt, "STATE.md") {
+		t.Fatal("system prompt should mention STATE.md")
+	}
+	if !strings.Contains(prompt, "memory/MEMORY.md") {
+		t.Fatal("system prompt should mention memory/MEMORY.md")
+	}
+	if !strings.Contains(prompt, "10000 tokens") {
+		t.Fatal("system prompt should mention the soft 10000 token target")
+	}
+	if !strings.Contains(prompt, "soft limit") {
+		t.Fatal("system prompt should describe the target as a soft limit")
+	}
+	if !strings.Contains(prompt, "summarize older content") {
+		t.Fatal("system prompt should instruct agents to summarize older content when trimming")
+	}
+}
+
 // TestMtimeAutoInvalidation verifies that the cache detects source file changes
 // via mtime without requiring explicit InvalidateCache().
 // Fix: original implementation had no auto-invalidation — edits to bootstrap files,
