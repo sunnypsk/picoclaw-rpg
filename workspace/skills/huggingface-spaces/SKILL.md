@@ -1,7 +1,7 @@
 ---
 name: huggingface-spaces
 description: Call Gradio-based Hugging Face Spaces with HF_TOKEN using bundled Python helpers; inspect endpoints, send multimodal inputs, and return JSON/file outputs.
-metadata: {"nanobot":{"emoji":"ðŸ¤—","requires":{"bins":["python3"]}}}
+metadata: {"nanobot":{"emoji":"🤗","requires":{"bins":["python3"]}}}
 ---
 
 # Hugging Face Spaces

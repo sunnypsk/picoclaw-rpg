@@ -1,7 +1,7 @@
-﻿---
+---
 name: stt
 description: Transcribe local audio files into raw speech-to-text by sending them to the CPA OpenAI-compatible endpoint with model google/gemini-3-flash-preview. Use when the user asks to transcribe audio, do speech-to-text, STT, voice-note transcription, or wants the original spoken text only with no translation or summary.
-metadata: {"nanobot":{"emoji":"ðŸŽ™ï¸","requires":{"bins":["python3"]}}}
+metadata: {"nanobot":{"emoji":"🎙️","requires":{"bins":["python3"]}}}
 ---
 
 # STT
