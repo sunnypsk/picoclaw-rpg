@@ -31,18 +31,22 @@ type mockCtxTool struct {
 	chatID  string
 }
 
-func (m *mockCtxTool) SetContext(channel, chatID string) {
-	m.channel = channel
-	m.chatID = chatID
+func (m *mockCtxTool) Execute(ctx context.Context, _ map[string]any) *ToolResult {
+	m.channel = ToolChannel(ctx)
+	m.chatID = ToolChatID(ctx)
+	return m.result
 }
 
 type mockAsyncRegistryTool struct {
 	mockRegistryTool
-	cb AsyncCallback
+	cb                AsyncCallback
+	executeAsyncCalled bool
 }
 
-func (m *mockAsyncRegistryTool) SetCallback(cb AsyncCallback) {
+func (m *mockAsyncRegistryTool) ExecuteAsync(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
 	m.cb = cb
+	m.executeAsyncCalled = true
+	return m.mockRegistryTool.Execute(ctx, args)
 }
 
 // --- helpers ---
@@ -136,7 +140,7 @@ func TestToolRegistry_Execute_NotFound(t *testing.T) {
 	}
 }
 
-func TestToolRegistry_ExecuteWithContext_ContextualTool(t *testing.T) {
+func TestToolRegistry_ExecuteWithContext_InjectsRequestContext(t *testing.T) {
 	r := NewToolRegistry()
 	ct := &mockCtxTool{
 		mockRegistryTool: *newMockTool("ctx_tool", "needs context"),
@@ -153,7 +157,7 @@ func TestToolRegistry_ExecuteWithContext_ContextualTool(t *testing.T) {
 	}
 }
 
-func TestToolRegistry_ExecuteWithContext_SkipsEmptyContext(t *testing.T) {
+func TestToolRegistry_ExecuteWithContext_UsesEmptyContextWhenUnset(t *testing.T) {
 	r := NewToolRegistry()
 	ct := &mockCtxTool{
 		mockRegistryTool: *newMockTool("ctx_tool", "needs context"),
@@ -163,7 +167,7 @@ func TestToolRegistry_ExecuteWithContext_SkipsEmptyContext(t *testing.T) {
 	r.ExecuteWithContext(context.Background(), "ctx_tool", nil, "", "", nil)
 
 	if ct.channel != "" || ct.chatID != "" {
-		t.Error("SetContext should not be called with empty channel/chatID")
+		t.Error("expected empty tool context when channel/chatID are unset")
 	}
 }
 
@@ -179,8 +183,11 @@ func TestToolRegistry_ExecuteWithContext_AsyncCallback(t *testing.T) {
 	cb := func(_ context.Context, _ *ToolResult) { called = true }
 
 	result := r.ExecuteWithContext(context.Background(), "async_tool", nil, "", "", cb)
+	if !at.executeAsyncCalled {
+		t.Error("expected ExecuteAsync to have been called")
+	}
 	if at.cb == nil {
-		t.Error("expected SetCallback to have been called")
+		t.Error("expected callback to have been captured")
 	}
 	if !result.Async {
 		t.Error("expected async result")

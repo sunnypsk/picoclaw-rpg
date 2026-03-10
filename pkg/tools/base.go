@@ -17,6 +17,32 @@ type ContextualTool interface {
 	SetContext(channel, chatID string)
 }
 
+type toolCtxKey struct{ name string }
+
+var (
+	ctxKeyChannel = &toolCtxKey{"channel"}
+	ctxKeyChatID  = &toolCtxKey{"chatID"}
+)
+
+// WithToolContext returns a child context carrying channel and chatID.
+func WithToolContext(ctx context.Context, channel, chatID string) context.Context {
+	ctx = context.WithValue(ctx, ctxKeyChannel, channel)
+	ctx = context.WithValue(ctx, ctxKeyChatID, chatID)
+	return ctx
+}
+
+// ToolChannel extracts the channel from ctx, or "" if unset.
+func ToolChannel(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyChannel).(string)
+	return v
+}
+
+// ToolChatID extracts the chatID from ctx, or "" if unset.
+func ToolChatID(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyChatID).(string)
+	return v
+}
+
 // AsyncCallback is a function type that async tools use to notify completion.
 // When an async tool finishes its work, it calls this callback with the result.
 //
@@ -67,6 +93,13 @@ type AsyncTool interface {
 	// SetCallback registers a callback function to be invoked when the async operation completes.
 	// The callback will be called from a goroutine and should handle thread-safety if needed.
 	SetCallback(cb AsyncCallback)
+}
+
+// AsyncExecutor is a safer async interface that receives the completion callback
+// per invocation instead of storing it on the tool instance.
+type AsyncExecutor interface {
+	Tool
+	ExecuteAsync(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult
 }
 
 func ToolToSchema(tool Tool) map[string]any {

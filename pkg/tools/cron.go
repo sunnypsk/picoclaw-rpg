@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 
@@ -38,9 +37,6 @@ type CronTool struct {
 	executor    JobExecutor
 	msgBus      *bus.MessageBus
 	execTool    *ExecTool
-	channel     string
-	chatID      string
-	mu          sync.RWMutex
 }
 
 // NewCronTool creates a new CronTool
@@ -124,14 +120,6 @@ func (t *CronTool) Parameters() map[string]any {
 	}
 }
 
-// SetContext sets the current session context for job creation
-func (t *CronTool) SetContext(channel, chatID string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.channel = channel
-	t.chatID = chatID
-}
-
 // Execute runs the tool with the given arguments
 func (t *CronTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	action, ok := args["action"].(string)
@@ -141,11 +129,11 @@ func (t *CronTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 
 	switch action {
 	case "add":
-		return t.addJob(args)
+		return t.addJob(ctx, args)
 	case "list":
 		return t.listJobs()
 	case "remove":
-		return t.removeJob(args)
+		return t.removeJob(ctx, args)
 	case "enable":
 		return t.enableJob(args, true)
 	case "disable":
@@ -155,11 +143,9 @@ func (t *CronTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	}
 }
 
-func (t *CronTool) addJob(args map[string]any) *ToolResult {
-	t.mu.RLock()
-	channel := t.channel
-	chatID := t.chatID
-	t.mu.RUnlock()
+func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult {
+	channel := ToolChannel(ctx)
+	chatID := ToolChatID(ctx)
 
 	if channel == "" || chatID == "" {
 		return ErrorResult("no session context (channel/chat_id not set). Use this tool in an active conversation.")
@@ -247,7 +233,7 @@ func (t *CronTool) listJobs() *ToolResult {
 	return SilentResult(result.String())
 }
 
-func (t *CronTool) removeJob(args map[string]any) *ToolResult {
+func (t *CronTool) removeJob(ctx context.Context, args map[string]any) *ToolResult {
 	jobID := strings.TrimSpace(stringArg(args, "job_id"))
 	if jobID != "" {
 		if t.cronService.RemoveJob(jobID) {
@@ -256,7 +242,7 @@ func (t *CronTool) removeJob(args map[string]any) *ToolResult {
 		return ErrorResult(fmt.Sprintf("Job %s not found", jobID))
 	}
 
-	jobs := t.listScopedJobs()
+	jobs := t.listScopedJobs(ctx)
 	if len(jobs) == 0 {
 		return ErrorResult("No scheduled jobs found")
 	}
@@ -466,13 +452,10 @@ func resolveNaturalMessage(request, fallback string) string {
 	return message
 }
 
-func (t *CronTool) listScopedJobs() []cron.CronJob {
+func (t *CronTool) listScopedJobs(ctx context.Context) []cron.CronJob {
 	jobs := t.cronService.ListJobs(true)
-
-	t.mu.RLock()
-	channel := t.channel
-	chatID := t.chatID
-	t.mu.RUnlock()
+	channel := ToolChannel(ctx)
+	chatID := ToolChatID(ctx)
 
 	if channel == "" || chatID == "" {
 		return jobs

@@ -11,9 +11,9 @@ import (
 
 func TestCronTool_AddJob_WithNaturalRequest(t *testing.T) {
 	tool, service := newTestCronTool(t)
-	tool.SetContext("telegram", "chat-1")
 
-	result := tool.Execute(context.Background(), map[string]any{
+	ctx := WithToolContext(context.Background(), "telegram", "chat-1")
+	result := tool.Execute(ctx, map[string]any{
 		"action":          "add",
 		"natural_request": "remind me in 10 minutes to stretch",
 	})
@@ -38,9 +38,9 @@ func TestCronTool_AddJob_WithNaturalRequest(t *testing.T) {
 
 func TestCronTool_AddJob_DerivesMessageFromNaturalRequestWithExplicitSchedule(t *testing.T) {
 	tool, service := newTestCronTool(t)
-	tool.SetContext("telegram", "chat-1")
 
-	result := tool.Execute(context.Background(), map[string]any{
+	ctx := WithToolContext(context.Background(), "telegram", "chat-1")
+	result := tool.Execute(ctx, map[string]any{
 		"action":          "add",
 		"at_seconds":      600,
 		"natural_request": "remind me to stretch",
@@ -66,9 +66,9 @@ func TestCronTool_AddJob_DerivesMessageFromNaturalRequestWithExplicitSchedule(t 
 
 func TestCronTool_AddJob_IgnoresZeroValuedOptionalScheduleArgs(t *testing.T) {
 	tool, service := newTestCronTool(t)
-	tool.SetContext("telegram", "chat-1")
 
-	result := tool.Execute(context.Background(), map[string]any{
+	ctx := WithToolContext(context.Background(), "telegram", "chat-1")
+	result := tool.Execute(ctx, map[string]any{
 		"action":        "add",
 		"message":       "stretch",
 		"at_seconds":    0,
@@ -95,9 +95,9 @@ func TestCronTool_AddJob_IgnoresZeroValuedOptionalScheduleArgs(t *testing.T) {
 
 func TestCronTool_AddJob_WithAmbiguousNaturalRequest(t *testing.T) {
 	tool, _ := newTestCronTool(t)
-	tool.SetContext("telegram", "chat-1")
 
-	result := tool.Execute(context.Background(), map[string]any{
+	ctx := WithToolContext(context.Background(), "telegram", "chat-1")
+	result := tool.Execute(ctx, map[string]any{
 		"action":          "add",
 		"natural_request": "remind me later to stretch",
 	})
@@ -112,12 +112,12 @@ func TestCronTool_AddJob_WithAmbiguousNaturalRequest(t *testing.T) {
 
 func TestCronTool_RemoveJob_ByQuerySingleMatch(t *testing.T) {
 	tool, service := newTestCronTool(t)
-	tool.SetContext("cli", "direct")
 
 	addEveryJob(t, service, "pay rent", "cli", "direct")
 	addEveryJob(t, service, "water plants", "cli", "direct")
 
-	result := tool.Execute(context.Background(), map[string]any{
+	ctx := WithToolContext(context.Background(), "cli", "direct")
+	result := tool.Execute(ctx, map[string]any{
 		"action": "remove",
 		"query":  "pay rent",
 	})
@@ -137,12 +137,12 @@ func TestCronTool_RemoveJob_ByQuerySingleMatch(t *testing.T) {
 
 func TestCronTool_RemoveJob_NaturalRequestUsesContextScope(t *testing.T) {
 	tool, service := newTestCronTool(t)
-	tool.SetContext("telegram", "chat-1")
 
 	addEveryJob(t, service, "buy milk", "telegram", "chat-1")
 	addEveryJob(t, service, "buy milk", "telegram", "chat-2")
 
-	result := tool.Execute(context.Background(), map[string]any{
+	ctx := WithToolContext(context.Background(), "telegram", "chat-1")
+	result := tool.Execute(ctx, map[string]any{
 		"action":          "remove",
 		"natural_request": "cancel that reminder",
 	})
@@ -162,12 +162,12 @@ func TestCronTool_RemoveJob_NaturalRequestUsesContextScope(t *testing.T) {
 
 func TestCronTool_RemoveJob_MultipleMatchesNeedsDisambiguation(t *testing.T) {
 	tool, service := newTestCronTool(t)
-	tool.SetContext("cli", "direct")
 
 	addEveryJob(t, service, "pay rent", "cli", "direct")
 	addEveryJob(t, service, "pay electric bill", "cli", "direct")
 
-	result := tool.Execute(context.Background(), map[string]any{
+	ctx := WithToolContext(context.Background(), "cli", "direct")
+	result := tool.Execute(ctx, map[string]any{
 		"action": "remove",
 		"query":  "pay",
 	})
