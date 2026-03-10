@@ -338,6 +338,73 @@ func (m *simpleMockProvider) GetDefaultModel() string {
 	return "mock-model"
 }
 
+type captureOptsProvider struct {
+	response string
+	lastOpts map[string]any
+}
+
+func (m *captureOptsProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	cloned := make(map[string]any, len(opts))
+	for key, value := range opts {
+		cloned[key] = value
+	}
+	m.lastOpts = cloned
+	return &providers.LLMResponse{
+		Content:   m.response,
+		ToolCalls: []providers.ToolCall{},
+	}, nil
+}
+
+func (m *captureOptsProvider) GetDefaultModel() string {
+	return "mock-model"
+}
+
+func TestSummarizeBatch_UsesConfiguredMaxTokens(t *testing.T) {
+	tests := []struct {
+		name          string
+		maxTokens     int
+		expectedLimit int
+	}{
+		{name: "configured max tokens", maxTokens: 4096, expectedLimit: 4096},
+		{name: "fallback default", maxTokens: 0, expectedLimit: 1024},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := &captureOptsProvider{response: "summary"}
+			agent := &AgentInstance{
+				ID:        "test-agent",
+				Model:     "mock-model",
+				MaxTokens: tt.maxTokens,
+				Provider:  provider,
+			}
+
+			al := &AgentLoop{}
+			_, err := al.summarizeBatch(context.Background(), agent, []providers.Message{{
+				Role:    "user",
+				Content: "hello world",
+			}}, "")
+			if err != nil {
+				t.Fatalf("summarizeBatch returned error: %v", err)
+			}
+
+			got, ok := provider.lastOpts["max_tokens"].(int)
+			if !ok {
+				t.Fatalf("expected int max_tokens option, got %#v", provider.lastOpts["max_tokens"])
+			}
+			if got != tt.expectedLimit {
+				t.Fatalf("max_tokens = %d, want %d", got, tt.expectedLimit)
+			}
+		})
+	}
+}
+
 // mockCustomTool is a simple mock tool for registration testing
 type mockCustomTool struct{}
 

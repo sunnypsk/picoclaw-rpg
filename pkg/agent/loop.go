@@ -1391,7 +1391,7 @@ func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string) {
 			nil,
 			agent.Model,
 			map[string]any{
-				"max_tokens":       1024,
+				"max_tokens":       summaryMaxTokens(agent),
 				"temperature":      0.3,
 				"prompt_cache_key": agent.ID,
 			},
@@ -1444,7 +1444,7 @@ func (al *AgentLoop) summarizeBatch(
 		nil,
 		agent.Model,
 		map[string]any{
-			"max_tokens":       1024,
+			"max_tokens":       summaryMaxTokens(agent),
 			"temperature":      0.3,
 			"prompt_cache_key": agent.ID,
 		},
@@ -1453,6 +1453,13 @@ func (al *AgentLoop) summarizeBatch(
 		return "", err
 	}
 	return response.Content, nil
+}
+
+func summaryMaxTokens(agent *AgentInstance) int {
+	if agent != nil && agent.MaxTokens > 0 {
+		return agent.MaxTokens
+	}
+	return 1024
 }
 
 // estimateTokens estimates the number of tokens in a message list.
