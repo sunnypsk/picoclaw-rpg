@@ -10,11 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 )
+
+const MaxReadFileSize = 128 * 1024 // 128 KiB limit to avoid context overflow
 
 // validatePath ensures the given path is within the workspace if restrict is true.
 func validatePath(path, workspace string, restrict bool) (string, error) {
@@ -104,7 +107,8 @@ func (t *ReadFileTool) Name() string {
 }
 
 func (t *ReadFileTool) Description() string {
-	return "Read the contents of a file"
+	return "Read the contents of a file. Supports optional `offset` and `length` pagination " +
+		"for large files. When content is truncated, the response includes the next offset to continue."
 }
 
 func (t *ReadFileTool) Parameters() map[string]any {
@@ -113,7 +117,17 @@ func (t *ReadFileTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"path": map[string]any{
 				"type":        "string",
-				"description": "Path to the file to read",
+				"description": "Path to the file to read.",
+			},
+			"offset": map[string]any{
+				"type":        "integer",
+				"description": "Byte offset to start reading from (default: 0).",
+				"default":     0,
+			},
+			"length": map[string]any{
+				"type":        "integer",
+				"description": fmt.Sprintf("Maximum number of bytes to read (default/max: %d).", MaxReadFileSize),
+				"default":     MaxReadFileSize,
 			},
 		},
 		"required": []string{"path"},
@@ -126,30 +140,145 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("path is required")
 	}
 
+	offset, offsetProvided, err := getInt64Arg(args, "offset", 0)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	if offset < 0 {
+		return ErrorResult("offset must be >= 0")
+	}
+
+	length, lengthProvided, err := getInt64Arg(args, "length", MaxReadFileSize)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	if length <= 0 {
+		return ErrorResult("length must be > 0")
+	}
+	if length > MaxReadFileSize {
+		length = MaxReadFileSize
+	}
+
 	file, err := t.fs.Open(path)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
 	defer file.Close()
 
-	header := make([]byte, 512)
-	n, err := file.Read(header)
+	totalSize := int64(-1)
+	if info, statErr := file.Stat(); statErr == nil {
+		totalSize = info.Size()
+	}
+	if totalSize >= 0 && offset >= totalSize {
+		return NewToolResult("[END OF FILE ? no content at this offset]")
+	}
+
+	sniff := make([]byte, 512)
+	sniffN, err := file.Read(sniff)
 	if err != nil && err != io.EOF {
 		return ErrorResult(fmt.Sprintf("failed to read file header: %v", err))
 	}
-	header = header[:n]
+	sniff = sniff[:sniffN]
 
-	if isBinaryFile(header) {
+	if isBinaryFile(sniff) {
 		return ErrorResult(fmt.Sprintf("cannot read file %q: appears to be a binary file (e.g., PDF, image, executable)", filepath.Base(path)))
 	}
 
-	rest, err := io.ReadAll(file)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to read file content: %v", err))
+	prefix := sniff
+	if offset > 0 {
+		if offset >= int64(len(sniff)) {
+			prefix = nil
+		} else {
+			prefix = append([]byte(nil), sniff[offset:]...)
+		}
+	}
+	if int64(len(prefix)) > length {
+		prefix = prefix[:length]
 	}
 
-	fullContent := append(header, rest...)
-	return NewToolResult(string(fullContent))
+	if offset > int64(len(sniff)) {
+		if _, err := io.CopyN(io.Discard, file, offset-int64(len(sniff))); err != nil {
+			if err == io.EOF {
+				return NewToolResult("[END OF FILE ? no content at this offset]")
+			}
+			return ErrorResult(fmt.Sprintf("failed to advance to offset %d: %v", offset, err))
+		}
+	}
+
+	remaining := length - int64(len(prefix))
+	data := make([]byte, 0, len(prefix)+int(maxInt64(remaining, 0)))
+	data = append(data, prefix...)
+	if remaining > 0 {
+		rest, err := io.ReadAll(io.LimitReader(file, remaining))
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("failed to read file content: %v", err))
+		}
+		data = append(data, rest...)
+	}
+
+	if len(data) == 0 {
+		if offset > 0 || offsetProvided || lengthProvided {
+			return NewToolResult("[END OF FILE ? no content at this offset]")
+		}
+		return NewToolResult("")
+	}
+
+	readEnd := offset + int64(len(data))
+	hasMore := false
+	if totalSize >= 0 {
+		hasMore = readEnd < totalSize
+	} else {
+		hasMore = int64(len(data)) == length
+	}
+
+	explicitPagination := offsetProvided || lengthProvided
+	if !explicitPagination && !hasMore {
+		return NewToolResult(string(data))
+	}
+
+	readRange := fmt.Sprintf("bytes %d-%d", offset, readEnd-1)
+	header := fmt.Sprintf("[file: %s | total: %d bytes | read: %s]", path, totalSize, readRange)
+	if totalSize < 0 {
+		header = fmt.Sprintf("[file: %s | total: unknown | read: %s]", path, readRange)
+	}
+	if hasMore {
+		header += fmt.Sprintf("\n[TRUNCATED ? file has more content. Call read_file again with offset=%d to continue.]", readEnd)
+	} else {
+		header += "\n[END OF FILE ? no further content.]"
+	}
+
+	return NewToolResult(header + "\n\n" + string(data))
+}
+
+func getInt64Arg(args map[string]any, key string, defaultVal int64) (int64, bool, error) {
+	raw, exists := args[key]
+	if !exists {
+		return defaultVal, false, nil
+	}
+
+	switch value := raw.(type) {
+	case float64:
+		return int64(value), true, nil
+	case int:
+		return int64(value), true, nil
+	case int64:
+		return value, true, nil
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil {
+			return 0, true, fmt.Errorf("invalid integer format for %s: %w", key, err)
+		}
+		return parsed, true, nil
+	default:
+		return 0, true, fmt.Errorf("unsupported type %T for %s parameter", raw, key)
+	}
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 type WriteFileTool struct {

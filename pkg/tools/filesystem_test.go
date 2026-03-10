@@ -35,6 +35,9 @@ func TestFilesystemTool_ReadFile_Success(t *testing.T) {
 	if !strings.Contains(result.ForLLM, "test content") {
 		t.Errorf("Expected ForLLM to contain 'test content', got: %s", result.ForLLM)
 	}
+	if strings.Contains(result.ForLLM, "[TRUNCATED") || strings.Contains(result.ForLLM, "[END OF FILE") {
+		t.Errorf("Expected small file read to keep plain output, got: %s", result.ForLLM)
+	}
 
 	// ReadFile returns NewToolResult which only sets ForLLM, not ForUser
 	// This is the expected behavior - file content goes to LLM, not directly to user
@@ -606,4 +609,94 @@ func TestFilesystemTool_ReadFile_BlocksBinary(t *testing.T) {
 	if !strings.Contains(result.ForLLM, expectedMsg) {
 		t.Errorf("expected error %q, got: %s", expectedMsg, result.ForLLM)
 	}
+}
+
+func TestReadFileTool_DefaultReadTruncationIsExplicit(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "large.txt")
+	content := strings.Repeat("a", MaxReadFileSize+20)
+	if err := os.WriteFile(testFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileTool(tmpDir, false)
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "[TRUNCATED") {
+		t.Fatalf("expected explicit truncation header, got: %s", result.ForLLM[:minInt(len(result.ForLLM), 200)])
+	}
+	if !strings.Contains(result.ForLLM, "offset=131072") {
+		t.Fatalf("expected continuation offset, got: %s", result.ForLLM[:minInt(len(result.ForLLM), 200)])
+	}
+}
+
+func TestReadFileTool_ChunkedReading(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "pagination_test.txt")
+	fullContent := "abcdefghijklmnopqrstuvwxyz"
+	if err := os.WriteFile(testFile, []byte(fullContent), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileTool(tmpDir, false)
+	ctx := context.Background()
+
+	result1 := tool.Execute(ctx, map[string]any{"path": testFile, "offset": 0, "length": 10})
+	if result1.IsError {
+		t.Fatalf("chunk 1 failed: %s", result1.ForLLM)
+	}
+	if !strings.Contains(result1.ForLLM, "abcdefghij") {
+		t.Errorf("chunk 1 should contain first 10 bytes, got: %s", result1.ForLLM)
+	}
+	if !strings.Contains(result1.ForLLM, "[TRUNCATED") || !strings.Contains(result1.ForLLM, "offset=10") {
+		t.Errorf("chunk 1 should expose continuation, got: %s", result1.ForLLM)
+	}
+
+	result2 := tool.Execute(ctx, map[string]any{"path": testFile, "offset": 10, "length": 10})
+	if result2.IsError {
+		t.Fatalf("chunk 2 failed: %s", result2.ForLLM)
+	}
+	if !strings.Contains(result2.ForLLM, "klmnopqrst") {
+		t.Errorf("chunk 2 should contain next 10 bytes, got: %s", result2.ForLLM)
+	}
+	if !strings.Contains(result2.ForLLM, "offset=20") {
+		t.Errorf("chunk 2 should expose continuation, got: %s", result2.ForLLM)
+	}
+
+	result3 := tool.Execute(ctx, map[string]any{"path": testFile, "offset": 20, "length": 10})
+	if result3.IsError {
+		t.Fatalf("chunk 3 failed: %s", result3.ForLLM)
+	}
+	if !strings.Contains(result3.ForLLM, "uvwxyz") {
+		t.Errorf("chunk 3 should contain final bytes, got: %s", result3.ForLLM)
+	}
+	if !strings.Contains(result3.ForLLM, "[END OF FILE") || strings.Contains(result3.ForLLM, "[TRUNCATED") {
+		t.Errorf("chunk 3 should end cleanly, got: %s", result3.ForLLM)
+	}
+}
+
+func TestReadFileTool_OffsetBeyondEOF(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "short.txt")
+	if err := os.WriteFile(testFile, []byte("12345"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	tool := NewReadFileTool(tmpDir, false)
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile, "offset": int64(100)})
+	if result.IsError {
+		t.Fatalf("expected EOF marker, got error: %s", result.ForLLM)
+	}
+	if result.ForLLM != "[END OF FILE ? no content at this offset]" {
+		t.Fatalf("unexpected EOF message: %q", result.ForLLM)
+	}
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
