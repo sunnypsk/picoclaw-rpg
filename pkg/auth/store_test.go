@@ -28,6 +28,13 @@ func TestAuthCredentialIsExpired(t *testing.T) {
 	}
 }
 
+func setTestPicoclawHome(t *testing.T) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	t.Setenv("PICOCLAW_HOME", tmpDir)
+	return tmpDir
+}
+
 func TestAuthCredentialNeedsRefresh(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -51,10 +58,7 @@ func TestAuthCredentialNeedsRefresh(t *testing.T) {
 }
 
 func TestStoreRoundtrip(t *testing.T) {
-	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	t.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	setTestPicoclawHome(t)
 
 	cred := &AuthCredential{
 		AccessToken:  "test-access-token",
@@ -88,10 +92,7 @@ func TestStoreRoundtrip(t *testing.T) {
 }
 
 func TestStoreFilePermissions(t *testing.T) {
-	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	t.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	tmpDir := setTestPicoclawHome(t)
 
 	cred := &AuthCredential{
 		AccessToken: "secret-token",
@@ -102,7 +103,7 @@ func TestStoreFilePermissions(t *testing.T) {
 		t.Fatalf("SetCredential() error: %v", err)
 	}
 
-	path := filepath.Join(tmpDir, ".picoclaw", "auth.json")
+	path := filepath.Join(tmpDir, "auth.json")
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("Stat() error: %v", err)
@@ -114,10 +115,7 @@ func TestStoreFilePermissions(t *testing.T) {
 }
 
 func TestStoreMultiProvider(t *testing.T) {
-	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	t.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	setTestPicoclawHome(t)
 
 	openaiCred := &AuthCredential{AccessToken: "openai-token", Provider: "openai", AuthMethod: "oauth"}
 	anthropicCred := &AuthCredential{AccessToken: "anthropic-token", Provider: "anthropic", AuthMethod: "token"}
@@ -147,10 +145,7 @@ func TestStoreMultiProvider(t *testing.T) {
 }
 
 func TestDeleteCredential(t *testing.T) {
-	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	t.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	setTestPicoclawHome(t)
 
 	cred := &AuthCredential{AccessToken: "to-delete", Provider: "openai", AuthMethod: "oauth"}
 	if err := SetCredential("openai", cred); err != nil {
@@ -171,10 +166,7 @@ func TestDeleteCredential(t *testing.T) {
 }
 
 func TestLoadStoreEmpty(t *testing.T) {
-	tmpDir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	t.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	setTestPicoclawHome(t)
 
 	store, err := LoadStore()
 	if err != nil {
@@ -185,5 +177,14 @@ func TestLoadStoreEmpty(t *testing.T) {
 	}
 	if len(store.Credentials) != 0 {
 		t.Errorf("expected empty credentials, got %d", len(store.Credentials))
+	}
+}
+
+func TestAuthFilePath_UsesPICOCLAW_HOME(t *testing.T) {
+	tmpDir := setTestPicoclawHome(t)
+	got := authFilePath()
+	want := filepath.Join(tmpDir, "auth.json")
+	if got != want {
+		t.Fatalf("authFilePath() = %q, want %q", got, want)
 	}
 }

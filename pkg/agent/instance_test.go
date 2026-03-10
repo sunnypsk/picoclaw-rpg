@@ -180,8 +180,8 @@ func TestNewAgentInstance_SeedsBootstrapFilesFromDefaultWorkspace(t *testing.T) 
 	}
 
 	sourceSkillFiles := map[string]string{
-		"skills/weather/SKILL.md":          "# source weather\n",
-		"skills/weather/scripts/run.sh":    "echo source\n",
+		"skills/weather/SKILL.md":           "# source weather\n",
+		"skills/weather/scripts/run.sh":     "echo source\n",
 		"skills/weather/references/doc.txt": "hello\n",
 	}
 	for rel, content := range sourceSkillFiles {
@@ -414,5 +414,15 @@ func writeWorkspaceFile(t *testing.T, workspace, relPath, content string) {
 	}
 	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", relPath, err)
+	}
+}
+
+func TestResolveAgentWorkspace_UsesDefaultWorkspaceRootForNamedAgents(t *testing.T) {
+	defaults := &config.AgentDefaults{Workspace: filepath.Join("/custom", "picoclaw", "workspace")}
+	agentCfg := &config.AgentConfig{ID: "helper-bot"}
+	got := resolveAgentWorkspace(agentCfg, defaults)
+	want := filepath.Join("/custom", "picoclaw", "workspace-helper-bot")
+	if got != want {
+		t.Fatalf("resolveAgentWorkspace() = %q, want %q", got, want)
 	}
 }

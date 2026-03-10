@@ -11,10 +11,20 @@ import (
 )
 
 func TestGetConfigPath(t *testing.T) {
+	t.Setenv("PICOCLAW_HOME", "/tmp/picoclaw-home")
+
+	got := GetConfigPath()
+	want := filepath.Join("/tmp/picoclaw-home", "config.json")
+
+	assert.Equal(t, want, got)
+}
+
+func TestGetConfigPath_WithPICOCLAW_HOME(t *testing.T) {
+	t.Setenv("PICOCLAW_HOME", "/custom/picoclaw")
 	t.Setenv("HOME", "/tmp/home")
 
 	got := GetConfigPath()
-	want := filepath.Join("/tmp/home", ".picoclaw", "config.json")
+	want := filepath.Join("/custom/picoclaw", "config.json")
 
 	assert.Equal(t, want, got)
 }
@@ -98,6 +108,7 @@ func TestGetVersion(t *testing.T) {
 
 func TestGetConfigPath_WithEnv(t *testing.T) {
 	t.Setenv("PICOCLAW_CONFIG", "/tmp/custom/config.json")
+	t.Setenv("PICOCLAW_HOME", "/tmp/picoclaw-home")
 	t.Setenv("HOME", "/tmp/home") // Also set home to ensure env is preferred
 
 	got := GetConfigPath()
