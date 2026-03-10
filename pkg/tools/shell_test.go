@@ -423,3 +423,35 @@ func TestShellTool_CustomAllowPatterns(t *testing.T) {
 		t.Errorf("'git push upstream main' should still be blocked by deny pattern")
 	}
 }
+
+func TestNewExecToolWithConfig_UsesConfiguredTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *config.Config
+		want time.Duration
+	}{
+		{name: "nil config uses default", cfg: nil, want: 60 * time.Second},
+		{
+			name: "unset timeout uses default",
+			cfg:  &config.Config{Tools: config.ToolsConfig{Exec: config.ExecConfig{}}},
+			want: 60 * time.Second,
+		},
+		{
+			name: "configured timeout is applied",
+			cfg:  &config.Config{Tools: config.ToolsConfig{Exec: config.ExecConfig{TimeoutSeconds: 15}}},
+			want: 15 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tool, err := NewExecToolWithConfig("", false, tt.cfg)
+			if err != nil {
+				t.Fatalf("unable to configure exec tool: %s", err)
+			}
+			if tool.timeout != tt.want {
+				t.Fatalf("timeout = %v, want %v", tool.timeout, tt.want)
+			}
+		})
+	}
+}

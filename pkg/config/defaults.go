@@ -355,6 +355,7 @@ func DefaultConfig() *Config {
 			},
 			Exec: ExecConfig{
 				EnableDenyPatterns: true,
+				TimeoutSeconds:     60,
 			},
 			Skills: SkillsToolsConfig{
 				Registries: SkillsRegistriesConfig{
