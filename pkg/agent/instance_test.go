@@ -96,6 +96,65 @@ func TestNewAgentInstance_DefaultsTemperatureWhenUnset(t *testing.T) {
 	}
 }
 
+func TestNewAgentInstance_UsesConfiguredSummarizeThresholds(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-instance-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:                 tmpDir,
+				Model:                     "test-model",
+				MaxTokens:                 1234,
+				MaxToolIterations:         5,
+				SummarizeMessageThreshold: 9,
+				SummarizeTokenPercent:     66,
+			},
+		},
+	}
+
+	provider := &mockProvider{}
+	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, provider)
+
+	if agent.SummarizeMessageThreshold != 9 {
+		t.Fatalf("SummarizeMessageThreshold = %d, want %d", agent.SummarizeMessageThreshold, 9)
+	}
+	if agent.SummarizeTokenPercent != 66 {
+		t.Fatalf("SummarizeTokenPercent = %d, want %d", agent.SummarizeTokenPercent, 66)
+	}
+}
+
+func TestNewAgentInstance_DefaultsSummarizeThresholdsWhenUnset(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-instance-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         1234,
+				MaxToolIterations: 5,
+			},
+		},
+	}
+
+	provider := &mockProvider{}
+	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, provider)
+
+	if agent.SummarizeMessageThreshold != 20 {
+		t.Fatalf("SummarizeMessageThreshold = %d, want %d", agent.SummarizeMessageThreshold, 20)
+	}
+	if agent.SummarizeTokenPercent != 75 {
+		t.Fatalf("SummarizeTokenPercent = %d, want %d", agent.SummarizeTokenPercent, 75)
+	}
+}
 func TestNewAgentInstance_ResolveCandidatesFromModelListAlias(t *testing.T) {
 	tests := []struct {
 		name         string

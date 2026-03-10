@@ -26,14 +26,16 @@ func DefaultConfig() *Config {
 	return &Config{
 		Agents: AgentsConfig{
 			Defaults: AgentDefaults{
-				Workspace:           workspacePath,
-				RestrictToWorkspace: true,
-				PersonaPreset:       "momonga",
-				Provider:            "",
-				Model:               "",
-				MaxTokens:           32768,
-				Temperature:         nil, // nil means use provider default
-				MaxToolIterations:   50,
+				Workspace:                 workspacePath,
+				RestrictToWorkspace:       true,
+				PersonaPreset:             "momonga",
+				Provider:                  "",
+				Model:                     "",
+				MaxTokens:                 32768,
+				Temperature:               nil, // nil means use provider default
+				MaxToolIterations:         50,
+				SummarizeMessageThreshold: 20,
+				SummarizeTokenPercent:     75,
 				MemorySearch: MemorySearchConfig{
 					AutoRecall: MemoryAutoRecallConfig{
 						Enabled:  true,

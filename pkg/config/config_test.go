@@ -511,6 +511,16 @@ func TestDefaultConfig_DMScope(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_SummarizeThresholds(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if cfg.Agents.Defaults.SummarizeMessageThreshold != 20 {
+		t.Fatalf("Agents.Defaults.SummarizeMessageThreshold = %d, want %d", cfg.Agents.Defaults.SummarizeMessageThreshold, 20)
+	}
+	if cfg.Agents.Defaults.SummarizeTokenPercent != 75 {
+		t.Fatalf("Agents.Defaults.SummarizeTokenPercent = %d, want %d", cfg.Agents.Defaults.SummarizeTokenPercent, 75)
+	}
+}
 func TestDefaultConfig_WorkspacePath_Default(t *testing.T) {
 	// Unset to ensure we test the default
 	t.Setenv("PICOCLAW_HOME", "")

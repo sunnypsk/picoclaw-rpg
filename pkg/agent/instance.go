@@ -152,24 +152,26 @@ This file stores important information that should persist across sessions.
 // AgentInstance represents a fully configured agent with its own workspace,
 // session manager, context builder, and tool registry.
 type AgentInstance struct {
-	ID             string
-	Name           string
-	Model          string
-	Fallbacks      []string
-	Workspace      string
-	MaxIterations  int
-	MaxTokens      int
-	Temperature    float64
-	ContextWindow  int
-	Provider       providers.LLMProvider
-	Sessions       *session.SessionManager
-	StateStore     *NPCStateStore
-	ContextBuilder *ContextBuilder
-	Tools          *tools.ToolRegistry
-	MemoryIndex    *memorysearch.Index
-	Subagents      *config.SubagentsConfig
-	SkillsFilter   []string
-	Candidates     []providers.FallbackCandidate
+	ID                        string
+	Name                      string
+	Model                     string
+	Fallbacks                 []string
+	Workspace                 string
+	MaxIterations             int
+	MaxTokens                 int
+	Temperature               float64
+	ContextWindow             int
+	SummarizeMessageThreshold int
+	SummarizeTokenPercent     int
+	Provider                  providers.LLMProvider
+	Sessions                  *session.SessionManager
+	StateStore                *NPCStateStore
+	ContextBuilder            *ContextBuilder
+	Tools                     *tools.ToolRegistry
+	MemoryIndex               *memorysearch.Index
+	Subagents                 *config.SubagentsConfig
+	SkillsFilter              []string
+	Candidates                []providers.FallbackCandidate
 }
 
 // NewAgentInstance creates an agent instance from config.
@@ -240,6 +242,16 @@ func NewAgentInstance(
 		temperature = *defaults.Temperature
 	}
 
+	summarizeMessageThreshold := defaults.SummarizeMessageThreshold
+	if summarizeMessageThreshold == 0 {
+		summarizeMessageThreshold = 20
+	}
+
+	summarizeTokenPercent := defaults.SummarizeTokenPercent
+	if summarizeTokenPercent == 0 {
+		summarizeTokenPercent = 75
+	}
+
 	// Resolve fallback candidates
 	modelCfg := providers.ModelConfig{
 		Primary:   model,
@@ -288,24 +300,26 @@ func NewAgentInstance(
 	candidates := providers.ResolveCandidatesWithLookup(modelCfg, defaults.Provider, resolveFromModelList)
 
 	return &AgentInstance{
-		ID:             agentID,
-		Name:           agentName,
-		Model:          model,
-		Fallbacks:      fallbacks,
-		Workspace:      workspace,
-		MaxIterations:  maxIter,
-		MaxTokens:      maxTokens,
-		Temperature:    temperature,
-		ContextWindow:  maxTokens,
-		Provider:       provider,
-		Sessions:       sessionsManager,
-		StateStore:     NewNPCStateStore(workspace),
-		ContextBuilder: contextBuilder,
-		Tools:          toolsRegistry,
-		MemoryIndex:    memoryIndex,
-		Subagents:      subagents,
-		SkillsFilter:   skillsFilter,
-		Candidates:     candidates,
+		ID:                        agentID,
+		Name:                      agentName,
+		Model:                     model,
+		Fallbacks:                 fallbacks,
+		Workspace:                 workspace,
+		MaxIterations:             maxIter,
+		MaxTokens:                 maxTokens,
+		Temperature:               temperature,
+		ContextWindow:             maxTokens,
+		SummarizeMessageThreshold: summarizeMessageThreshold,
+		SummarizeTokenPercent:     summarizeTokenPercent,
+		Provider:                  provider,
+		Sessions:                  sessionsManager,
+		StateStore:                NewNPCStateStore(workspace),
+		ContextBuilder:            contextBuilder,
+		Tools:                     toolsRegistry,
+		MemoryIndex:               memoryIndex,
+		Subagents:                 subagents,
+		SkillsFilter:              skillsFilter,
+		Candidates:                candidates,
 	}
 }
 
