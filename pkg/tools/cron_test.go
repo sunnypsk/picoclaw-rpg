@@ -64,6 +64,35 @@ func TestCronTool_AddJob_DerivesMessageFromNaturalRequestWithExplicitSchedule(t 
 	}
 }
 
+func TestCronTool_AddJob_IgnoresZeroValuedOptionalScheduleArgs(t *testing.T) {
+	tool, service := newTestCronTool(t)
+	tool.SetContext("telegram", "chat-1")
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"action":        "add",
+		"message":       "stretch",
+		"at_seconds":    0,
+		"every_seconds": 7200,
+	})
+
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+
+	jobs := service.ListJobs(false)
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(jobs))
+	}
+
+	job := jobs[0]
+	if job.Schedule.Kind != "every" {
+		t.Fatalf("expected recurring schedule, got %s", job.Schedule.Kind)
+	}
+	if job.Schedule.EveryMS == nil || *job.Schedule.EveryMS != 7200*1000 {
+		t.Fatalf("expected every_seconds schedule to be preserved, got %+v", job.Schedule)
+	}
+}
+
 func TestCronTool_AddJob_WithAmbiguousNaturalRequest(t *testing.T) {
 	tool, _ := newTestCronTool(t)
 	tool.SetContext("telegram", "chat-1")

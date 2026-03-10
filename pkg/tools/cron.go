@@ -337,26 +337,26 @@ func intArg(args map[string]any, key string) (int64, bool) {
 }
 
 func buildScheduleFromArgs(args map[string]any) (cron.CronSchedule, bool, error) {
-	atSeconds, hasAt := intArg(args, "at_seconds")
-	everySeconds, hasEvery := intArg(args, "every_seconds")
+	atSeconds, rawHasAt := intArg(args, "at_seconds")
+	everySeconds, rawHasEvery := intArg(args, "every_seconds")
 	cronExpr := strings.TrimSpace(stringArg(args, "cron_expr"))
+	hasAt := rawHasAt && atSeconds > 0
+	hasEvery := rawHasEvery && everySeconds > 0
 	hasCron := cronExpr != ""
 
 	switch {
 	case hasAt:
-		if atSeconds <= 0 {
-			return cron.CronSchedule{}, true, fmt.Errorf("at_seconds must be greater than 0")
-		}
 		atMS := time.Now().UnixMilli() + atSeconds*1000
 		return cron.CronSchedule{Kind: "at", AtMS: &atMS}, true, nil
 	case hasEvery:
-		if everySeconds <= 0 {
-			return cron.CronSchedule{}, true, fmt.Errorf("every_seconds must be greater than 0")
-		}
 		everyMS := everySeconds * 1000
 		return cron.CronSchedule{Kind: "every", EveryMS: &everyMS}, true, nil
 	case hasCron:
 		return cron.CronSchedule{Kind: "cron", Expr: cronExpr}, true, nil
+	case rawHasAt:
+		return cron.CronSchedule{}, true, fmt.Errorf("at_seconds must be greater than 0")
+	case rawHasEvery:
+		return cron.CronSchedule{}, true, fmt.Errorf("every_seconds must be greater than 0")
 	default:
 		return cron.CronSchedule{}, false, nil
 	}
