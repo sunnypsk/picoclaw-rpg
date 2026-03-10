@@ -866,7 +866,7 @@ To isolate files by chat peer (user/group/channel), enable auto-provisioning:
 Behavior:
 
 - Unmatched peers are routed to dedicated auto-created agents.
-- Each auto-created agent gets its own workspace path: `~/.picoclaw/workspace-<agent-id>`.
+- Each auto-created agent gets its own workspace path next to the configured default workspace (for example `~/.picoclaw/workspace-<agent-id>`).
 - Explicit `bindings` still take precedence over auto-provision routing.
 - If `agents.defaults.persona_preset` is set (for example `momonga`), seeded `SOUL.md` and `IDENTITY.md` use the preset content for new auto-workspaces.
 
@@ -883,6 +883,8 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 | `edit_file`   | Edit files       | Only files within workspace            |
 | `append_file` | Append to files  | Only files within workspace            |
 | `exec`        | Execute commands | Command paths must be within workspace |
+
+`read_file` also supports optional `offset` and `length` pagination for large files and rejects binary files.
 
 ### Memory Search Tool
 
