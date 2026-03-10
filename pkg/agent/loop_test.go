@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
@@ -352,6 +354,50 @@ func (m *captureOptsProvider) GetDefaultModel() string {
 	return "mock-model"
 }
 
+type scriptedSummaryResult struct {
+	content string
+	err     error
+}
+
+type scriptedSummaryProvider struct {
+	results  []scriptedSummaryResult
+	calls    int
+	lastOpts map[string]any
+}
+
+func (m *scriptedSummaryProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	cloned := make(map[string]any, len(opts))
+	for key, value := range opts {
+		cloned[key] = value
+	}
+	m.lastOpts = cloned
+
+	m.calls++
+	resultIndex := m.calls - 1
+	if resultIndex >= len(m.results) {
+		resultIndex = len(m.results) - 1
+	}
+	result := m.results[resultIndex]
+	if result.err != nil {
+		return nil, result.err
+	}
+
+	return &providers.LLMResponse{
+		Content:   result.content,
+		ToolCalls: []providers.ToolCall{},
+	}, nil
+}
+
+func (m *scriptedSummaryProvider) GetDefaultModel() string {
+	return "mock-scripted-model"
+}
+
 func TestSummarizeBatch_UsesConfiguredMaxTokens(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -387,6 +433,154 @@ func TestSummarizeBatch_UsesConfiguredMaxTokens(t *testing.T) {
 			}
 			if got != tt.expectedLimit {
 				t.Fatalf("max_tokens = %d, want %d", got, tt.expectedLimit)
+			}
+		})
+	}
+}
+
+func TestSummarizeBatch_RetriesTransientFailures(t *testing.T) {
+	provider := &scriptedSummaryProvider{
+		results: []scriptedSummaryResult{
+			{err: errors.New("temporary provider failure")},
+			{content: "retried summary"},
+		},
+	}
+	agent := &AgentInstance{
+		ID:        "test-agent",
+		Model:     "mock-model",
+		MaxTokens: 4096,
+		Provider:  provider,
+	}
+
+	al := &AgentLoop{}
+	summary, err := al.summarizeBatch(context.Background(), agent, []providers.Message{{
+		Role:    "user",
+		Content: "hello world",
+	}}, "")
+	if err != nil {
+		t.Fatalf("summarizeBatch returned error: %v", err)
+	}
+	if summary != "retried summary" {
+		t.Fatalf("summary = %q, want %q", summary, "retried summary")
+	}
+	if provider.calls != 2 {
+		t.Fatalf("provider calls = %d, want %d", provider.calls, 2)
+	}
+	got, ok := provider.lastOpts["max_tokens"].(int)
+	if !ok {
+		t.Fatalf("expected int max_tokens option, got %#v", provider.lastOpts["max_tokens"])
+	}
+	if got != 4096 {
+		t.Fatalf("max_tokens = %d, want %d", got, 4096)
+	}
+}
+
+func TestSummarizeBatch_FallsBackAfterRetryFailures(t *testing.T) {
+	provider := &scriptedSummaryProvider{
+		results: []scriptedSummaryResult{{err: errors.New("provider unavailable")}},
+	}
+	agent := &AgentInstance{
+		ID:       "test-agent",
+		Model:    "mock-model",
+		Provider: provider,
+	}
+	batch := []providers.Message{
+		{Role: "user", Content: "hello there"},
+		{Role: "assistant", Content: "general kenobi"},
+	}
+
+	al := &AgentLoop{}
+	summary, err := al.summarizeBatch(context.Background(), agent, batch, "")
+	if err != nil {
+		t.Fatalf("summarizeBatch returned error: %v", err)
+	}
+	if provider.calls != 3 {
+		t.Fatalf("provider calls = %d, want %d", provider.calls, 3)
+	}
+	if !strings.Contains(summary, "Conversation summary:") {
+		t.Fatalf("expected fallback summary prefix, got %q", summary)
+	}
+	if !strings.Contains(summary, "user: hello there") {
+		t.Fatalf("expected user content in fallback summary, got %q", summary)
+	}
+	if !strings.Contains(summary, "assistant: general kenobi") {
+		t.Fatalf("expected assistant content in fallback summary, got %q", summary)
+	}
+}
+
+func TestSummarizeBatch_FallbackIsRuneSafe(t *testing.T) {
+	provider := &scriptedSummaryProvider{
+		results: []scriptedSummaryResult{{content: ""}},
+	}
+	agent := &AgentInstance{
+		ID:       "test-agent",
+		Model:    "mock-model",
+		Provider: provider,
+	}
+	content := strings.Repeat("界", 205)
+
+	al := &AgentLoop{}
+	summary, err := al.summarizeBatch(context.Background(), agent, []providers.Message{{
+		Role:    "user",
+		Content: content,
+	}}, "")
+	if err != nil {
+		t.Fatalf("summarizeBatch returned error: %v", err)
+	}
+	if !utf8.ValidString(summary) {
+		t.Fatalf("fallback summary is not valid UTF-8: %q", summary)
+	}
+	if !strings.Contains(summary, strings.Repeat("界", 200)+"...") {
+		t.Fatalf("expected rune-safe truncated content in fallback summary, got %q", summary)
+	}
+}
+
+func TestFindNearestUserMessage(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []providers.Message
+		mid      int
+		want     int
+	}{
+		{
+			name: "prefers previous user message",
+			messages: []providers.Message{
+				{Role: "assistant"},
+				{Role: "user"},
+				{Role: "assistant"},
+				{Role: "assistant"},
+				{Role: "user"},
+			},
+			mid:  3,
+			want: 1,
+		},
+		{
+			name: "uses next user when needed",
+			messages: []providers.Message{
+				{Role: "assistant"},
+				{Role: "assistant"},
+				{Role: "user"},
+			},
+			mid:  1,
+			want: 2,
+		},
+		{
+			name: "returns original index without user message",
+			messages: []providers.Message{
+				{Role: "assistant"},
+				{Role: "assistant"},
+			},
+			mid:  1,
+			want: 1,
+		},
+	}
+
+	al := &AgentLoop{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := al.findNearestUserMessage(tt.messages, tt.mid)
+			if got != tt.want {
+				t.Fatalf("findNearestUserMessage() = %d, want %d", got, tt.want)
 			}
 		})
 	}

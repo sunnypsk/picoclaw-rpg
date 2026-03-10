@@ -1149,6 +1149,7 @@ func (al *AgentLoop) runLLMIteration(
 
 	return finalContent, iteration, nil
 }
+
 // maybeSummarize triggers summarization if the session history exceeds thresholds.
 func (al *AgentLoop) maybeSummarize(agent *AgentInstance, sessionKey, channel, chatID string) {
 	newHistory := agent.Sessions.GetHistory(sessionKey)
@@ -1312,6 +1313,8 @@ func formatToolsForLog(toolDefs []providers.ToolDefinition) string {
 
 // summarizeSession summarizes the conversation history for a session.
 func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string) {
+	const maxSummarizationMessages = 10
+
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -1348,8 +1351,8 @@ func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string) {
 
 	// Multi-Part Summarization
 	var finalSummary string
-	if len(validMessages) > 10 {
-		mid := len(validMessages) / 2
+	if len(validMessages) > maxSummarizationMessages {
+		mid := al.findNearestUserMessage(validMessages, len(validMessages)/2)
 		part1 := validMessages[:mid]
 		part2 := validMessages[mid:]
 
@@ -1361,21 +1364,11 @@ func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string) {
 			s1,
 			s2,
 		)
-		resp, err := agent.Provider.Chat(
-			ctx,
-			[]providers.Message{{Role: "user", Content: mergePrompt}},
-			nil,
-			agent.Model,
-			map[string]any{
-				"max_tokens":       summaryMaxTokens(agent),
-				"temperature":      0.3,
-				"prompt_cache_key": agent.ID,
-			},
-		)
-		if err == nil {
-			finalSummary = resp.Content
+		mergedSummary, err := al.retrySummaryCall(ctx, agent, mergePrompt, 3)
+		if err == nil && mergedSummary != "" {
+			finalSummary = mergedSummary
 		} else {
-			finalSummary = s1 + " " + s2
+			finalSummary = strings.TrimSpace(s1 + " " + s2)
 		}
 	} else {
 		finalSummary, _ = al.summarizeBatch(ctx, agent, validMessages, summary)
@@ -1390,6 +1383,105 @@ func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string) {
 		agent.Sessions.TruncateHistory(sessionKey, 4)
 		agent.Sessions.Save(sessionKey)
 	}
+}
+
+func (al *AgentLoop) findNearestUserMessage(messages []providers.Message, mid int) int {
+	if len(messages) == 0 {
+		return 0
+	}
+	if mid < 0 {
+		mid = 0
+	}
+	if mid >= len(messages) {
+		mid = len(messages) - 1
+	}
+
+	for i := mid; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			return i
+		}
+	}
+
+	for i := mid + 1; i < len(messages); i++ {
+		if messages[i].Role == "user" {
+			return i
+		}
+	}
+
+	return mid
+}
+
+func (al *AgentLoop) retrySummaryCall(
+	ctx context.Context,
+	agent *AgentInstance,
+	prompt string,
+	maxRetries int,
+) (string, error) {
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		response, err := agent.Provider.Chat(
+			ctx,
+			[]providers.Message{{Role: "user", Content: prompt}},
+			nil,
+			agent.Model,
+			map[string]any{
+				"max_tokens":       summaryMaxTokens(agent),
+				"temperature":      0.3,
+				"prompt_cache_key": agent.ID,
+			},
+		)
+		if err == nil && response != nil {
+			content := strings.TrimSpace(response.Content)
+			if content != "" {
+				return content, nil
+			}
+			lastErr = errors.New("empty summary response")
+		} else if err != nil {
+			lastErr = err
+		} else {
+			lastErr = errors.New("nil summary response")
+		}
+
+		if attempt < maxRetries-1 {
+			time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+		}
+	}
+
+	if lastErr == nil {
+		lastErr = errors.New("summary call retries exhausted")
+	}
+
+	return "", lastErr
+}
+
+func buildFallbackSummary(batch []providers.Message) string {
+	const maxFallbackRunes = 200
+
+	var sb strings.Builder
+	sb.WriteString("Conversation summary: ")
+	for i, m := range batch {
+		if i > 0 {
+			sb.WriteString(" | ")
+		}
+		sb.WriteString(m.Role)
+		sb.WriteString(": ")
+		sb.WriteString(truncateRunes(strings.TrimSpace(m.Content), maxFallbackRunes))
+	}
+	return sb.String()
+}
+
+func truncateRunes(content string, maxRunes int) string {
+	if maxRunes <= 0 || content == "" {
+		return ""
+	}
+
+	runes := []rune(content)
+	if len(runes) <= maxRunes {
+		return content
+	}
+
+	return string(runes[:maxRunes]) + "..."
 }
 
 // summarizeBatch summarizes a batch of messages.
@@ -1414,21 +1506,12 @@ func (al *AgentLoop) summarizeBatch(
 	}
 	prompt := sb.String()
 
-	response, err := agent.Provider.Chat(
-		ctx,
-		[]providers.Message{{Role: "user", Content: prompt}},
-		nil,
-		agent.Model,
-		map[string]any{
-			"max_tokens":       summaryMaxTokens(agent),
-			"temperature":      0.3,
-			"prompt_cache_key": agent.ID,
-		},
-	)
-	if err != nil {
-		return "", err
+	response, err := al.retrySummaryCall(ctx, agent, prompt, 3)
+	if err == nil && response != "" {
+		return response, nil
 	}
-	return response.Content, nil
+
+	return buildFallbackSummary(batch), nil
 }
 
 func summaryMaxTokens(agent *AgentInstance) int {
