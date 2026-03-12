@@ -189,10 +189,10 @@ docker compose -f docker/docker-compose.yml --profile gateway up -d
 
 > [!TIP]
 > If you publish your own fork image, set `PICOCLAW_IMAGE` before using Compose, for example
-> `ghcr.io/<your-github-user>/picoclaw-rpg:main`.
+> `ghcr.io/sunnypsk/picoclaw-rpg:main`.
 >
 > If you are testing local source changes, rebuild the configured image first instead of pulling a remote image:
-> `docker build -t "${PICOCLAW_IMAGE:-ghcr.io/<your-github-user>/picoclaw-rpg:main}" -f docker/Dockerfile .`
+> `docker build -t "${PICOCLAW_IMAGE:-ghcr.io/sunnypsk/picoclaw-rpg:main}" -f docker/Dockerfile .`
 >
 > The default Compose setup stores Picoclaw data in `docker/data/`, mounted to `/home/picoclaw/.picoclaw`
 > inside the container.
@@ -1489,4 +1489,3 @@ This happens when another instance of the bot is running. Make sure only one `pi
 | **Brave Search** | 2000 queries/month  | Web search functionality              |
 | **Groq**         | Free tier available | Fast inference (Llama, Mixtral)       |
 | **Cerebras**     | Free tier available | Fast inference (Llama, Qwen, etc.)    |
-

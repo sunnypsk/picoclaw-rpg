@@ -4,7 +4,7 @@ services:
   #   docker compose -f docker/docker-compose.yml run --rm picoclaw-agent -m "Hello"
   # ─────────────────────────────────────────────
   picoclaw-agent:
-    image: ${PICOCLAW_IMAGE:-ghcr.io/your-github-user/picoclaw-rpg:main}
+    image: ${PICOCLAW_IMAGE:-ghcr.io/sunnypsk/picoclaw-rpg:main}
     container_name: picoclaw-agent
     profiles:
       - agent
@@ -22,7 +22,7 @@ services:
   #   docker compose -f docker/docker-compose.yml up picoclaw-gateway
   # ─────────────────────────────────────────────
   picoclaw-gateway:
-    image: ${PICOCLAW_IMAGE:-ghcr.io/your-github-user/picoclaw-rpg:main}
+    image: ${PICOCLAW_IMAGE:-ghcr.io/sunnypsk/picoclaw-rpg:main}
     container_name: picoclaw-gateway
     restart: on-failure
     profiles:

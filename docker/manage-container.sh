@@ -3,7 +3,7 @@ set -euo pipefail
 
 ACTION="${1:-menu}"
 CONTAINER_NAME="picoclaw-gateway"
-IMAGE_NAME="${PICOCLAW_IMAGE:-ghcr.io/your-github-user/picoclaw-rpg:main}"
+IMAGE_NAME="${PICOCLAW_IMAGE:-ghcr.io/sunnypsk/picoclaw-rpg:main}"
 USE_ROOT=0
 FORCE=0
 

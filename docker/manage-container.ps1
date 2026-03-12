@@ -2,7 +2,7 @@ param(
     [ValidateSet('', 'menu', 'status', 'build', 'run', 'start', 'stop', 'restart', 'remove', 'logs', 'recreate')]
     [string]$Action = '',
     [string]$ContainerName = 'picoclaw-gateway',
-    [string]$ImageName = $(if ($env:PICOCLAW_IMAGE) { $env:PICOCLAW_IMAGE } else { 'ghcr.io/your-github-user/picoclaw-rpg:main' }),
+    [string]$ImageName = $(if ($env:PICOCLAW_IMAGE) { $env:PICOCLAW_IMAGE } else { 'ghcr.io/sunnypsk/picoclaw-rpg:main' }),
     [switch]$UseNonRoot,
     [switch]$Force
 )
