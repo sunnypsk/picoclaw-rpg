@@ -236,6 +236,12 @@ func TestDefaultConfig_HeartbeatEnabled(t *testing.T) {
 	if !cfg.Heartbeat.Enabled {
 		t.Error("Heartbeat should be enabled by default")
 	}
+	if cfg.Heartbeat.Proactive.Enabled {
+		t.Error("Heartbeat proactive mode should be disabled by default")
+	}
+	if cfg.Heartbeat.Proactive.BaseToleranceMinutes <= 0 {
+		t.Error("Heartbeat proactive base tolerance should be set")
+	}
 }
 
 // TestDefaultConfig_WorkspacePath verifies workspace path is correctly set

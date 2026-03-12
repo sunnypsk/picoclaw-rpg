@@ -380,6 +380,16 @@ func DefaultConfig() *Config {
 		Heartbeat: HeartbeatConfig{
 			Enabled:  true,
 			Interval: 30,
+			Proactive: HeartbeatProactiveConfig{
+				Enabled:                     false,
+				BaseToleranceMinutes:        240,
+				MinToleranceMinutes:         60,
+				RelationshipStepMinutes:     30,
+				InitialProbability:          0.15,
+				ProbabilityRampPerHeartbeat: 0.10,
+				MaxProbability:              0.65,
+				CooldownMinutes:             360,
+			},
 		},
 		Devices: DevicesConfig{
 			Enabled:    false,

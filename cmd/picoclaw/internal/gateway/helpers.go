@@ -115,6 +115,9 @@ func gatewayCmd(debug bool) error {
 		// sent to user via processSystemMessage when the async task completes
 		return tools.SilentResult(response)
 	})
+	heartbeatService.SetTickHandler(func() {
+		agentLoop.RunProactiveHeartbeat(context.Background())
+	})
 
 	// Create media store for file lifecycle management with TTL cleanup
 	mediaStore := media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{

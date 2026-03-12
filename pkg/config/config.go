@@ -468,8 +468,20 @@ type PicoConfig struct {
 }
 
 type HeartbeatConfig struct {
-	Enabled  bool `json:"enabled"  env:"PICOCLAW_HEARTBEAT_ENABLED"`
-	Interval int  `json:"interval" env:"PICOCLAW_HEARTBEAT_INTERVAL"` // minutes, min 5
+	Enabled   bool                     `json:"enabled"             env:"PICOCLAW_HEARTBEAT_ENABLED"`
+	Interval  int                      `json:"interval"            env:"PICOCLAW_HEARTBEAT_INTERVAL"` // minutes, min 5
+	Proactive HeartbeatProactiveConfig `json:"proactive,omitempty"`
+}
+
+type HeartbeatProactiveConfig struct {
+	Enabled                     bool    `json:"enabled"                        env:"PICOCLAW_HEARTBEAT_PROACTIVE_ENABLED"`
+	BaseToleranceMinutes        int     `json:"base_tolerance_minutes"         env:"PICOCLAW_HEARTBEAT_PROACTIVE_BASE_TOLERANCE_MINUTES"`
+	MinToleranceMinutes         int     `json:"min_tolerance_minutes"          env:"PICOCLAW_HEARTBEAT_PROACTIVE_MIN_TOLERANCE_MINUTES"`
+	RelationshipStepMinutes     int     `json:"relationship_step_minutes"      env:"PICOCLAW_HEARTBEAT_PROACTIVE_RELATIONSHIP_STEP_MINUTES"`
+	InitialProbability          float64 `json:"initial_probability"            env:"PICOCLAW_HEARTBEAT_PROACTIVE_INITIAL_PROBABILITY"`
+	ProbabilityRampPerHeartbeat float64 `json:"probability_ramp_per_heartbeat" env:"PICOCLAW_HEARTBEAT_PROACTIVE_PROBABILITY_RAMP_PER_HEARTBEAT"`
+	MaxProbability              float64 `json:"max_probability"                env:"PICOCLAW_HEARTBEAT_PROACTIVE_MAX_PROBABILITY"`
+	CooldownMinutes             int     `json:"cooldown_minutes"               env:"PICOCLAW_HEARTBEAT_PROACTIVE_COOLDOWN_MINUTES"`
 }
 
 type DevicesConfig struct {

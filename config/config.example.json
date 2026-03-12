@@ -347,7 +347,17 @@
   },
   "heartbeat": {
     "enabled": true,
-    "interval": 30
+    "interval": 30,
+    "proactive": {
+      "enabled": false,
+      "base_tolerance_minutes": 240,
+      "min_tolerance_minutes": 60,
+      "relationship_step_minutes": 30,
+      "initial_probability": 0.15,
+      "probability_ramp_per_heartbeat": 0.1,
+      "max_probability": 0.65,
+      "cooldown_minutes": 360
+    }
   },
   "devices": {
     "enabled": false,

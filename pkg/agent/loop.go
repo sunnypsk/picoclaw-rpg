@@ -157,11 +157,15 @@ func registerSharedToolsForAgent(
 	messageTool.SetSendCallback(func(channel, chatID, content string) error {
 		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer pubCancel()
-		return msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
+		err := msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
 			Channel: channel,
 			ChatID:  chatID,
 			Content: content,
 		})
+		if err == nil {
+			recordOutboundMessageForRegistry(registry, agentID, channel, chatID, false)
+		}
+		return err
 	})
 	agent.Tools.Register(messageTool)
 
@@ -273,43 +277,19 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 				// 	}
 				// }()
 
-				response, err := al.processMessage(ctx, msg)
+				response, agent, err := al.processMessageCore(ctx, msg, true)
 				if err != nil {
 					response = fmt.Sprintf("Error processing message: %v", err)
-				}
-
-				if response != "" {
-					// Check if the message tool already sent a response during this round.
-					// If so, skip publishing to avoid duplicate messages to the user.
-					// Use default agent's tools to check (message tool is shared).
-					alreadySent := false
-					defaultAgent := al.registry.GetDefaultAgent()
-					if defaultAgent != nil {
-						if tool, ok := defaultAgent.Tools.Get("message"); ok {
-							if mt, ok := tool.(*tools.MessageTool); ok {
-								alreadySent = mt.HasSentInRound()
-							}
-						}
-					}
-
-					if !alreadySent {
-						al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-							Channel: msg.Channel,
-							ChatID:  msg.ChatID,
-							Content: response,
-						})
-						logger.InfoCF("agent", "Published outbound response",
-							map[string]any{
-								"channel":     msg.Channel,
-								"chat_id":     msg.ChatID,
-								"content_len": len(response),
+					if response != "" {
+						if agent != nil {
+							al.publishAgentMessage(ctx, agent, msg.Channel, msg.ChatID, response, false)
+						} else {
+							_ = al.bus.PublishOutbound(ctx, bus.OutboundMessage{
+								Channel: msg.Channel,
+								ChatID:  msg.ChatID,
+								Content: response,
 							})
-					} else {
-						logger.DebugCF(
-							"agent",
-							"Skipped outbound (message tool already sent)",
-							map[string]any{"channel": msg.Channel},
-						)
+						}
 					}
 				}
 			}()
@@ -451,7 +431,7 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 		SessionKey: sessionKey,
 	}
 
-	return al.processMessage(ctx, msg)
+	return al.processMessageAndSend(ctx, msg)
 }
 
 // ProcessHeartbeat processes a heartbeat request without session history.
@@ -483,6 +463,20 @@ func (al *AgentLoop) ProcessHeartbeat(
 }
 
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, error) {
+	response, _, err := al.processMessageCore(ctx, msg, false)
+	return response, err
+}
+
+func (al *AgentLoop) processMessageAndSend(ctx context.Context, msg bus.InboundMessage) (string, error) {
+	response, _, err := al.processMessageCore(ctx, msg, true)
+	return response, err
+}
+
+func (al *AgentLoop) processMessageCore(
+	ctx context.Context,
+	msg bus.InboundMessage,
+	sendResponse bool,
+) (string, *AgentInstance, error) {
 	// Add message preview to log (show full content for error messages)
 	var logContent string
 	if strings.Contains(msg.Content, "Error:") || strings.Contains(msg.Content, "error") {
@@ -503,12 +497,8 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 
 	// Route system messages to processSystemMessage
 	if msg.Channel == "system" {
-		return al.processSystemMessage(ctx, msg)
-	}
-
-	// Check for commands
-	if response, handled := al.handleCommand(ctx, msg); handled {
-		return response, nil
+		response, err := al.processSystemMessage(ctx, msg)
+		return response, al.registry.GetDefaultAgent(), err
 	}
 
 	// Route to determine agent and session key
@@ -541,7 +531,23 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		agent = al.registry.GetDefaultAgent()
 	}
 	if agent == nil {
-		return "", fmt.Errorf("no agent available for route (agent_id=%s)", route.AgentID)
+		return "", nil, fmt.Errorf("no agent available for route (agent_id=%s)", route.AgentID)
+	}
+	if err := prepareRelationshipTarget(agent, msg); err != nil {
+		logger.WarnCF("agent", "Failed to prepare relationship target", map[string]any{
+			"agent_id": agent.ID,
+			"channel":  msg.Channel,
+			"sender":   msg.SenderID,
+			"error":    err.Error(),
+		})
+	}
+
+	// Check for commands after target preparation so outbound replies can reset relationship silence.
+	if response, handled := al.handleCommand(ctx, msg); handled {
+		if sendResponse && response != "" {
+			al.publishAgentMessage(ctx, agent, msg.Channel, msg.ChatID, response, false)
+		}
+		return response, agent, nil
 	}
 
 	// Reset message-tool state for this round so we don't skip publishing due to a previous round.
@@ -558,9 +564,17 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	parts := strings.Fields(trimmedContent)
 	if len(parts) > 0 && parts[0] == "/new" {
 		if len(parts) > 1 {
-			return "Usage: /new", nil
+			response := "Usage: /new"
+			if sendResponse {
+				al.publishAgentMessage(ctx, agent, msg.Channel, msg.ChatID, response, false)
+			}
+			return response, agent, nil
 		}
-		return al.handleNewSessionCommand(agent, route, msg, sessionKey)
+		response, err := al.handleNewSessionCommand(agent, route, msg, sessionKey)
+		if err == nil && sendResponse && response != "" {
+			al.publishAgentMessage(ctx, agent, msg.Channel, msg.ChatID, response, false)
+		}
+		return response, agent, err
 	}
 
 	logger.InfoCF("agent", "Routed message",
@@ -578,7 +592,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		Media:           msg.Media,
 		DefaultResponse: defaultResponse,
 		EnableSummary:   true,
-		SendResponse:    false,
+		SendResponse:    sendResponse,
 	})
 	if err == nil {
 		updateCtx := context.Background()
@@ -587,7 +601,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		}
 		go al.maybeUpdateNPCStateAndMemory(updateCtx, agent, msg, route.MatchedBy, response)
 	}
-	return response, err
+	return response, agent, err
 }
 
 func (al *AgentLoop) processSystemMessage(
@@ -735,11 +749,14 @@ func (al *AgentLoop) runAgentLoop(
 
 	// 7. Optional: send response via bus
 	if opts.SendResponse {
-		al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-			Channel: opts.Channel,
-			ChatID:  opts.ChatID,
-			Content: finalContent,
-		})
+		if !agentMessageAlreadySent(agent) {
+			al.publishAgentMessage(ctx, agent, opts.Channel, opts.ChatID, finalContent, false)
+		} else {
+			logger.DebugCF("agent", "Skipped outbound final response (message tool already sent)", map[string]any{
+				"agent_id": agent.ID,
+				"channel":  opts.Channel,
+			})
+		}
 	}
 
 	// 8. Log response
@@ -948,11 +965,14 @@ func (al *AgentLoop) runLLMIteration(
 				)
 
 				if retry == 0 && !constants.IsInternalChannel(opts.Channel) {
-					al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-						Channel: opts.Channel,
-						ChatID:  opts.ChatID,
-						Content: "Context window exceeded. Compressing history and retrying...",
-					})
+					al.publishAgentMessage(
+						ctx,
+						agent,
+						opts.Channel,
+						opts.ChatID,
+						"Context window exceeded. Compressing history and retrying...",
+						false,
+					)
 				}
 
 				al.forceCompression(agent, opts.SessionKey, opts.Channel, opts.ChatID)
@@ -1095,11 +1115,7 @@ func (al *AgentLoop) runLLMIteration(
 
 			// Send ForUser content to user immediately if not Silent
 			if !toolResult.Silent && toolResult.ForUser != "" && opts.SendResponse {
-				al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-					Channel: opts.Channel,
-					ChatID:  opts.ChatID,
-					Content: toolResult.ForUser,
-				})
+				al.publishAgentMessage(ctx, agent, opts.Channel, opts.ChatID, toolResult.ForUser, false)
 				logger.DebugCF("agent", "Sent tool result to user",
 					map[string]any{
 						"tool":        tc.Name,

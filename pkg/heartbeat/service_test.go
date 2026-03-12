@@ -164,6 +164,28 @@ func TestExecuteHeartbeat_NilResult(t *testing.T) {
 	hs.executeHeartbeat()
 }
 
+func TestExecuteHeartbeat_TickHandlerRunsWithoutPrompt(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "heartbeat-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs.stopChan = make(chan struct{})
+
+	tickCalled := false
+	hs.SetTickHandler(func() {
+		tickCalled = true
+	})
+
+	hs.executeHeartbeat()
+
+	if !tickCalled {
+		t.Fatal("expected tick handler to run even without HEARTBEAT.md content")
+	}
+}
+
 // TestLogPath verifies heartbeat log is written to workspace directory
 func TestLogPath(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "heartbeat-test-*")

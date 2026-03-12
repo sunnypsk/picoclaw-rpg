@@ -35,14 +35,15 @@ type HeartbeatHandler func(prompt, channel, chatID string) *tools.ToolResult
 
 // HeartbeatService manages periodic heartbeat checks
 type HeartbeatService struct {
-	workspace string
-	bus       *bus.MessageBus
-	state     *state.Manager
-	handler   HeartbeatHandler
-	interval  time.Duration
-	enabled   bool
-	mu        sync.RWMutex
-	stopChan  chan struct{}
+	workspace   string
+	bus         *bus.MessageBus
+	state       *state.Manager
+	handler     HeartbeatHandler
+	tickHandler func()
+	interval    time.Duration
+	enabled     bool
+	mu          sync.RWMutex
+	stopChan    chan struct{}
 }
 
 // NewHeartbeatService creates a new heartbeat service
@@ -76,6 +77,15 @@ func (hs *HeartbeatService) SetHandler(handler HeartbeatHandler) {
 	hs.mu.Lock()
 	defer hs.mu.Unlock()
 	hs.handler = handler
+}
+
+// SetTickHandler sets an auxiliary callback that runs once per heartbeat tick.
+// It runs after the main HEARTBEAT.md handling path and also runs when there is
+// no HEARTBEAT.md prompt to process.
+func (hs *HeartbeatService) SetTickHandler(handler func()) {
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	hs.tickHandler = handler
 }
 
 // Start begins the heartbeat service
@@ -149,6 +159,7 @@ func (hs *HeartbeatService) executeHeartbeat() {
 	hs.mu.RLock()
 	enabled := hs.enabled
 	handler := hs.handler
+	tickHandler := hs.tickHandler
 	if !hs.enabled || hs.stopChan == nil {
 		hs.mu.RUnlock()
 		return
@@ -158,6 +169,11 @@ func (hs *HeartbeatService) executeHeartbeat() {
 	if !enabled {
 		return
 	}
+	defer func() {
+		if tickHandler != nil {
+			tickHandler()
+		}
+	}()
 
 	logger.DebugC("heartbeat", "Executing heartbeat")
 

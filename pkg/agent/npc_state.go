@@ -175,11 +175,18 @@ func (l *NPCLocation) UnmarshalJSON(data []byte) error {
 }
 
 type NPCRelationship struct {
-	Affinity          NPCLevel `json:"affinity,omitempty"`
-	Trust             NPCLevel `json:"trust,omitempty"`
-	Familiarity       NPCLevel `json:"familiarity,omitempty"`
-	LastInteractionAt string   `json:"last_interaction_at,omitempty"`
-	Notes             string   `json:"notes,omitempty"`
+	Affinity               NPCLevel `json:"affinity,omitempty"`
+	Trust                  NPCLevel `json:"trust,omitempty"`
+	Familiarity            NPCLevel `json:"familiarity,omitempty"`
+	LastInteractionAt      string   `json:"last_interaction_at,omitempty"`
+	LastChannel            string   `json:"last_channel,omitempty"`
+	LastChatID             string   `json:"last_chat_id,omitempty"`
+	LastPeerKind           string   `json:"last_peer_kind,omitempty"`
+	LastUserMessageAt      string   `json:"last_user_message_at,omitempty"`
+	LastAgentMessageAt     string   `json:"last_agent_message_at,omitempty"`
+	LastProactiveAttemptAt string   `json:"last_proactive_attempt_at,omitempty"`
+	LastProactiveSuccessAt string   `json:"last_proactive_success_at,omitempty"`
+	Notes                  string   `json:"notes,omitempty"`
 }
 
 type NPCRecentEvent struct {
@@ -362,6 +369,13 @@ func normalizeNPCState(state NPCState) NPCState {
 		rel.Trust = normalizeNPCLevel(rel.Trust, NPCLevelMid)
 		rel.Familiarity = normalizeNPCLevel(rel.Familiarity, NPCLevelLow)
 		rel.LastInteractionAt = strings.TrimSpace(rel.LastInteractionAt)
+		rel.LastChannel = normalizeRelationshipChannel(rel.LastChannel)
+		rel.LastChatID = strings.TrimSpace(rel.LastChatID)
+		rel.LastPeerKind = normalizeRelationshipPeerKind(rel.LastPeerKind)
+		rel.LastUserMessageAt = strings.TrimSpace(rel.LastUserMessageAt)
+		rel.LastAgentMessageAt = strings.TrimSpace(rel.LastAgentMessageAt)
+		rel.LastProactiveAttemptAt = strings.TrimSpace(rel.LastProactiveAttemptAt)
+		rel.LastProactiveSuccessAt = strings.TrimSpace(rel.LastProactiveSuccessAt)
 		rel.Notes = strings.TrimSpace(rel.Notes)
 		normalizedRelationships[normalizedKey] = rel
 	}
@@ -661,9 +675,21 @@ func (al *AgentLoop) maybeUpdateNPCStateAndMemory(
 	if al == nil || al.cfg == nil || agent == nil || agent.StateStore == nil {
 		return
 	}
+	if !shouldTrackRelationshipMessage(msg) {
+		return
+	}
 
 	autoCfg := al.cfg.Agents.AutoProvision
 	if !autoCfg.Enabled || !autoCfg.StrictOneToOne || routeMatchedBy != "auto-provision" {
+		if err := recordMinimalRelationshipTurn(agent, msg, assistantReply); err != nil {
+			logger.WarnCF("agent", "Failed to record minimal relationship turn",
+				map[string]any{
+					"agent_id": agent.ID,
+					"channel":  msg.Channel,
+					"sender":   msg.SenderID,
+					"error":    err.Error(),
+				})
+		}
 		return
 	}
 
@@ -812,7 +838,7 @@ Output shape:
     "emotion": {"name": "string", "intensity": "low|mid|high", "reason": "string"},
     "location": {"area": "string", "scene": "string", "activity": "string", "start_at": "local datetime text (e.g. 2026-03-05 22:00)", "end_at": "local datetime text (e.g. 2026-03-05 23:30)", "move_reason": "string"},
     "relationships": {
-      "<channel:user_id>": {"affinity": "low|mid|high", "trust": "low|mid|high", "familiarity": "low|mid|high", "last_interaction_at": "RFC3339 timestamp", "notes": "string"}
+      "<channel:user_id>": {"affinity": "low|mid|high", "trust": "low|mid|high", "familiarity": "low|mid|high", "last_interaction_at": "RFC3339 timestamp", "last_channel": "string", "last_chat_id": "string", "last_peer_kind": "string", "last_user_message_at": "RFC3339 timestamp", "last_agent_message_at": "RFC3339 timestamp", "last_proactive_attempt_at": "RFC3339 timestamp", "last_proactive_success_at": "RFC3339 timestamp", "notes": "string"}
     },
     "habits": ["string"],
     "recent_events": [{"at": "RFC3339", "type": "string", "summary": "string"}]
@@ -830,6 +856,7 @@ Rules:
 - Example: previous_state angry/high cannot become calm in one update; lower intensity first.
 - location tracks off-chat activity and whereabouts; use start_at/end_at as local datetime text when available.
 - If previous_state.location indicates an active outing window (between start_at and end_at), keep the outing location/activity and add a multitasking cue for chatting remotely.
+- Preserve relationship contact/timestamp fields unless the current interaction updates them.
 - Ensure relationship key %q exists and is updated.
 - Keep memory_notes concise, deduplicated, and <= %d.
 - Merge/edit existing notes when possible instead of blind append.
@@ -877,6 +904,9 @@ func ensureRelationshipPresent(state *NPCState, msg bus.InboundMessage) {
 	if state == nil {
 		return
 	}
+	if !shouldTrackRelationshipMessage(msg) {
+		return
+	}
 	if state.Relationships == nil {
 		state.Relationships = make(map[string]NPCRelationship)
 	}
@@ -896,6 +926,10 @@ func ensureRelationshipPresent(state *NPCState, msg bus.InboundMessage) {
 	} else {
 		rel.Familiarity = promoteNPCLevel(rel.Familiarity)
 	}
+	rel.LastChannel = normalizeRelationshipChannel(msg.Channel)
+	rel.LastChatID = strings.TrimSpace(msg.ChatID)
+	rel.LastPeerKind = normalizeRelationshipPeerKind(msg.Peer.Kind)
+	rel.LastUserMessageAt = now
 	rel.LastInteractionAt = now
 	state.Relationships[relationshipKey] = rel
 }

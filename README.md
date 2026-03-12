@@ -1034,20 +1034,39 @@ The subagent has access to tools (message, web_search, etc.) and can communicate
 {
   "heartbeat": {
     "enabled": true,
-    "interval": 30
+    "interval": 30,
+    "proactive": {
+      "enabled": false,
+      "base_tolerance_minutes": 240,
+      "min_tolerance_minutes": 60,
+      "relationship_step_minutes": 30,
+      "initial_probability": 0.15,
+      "probability_ramp_per_heartbeat": 0.1,
+      "max_probability": 0.65,
+      "cooldown_minutes": 360
+    }
   }
 }
 ```
 
-| Option     | Default | Description                        |
-| ---------- | ------- | ---------------------------------- |
-| `enabled`  | `true`  | Enable/disable heartbeat           |
-| `interval` | `30`    | Check interval in minutes (min: 5) |
+| Option       | Default | Description                                 |
+| ------------ | ------- | ------------------------------------------- |
+| `enabled`    | `true`  | Enable/disable heartbeat                    |
+| `interval`   | `30`    | Check interval in minutes (min: 5)          |
+| `proactive`  | `{...}` | Optional relationship-aware outreach policy |
 
 **Environment variables:**
 
 * `PICOCLAW_HEARTBEAT_ENABLED=false` to disable
 * `PICOCLAW_HEARTBEAT_INTERVAL=60` to change interval
+
+**Proactive outreach:**
+
+* Disabled by default with `heartbeat.proactive.enabled=false`
+* Uses the existing heartbeat tick to evaluate whether an agent should proactively message a chat
+* Lower relationship tolerance means closer relationships become eligible sooner
+* The model still decides whether to stay silent, even after the probability gate passes
+* When enabled, a shorter heartbeat interval such as `5`-`10` minutes usually works better than `30`
 
 ### Providers
 
@@ -1397,7 +1416,17 @@ picoclaw agent -m "Hello"
   },
   "heartbeat": {
     "enabled": true,
-    "interval": 30
+    "interval": 30,
+    "proactive": {
+      "enabled": false,
+      "base_tolerance_minutes": 240,
+      "min_tolerance_minutes": 60,
+      "relationship_step_minutes": 30,
+      "initial_probability": 0.15,
+      "probability_ramp_per_heartbeat": 0.1,
+      "max_probability": 0.65,
+      "cooldown_minutes": 360
+    }
   }
 }
 ```
