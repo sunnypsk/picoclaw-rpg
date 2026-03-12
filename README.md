@@ -169,8 +169,8 @@ You can also run PicoClaw using Docker Compose without installing anything local
 
 ```bash
 # 1. Clone this repo
-git clone https://github.com/sipeed/picoclaw.git
-cd picoclaw
+git clone https://github.com/sunnypsk/picoclaw-rpg.git
+cd picoclaw-rpg
 
 # 2. First run — auto-generates docker/data/config.json then exits
 docker compose -f docker/docker-compose.yml --profile gateway up
@@ -190,6 +190,12 @@ docker compose -f docker/docker-compose.yml --profile gateway up -d
 > [!TIP]
 > If you publish your own fork image, set `PICOCLAW_IMAGE` before using Compose, for example
 > `ghcr.io/sunnypsk/picoclaw-rpg:main`.
+>
+> Pushes to `main` publish the `main` tag through GitHub Actions, and version tags like `v0.1.0` publish matching
+> image tags plus `latest`.
+>
+> If you want anonymous pulls, set the published GHCR package visibility to public. Private packages still work,
+> but pulls must authenticate.
 >
 > If you are testing local source changes, rebuild the configured image first instead of pulling a remote image:
 > `docker build -t "${PICOCLAW_IMAGE:-ghcr.io/sunnypsk/picoclaw-rpg:main}" -f docker/Dockerfile .`
@@ -239,7 +245,10 @@ docker compose -f docker/docker-compose.yml run --rm picoclaw-agent
 ### Update
 
 ```bash
+# Pull the latest configured image, which defaults to `ghcr.io/sunnypsk/picoclaw-rpg:main`
 docker compose -f docker/docker-compose.yml pull
+
+# Recreate the gateway with the updated image
 docker compose -f docker/docker-compose.yml --profile gateway up -d
 ```
 
