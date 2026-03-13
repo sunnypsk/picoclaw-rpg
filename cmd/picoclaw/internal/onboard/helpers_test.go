@@ -9,8 +9,8 @@ import (
 func TestCopyEmbeddedToTargetUsesAgentsMarkdown(t *testing.T) {
 	targetDir := t.TempDir()
 
-	if err := copyEmbeddedToTarget(targetDir); err != nil {
-		t.Fatalf("copyEmbeddedToTarget() error = %v", err)
+	if err := CopyEmbeddedWorkspaceTemplates(targetDir); err != nil {
+		t.Fatalf("CopyEmbeddedWorkspaceTemplates() error = %v", err)
 	}
 
 	agentsPath := filepath.Join(targetDir, "AGENTS.md")

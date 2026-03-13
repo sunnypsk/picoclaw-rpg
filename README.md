@@ -771,9 +771,9 @@ these files as syncable defaults:
 - `IDENTITY.md`
 - `skills/**`
 
-When one of those files still matches the last synced copy, restarting PicoClaw will refresh it from
-`agents.defaults.workspace`. If you customize one of those files inside an agent workspace, PicoClaw preserves your
-local edit and stops auto-overwriting that file.
+When one of those files still matches the last synced copy, restarting PicoClaw will refresh it from the current
+default workspace. If you customize one of those files inside an agent workspace, PicoClaw preserves your local edit
+and stops auto-overwriting that file.
 
 `STATE.md` and `memory/MEMORY.md` are different: they are only created when missing and are never auto-overwritten.
 
@@ -903,7 +903,8 @@ Behavior:
 
 #### Sync Managed Defaults
 
-Use this command to backfill or inspect managed default files across existing agent workspaces:
+Use this command to refresh the default workspace's managed files from the current binary and then sync those managed
+defaults across existing agent workspaces:
 
 ```bash
 picoclaw agent sync-defaults --dry-run
@@ -911,7 +912,7 @@ picoclaw agent sync-defaults --force-legacy
 ```
 
 - `--dry-run` shows what would change without writing files.
-- `--force-legacy` updates older workspaces that predate sync metadata and adopts the current defaults as the new managed baseline.
+- `--force-legacy` updates older workspaces that predate sync metadata and adopts the current defaults as the new managed baseline, including the default workspace itself.
 
 #### Protected Tools
 
