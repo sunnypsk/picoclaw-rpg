@@ -11,8 +11,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
+	"github.com/sipeed/picoclaw/pkg/logger"
 	_ "modernc.org/sqlite"
 )
 
@@ -52,13 +54,41 @@ func NewIndex(workspace string) *Index {
 	}
 }
 
-func (i *Index) Search(ctx context.Context, query string, limit int, pathPrefix string) ([]Result, error) {
-	if strings.TrimSpace(query) == "" {
+func (i *Index) Search(ctx context.Context, query string, limit int, pathPrefix string) (results []Result, err error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
 		return []Result{}, nil
 	}
 	if limit <= 0 {
 		limit = 5
 	}
+	pathPrefix = strings.TrimSpace(pathPrefix)
+
+	start := time.Now()
+	defer func() {
+		fields := map[string]any{
+			"workspace":     i.workspace,
+			"query_preview": previewForLog(query, 120),
+			"query_len":     len([]rune(query)),
+			"limit":         limit,
+			"path_prefix":   pathPrefix,
+			"duration_ms":   time.Since(start).Milliseconds(),
+		}
+
+		if err != nil {
+			fields["status"] = "error"
+			fields["error"] = err.Error()
+			logger.WarnCF("memory", "Memory search failed", fields)
+			return
+		}
+
+		fields["status"] = "miss"
+		fields["result_count"] = len(results)
+		if len(results) > 0 {
+			fields["status"] = "hit"
+		}
+		logger.InfoCF("memory", "Memory search completed", fields)
+	}()
 
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -526,6 +556,22 @@ func buildMatchCandidates(query string) []string {
 	}
 
 	return candidates
+}
+
+func previewForLog(value string, maxRunes int) string {
+	trimmed := strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if maxRunes <= 0 {
+		return ""
+	}
+
+	runes := []rune(trimmed)
+	if len(runes) <= maxRunes {
+		return trimmed
+	}
+	if maxRunes <= 3 {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:maxRunes-3]) + "..."
 }
 
 func hashText(text string) string {

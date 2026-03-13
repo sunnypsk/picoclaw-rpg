@@ -12,6 +12,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 )
@@ -293,6 +294,51 @@ func TestNPCStateStore_SaveMemoryNotes_DedupAndLimit(t *testing.T) {
 	}
 	if len(loaded) != maxNPCMemoryNotes {
 		t.Fatalf("notes len = %d, want %d (capped)", len(loaded), maxNPCMemoryNotes)
+	}
+}
+
+func TestNPCStateStore_SaveOperations_LogStatus(t *testing.T) {
+	workspace := t.TempDir()
+
+	initialLevel := logger.GetLevel()
+	defer logger.SetLevel(initialLevel)
+
+	logPath := filepath.Join(workspace, "npc-state.log")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatalf("EnableFileLogging() error: %v", err)
+	}
+	defer logger.DisableFileLogging()
+
+	logger.SetLevel(logger.INFO)
+
+	store := NewNPCStateStore(workspace)
+	state := defaultNPCState()
+	state.Emotion = NPCEmotion{Name: "focused", Intensity: NPCEmotionIntensityMid, Reason: "updating logs"}
+
+	if err := store.SaveState(state); err != nil {
+		t.Fatalf("SaveState() error: %v", err)
+	}
+	if err := store.SaveMemoryNotes([]string{"prefers concise replies", "prefers concise replies"}); err != nil {
+		t.Fatalf("SaveMemoryNotes() error: %v", err)
+	}
+
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error: %v", err)
+	}
+	logText := string(raw)
+
+	if !strings.Contains(logText, `"message":"State file updated"`) {
+		t.Fatalf("expected state update log, got: %s", logText)
+	}
+	if !strings.Contains(logText, `"message":"Memory notes updated"`) {
+		t.Fatalf("expected memory update log, got: %s", logText)
+	}
+	if !strings.Contains(logText, `"emotion":"focused"`) {
+		t.Fatalf("expected emotion field in state log, got: %s", logText)
+	}
+	if !strings.Contains(logText, `"notes_count":1`) {
+		t.Fatalf("expected deduplicated notes count in log, got: %s", logText)
 	}
 }
 

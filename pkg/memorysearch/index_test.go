@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 func TestIndex_SearchFindsEnglishAndCJKContent(t *testing.T) {
@@ -162,5 +164,63 @@ func TestIndex_UpsertDocRollbackPreservesMetaOnFTSFailure(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("memory_fts_u count = %d, want 1", count)
+	}
+}
+
+func TestIndex_SearchLogsStatus(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	initialLevel := logger.GetLevel()
+	defer logger.SetLevel(initialLevel)
+
+	logPath := filepath.Join(tmpDir, "memory-search.log")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatalf("EnableFileLogging() error: %v", err)
+	}
+	defer logger.DisableFileLogging()
+
+	logger.SetLevel(logger.INFO)
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, "memory"), 0o755); err != nil {
+		t.Fatalf("create memory dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "MEMORY.md"), []byte("favorite editor is neovim"), 0o644); err != nil {
+		t.Fatalf("write MEMORY.md: %v", err)
+	}
+
+	idx := NewIndex(tmpDir)
+	results, err := idx.Search(context.Background(), "favorite editor", 3, "memory/")
+	if err != nil {
+		t.Fatalf("Search() error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected prefix filter miss, got %d results", len(results))
+	}
+
+	results, err = idx.Search(context.Background(), "favorite editor", 3, "")
+	if err != nil {
+		t.Fatalf("Search() error: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected search hit")
+	}
+
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error: %v", err)
+	}
+	logText := string(raw)
+
+	if !strings.Contains(logText, `"message":"Memory search completed"`) {
+		t.Fatalf("expected memory search completion log, got: %s", logText)
+	}
+	if !strings.Contains(logText, `"status":"miss"`) {
+		t.Fatalf("expected miss status in logs, got: %s", logText)
+	}
+	if !strings.Contains(logText, `"status":"hit"`) {
+		t.Fatalf("expected hit status in logs, got: %s", logText)
+	}
+	if !strings.Contains(logText, `"query_preview":"favorite editor"`) {
+		t.Fatalf("expected query preview in logs, got: %s", logText)
 	}
 }

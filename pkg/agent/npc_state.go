@@ -268,16 +268,47 @@ func (s *NPCStateStore) SaveState(state NPCState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	start := time.Now()
 	state = normalizeNPCState(state)
 	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
+		logger.WarnCF("agent", "State file update failed", map[string]any{
+			"workspace":   s.workspace,
+			"path":        s.statePath,
+			"status":      "error",
+			"error":       err.Error(),
+			"duration_ms": time.Since(start).Milliseconds(),
+		})
 		return err
 	}
 
 	md := "# NPC State\n\n```json\n" + string(data) + "\n```\n"
-	return fileutil.WriteFileAtomic(s.statePath, []byte(md), 0o644)
+	if err := fileutil.WriteFileAtomic(s.statePath, []byte(md), 0o644); err != nil {
+		logger.WarnCF("agent", "State file update failed", map[string]any{
+			"workspace":   s.workspace,
+			"path":        s.statePath,
+			"status":      "error",
+			"error":       err.Error(),
+			"duration_ms": time.Since(start).Milliseconds(),
+		})
+		return err
+	}
+
+	logger.InfoCF("agent", "State file updated", map[string]any{
+		"workspace":          s.workspace,
+		"path":               s.statePath,
+		"status":             "updated",
+		"emotion":            state.Emotion.Name,
+		"emotion_intensity":  state.Emotion.Intensity,
+		"location_area":      state.Location.Area,
+		"relationship_count": len(state.Relationships),
+		"recent_event_count": len(state.RecentEvents),
+		"duration_ms":        time.Since(start).Milliseconds(),
+	})
+
+	return nil
 }
 
 func (s *NPCStateStore) LoadMemoryNotes() ([]string, error) {
@@ -299,17 +330,44 @@ func (s *NPCStateStore) SaveMemoryNotes(notes []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	start := time.Now()
 	normalized := normalizeMemoryNotes(notes)
 
 	var existing string
 	if content, err := os.ReadFile(s.memoryPath); err == nil {
 		existing = string(content)
 	} else if !os.IsNotExist(err) {
+		logger.WarnCF("agent", "Memory notes update failed", map[string]any{
+			"workspace":   s.workspace,
+			"path":        s.memoryPath,
+			"status":      "error",
+			"error":       err.Error(),
+			"duration_ms": time.Since(start).Milliseconds(),
+		})
 		return err
 	}
 
 	updated := upsertManagedMemoryBlock(existing, normalized)
-	return fileutil.WriteFileAtomic(s.memoryPath, []byte(updated), 0o600)
+	if err := fileutil.WriteFileAtomic(s.memoryPath, []byte(updated), 0o600); err != nil {
+		logger.WarnCF("agent", "Memory notes update failed", map[string]any{
+			"workspace":   s.workspace,
+			"path":        s.memoryPath,
+			"status":      "error",
+			"error":       err.Error(),
+			"duration_ms": time.Since(start).Milliseconds(),
+		})
+		return err
+	}
+
+	logger.InfoCF("agent", "Memory notes updated", map[string]any{
+		"workspace":   s.workspace,
+		"path":        s.memoryPath,
+		"status":      "updated",
+		"notes_count": len(normalized),
+		"duration_ms": time.Since(start).Milliseconds(),
+	})
+
+	return nil
 }
 
 func defaultNPCState() NPCState {
@@ -743,6 +801,16 @@ func (al *AgentLoop) updateNPCStateAndMemory(
 		if saveErr := agent.StateStore.SaveMemoryNotes(fallbackNotes); saveErr != nil {
 			return fmt.Errorf("save fallback memory after update failure (%v): %w", err, saveErr)
 		}
+		logger.InfoCF("agent", "NPC state/memory updater used fallback", map[string]any{
+			"agent_id":           agent.ID,
+			"channel":            msg.Channel,
+			"chat_id":            msg.ChatID,
+			"sender":             msg.SenderID,
+			"status":             "fallback",
+			"relationship_key":   buildRelationshipKey(msg.Channel, msg.SenderID),
+			"memory_notes_count": len(fallbackNotes),
+			"error":              err.Error(),
+		})
 		return nil
 	}
 
