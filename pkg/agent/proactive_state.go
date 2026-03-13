@@ -8,7 +8,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/constants"
 )
 
-func prepareRelationshipTarget(agent *AgentInstance, msg bus.InboundMessage) error {
+func prepareRelationshipTarget(agent *AgentInstance, msg bus.InboundMessage, sessionKey string) error {
 	if !shouldTrackRelationshipMessage(msg) {
 		return nil
 	}
@@ -39,10 +39,27 @@ func prepareRelationshipTarget(agent *AgentInstance, msg bus.InboundMessage) err
 	rel.LastChannel = normalizeRelationshipChannel(msg.Channel)
 	rel.LastChatID = strings.TrimSpace(msg.ChatID)
 	rel.LastPeerKind = normalizeRelationshipPeerKind(msg.Peer.Kind)
+	rel.LastSessionKey = strings.TrimSpace(sessionKey)
 	rel.LastUserMessageAt = now
 	rel.LastInteractionAt = now
 	state.Relationships[relationshipKey] = rel
 	return agent.StateStore.SaveState(state)
+}
+
+func recordRelationshipSessionKey(agent *AgentInstance, msg bus.InboundMessage, sessionKey string) error {
+	if !shouldTrackRelationshipMessage(msg) {
+		return nil
+	}
+	relationshipKey := buildRelationshipKey(msg.Channel, msg.SenderID)
+	if relationshipKey == "" {
+		return nil
+	}
+	return updateRelationshipState(agent, relationshipKey, func(rel *NPCRelationship) {
+		rel.LastChannel = normalizeRelationshipChannel(msg.Channel)
+		rel.LastChatID = strings.TrimSpace(msg.ChatID)
+		rel.LastPeerKind = normalizeRelationshipPeerKind(msg.Peer.Kind)
+		rel.LastSessionKey = strings.TrimSpace(sessionKey)
+	})
 }
 
 func recordMinimalRelationshipTurn(agent *AgentInstance, msg bus.InboundMessage, assistantReply string) error {

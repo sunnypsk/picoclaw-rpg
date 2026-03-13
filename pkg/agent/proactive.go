@@ -12,6 +12,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/routing"
 )
 
 const proactiveNoopToken = "PROACTIVE_NOOP"
@@ -104,37 +105,124 @@ func (al *AgentLoop) runProactiveOutreach(
 	if agent == nil {
 		return false, nil
 	}
+	routedSessionKey := proactiveContextSessionKey(al.cfg, agent.ID, relationshipKey, rel)
+	if routedSessionKey == "" {
+		logger.DebugCF("agent", "Skipped proactive outreach without routed session key", map[string]any{
+			"agent_id":         agent.ID,
+			"relationship_key": relationshipKey,
+		})
+		return false, nil
+	}
 	if tool, ok := agent.Tools.Get("message"); ok {
 		if resetter, ok := tool.(interface{ ResetSentInRound() }); ok {
 			resetter.ResetSentInRound()
 		}
 	}
-	response, err := al.runAgentLoop(ctx, agent, processOptions{
-		SessionKey:      proactiveSessionKey(agent.ID, relationshipKey),
-		Channel:         rel.LastChannel,
-		ChatID:          rel.LastChatID,
-		UserMessage:     buildProactivePrompt(relationshipKey, rel, eval),
-		DefaultResponse: proactiveNoopToken,
-		EnableSummary:   false,
-		SendResponse:    false,
-		NoHistory:       true,
+	capture := &proactiveOutputCapture{}
+	proactiveCtx := withProactiveOutputCapture(withProactiveSessionKey(ctx, routedSessionKey), capture)
+	response, err := al.runAgentLoop(proactiveCtx, agent, processOptions{
+		SessionKey:        proactiveSessionKey(agent.ID, relationshipKey),
+		ContextSessionKey: routedSessionKey,
+		Channel:           rel.LastChannel,
+		ChatID:            rel.LastChatID,
+		UserMessage:       buildProactivePrompt(relationshipKey, rel, eval),
+		AutoRecallQuery:   proactiveAutoRecallQuery(agent, routedSessionKey),
+		DefaultResponse:   proactiveNoopToken,
+		EnableSummary:     false,
+		SendResponse:      false,
+		NoHistory:         false,
+		PersistSession:    false,
 	})
 	if err != nil {
 		return false, err
 	}
-	if strings.TrimSpace(response) != "" && strings.TrimSpace(response) != proactiveNoopToken {
-		logger.DebugCF("agent", "Proactive heartbeat returned text without sending", map[string]any{
-			"agent_id":         agent.ID,
-			"relationship_key": relationshipKey,
-			"response":         response,
-		})
+	visibleMessages := capture.Messages()
+	if len(visibleMessages) > 0 {
+		al.appendVisibleAssistantMessagesToSession(agent, routedSessionKey, rel.LastChannel, rel.LastChatID, visibleMessages)
+		return true, nil
 	}
-	return agentMessageAlreadySent(agent), nil
+	if strings.TrimSpace(response) != "" && strings.TrimSpace(response) != proactiveNoopToken {
+		al.publishAgentMessage(proactiveCtx, agent, rel.LastChannel, rel.LastChatID, response, true)
+		return true, nil
+	}
+	return false, nil
 }
 
 func proactiveSessionKey(agentID, relationshipKey string) string {
 	replacer := strings.NewReplacer(":", "-", "/", "-", "\\", "-")
 	return fmt.Sprintf("heartbeat-proactive-%s-%s", replacer.Replace(agentID), replacer.Replace(relationshipKey))
+}
+
+func proactiveContextSessionKey(
+	cfg *config.Config,
+	agentID, relationshipKey string,
+	rel NPCRelationship,
+) string {
+	if sessionKey := strings.TrimSpace(rel.LastSessionKey); sessionKey != "" {
+		return strings.ToLower(sessionKey)
+	}
+	if cfg == nil {
+		return ""
+	}
+	channel := strings.TrimSpace(rel.LastChannel)
+	chatID := strings.TrimSpace(rel.LastChatID)
+	if channel == "" || chatID == "" {
+		return ""
+	}
+	peerKind := normalizeRelationshipPeerKind(rel.LastPeerKind)
+	peerID := proactivePeerID(relationshipKey, rel)
+	if peerKind == "" || peerID == "" {
+		return ""
+	}
+	return strings.ToLower(routing.BuildAgentPeerSessionKey(routing.SessionKeyParams{
+		AgentID:       agentID,
+		Channel:       channel,
+		Peer:          &routing.RoutePeer{Kind: peerKind, ID: peerID},
+		DMScope:       routing.DMScope(cfg.Session.DMScope),
+		IdentityLinks: cfg.Session.IdentityLinks,
+	}))
+}
+
+func proactivePeerID(relationshipKey string, rel NPCRelationship) string {
+	peerKind := normalizeRelationshipPeerKind(rel.LastPeerKind)
+	peerID := relationshipPeerID(relationshipKey)
+	switch peerKind {
+	case "group", "channel":
+		return strings.TrimSpace(rel.LastChatID)
+	case "direct":
+		return peerID
+	default:
+		if strings.TrimSpace(rel.LastChatID) != "" && !strings.EqualFold(strings.TrimSpace(rel.LastChatID), peerID) {
+			return strings.TrimSpace(rel.LastChatID)
+		}
+		return peerID
+	}
+}
+
+func relationshipPeerID(relationshipKey string) string {
+	parts := strings.SplitN(strings.ToLower(strings.TrimSpace(relationshipKey)), ":", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
+}
+
+func proactiveAutoRecallQuery(agent *AgentInstance, sessionKey string) string {
+	if agent == nil || agent.Sessions == nil || strings.TrimSpace(sessionKey) == "" {
+		return ""
+	}
+	history := agent.Sessions.GetHistory(sessionKey)
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role != "user" {
+			continue
+		}
+		content := strings.TrimSpace(history[i].Content)
+		if content == "" {
+			continue
+		}
+		return content
+	}
+	return ""
 }
 
 func buildProactivePrompt(relationshipKey string, rel NPCRelationship, eval proactiveEvaluation) string {

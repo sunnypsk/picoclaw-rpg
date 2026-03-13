@@ -10,7 +10,7 @@ func TestMessageTool_Execute_Success(t *testing.T) {
 	tool := NewMessageTool()
 
 	var sentChannel, sentChatID, sentContent string
-	tool.SetSendCallback(func(channel, chatID, content string) error {
+	tool.SetSendCallback(func(ctx context.Context, channel, chatID, content string) error {
 		sentChannel = channel
 		sentChatID = chatID
 		sentContent = content
@@ -61,7 +61,7 @@ func TestMessageTool_Execute_WithCustomChannel(t *testing.T) {
 	tool := NewMessageTool()
 
 	var sentChannel, sentChatID string
-	tool.SetSendCallback(func(channel, chatID, content string) error {
+	tool.SetSendCallback(func(ctx context.Context, channel, chatID, content string) error {
 		sentChannel = channel
 		sentChatID = chatID
 		return nil
@@ -96,7 +96,7 @@ func TestMessageTool_Execute_SendFailure(t *testing.T) {
 	tool := NewMessageTool()
 
 	sendErr := errors.New("network error")
-	tool.SetSendCallback(func(channel, chatID, content string) error {
+	tool.SetSendCallback(func(ctx context.Context, channel, chatID, content string) error {
 		return sendErr
 	})
 
@@ -148,7 +148,7 @@ func TestMessageTool_Execute_MissingContent(t *testing.T) {
 func TestMessageTool_Execute_NoTargetChannel(t *testing.T) {
 	tool := NewMessageTool()
 
-	tool.SetSendCallback(func(channel, chatID, content string) error {
+	tool.SetSendCallback(func(ctx context.Context, channel, chatID, content string) error {
 		return nil
 	})
 

@@ -182,6 +182,7 @@ type NPCRelationship struct {
 	LastChannel            string   `json:"last_channel,omitempty"`
 	LastChatID             string   `json:"last_chat_id,omitempty"`
 	LastPeerKind           string   `json:"last_peer_kind,omitempty"`
+	LastSessionKey         string   `json:"last_session_key,omitempty"`
 	LastUserMessageAt      string   `json:"last_user_message_at,omitempty"`
 	LastAgentMessageAt     string   `json:"last_agent_message_at,omitempty"`
 	LastProactiveAttemptAt string   `json:"last_proactive_attempt_at,omitempty"`
@@ -372,6 +373,7 @@ func normalizeNPCState(state NPCState) NPCState {
 		rel.LastChannel = normalizeRelationshipChannel(rel.LastChannel)
 		rel.LastChatID = strings.TrimSpace(rel.LastChatID)
 		rel.LastPeerKind = normalizeRelationshipPeerKind(rel.LastPeerKind)
+		rel.LastSessionKey = strings.TrimSpace(rel.LastSessionKey)
 		rel.LastUserMessageAt = strings.TrimSpace(rel.LastUserMessageAt)
 		rel.LastAgentMessageAt = strings.TrimSpace(rel.LastAgentMessageAt)
 		rel.LastProactiveAttemptAt = strings.TrimSpace(rel.LastProactiveAttemptAt)
@@ -838,7 +840,7 @@ Output shape:
     "emotion": {"name": "string", "intensity": "low|mid|high", "reason": "string"},
     "location": {"area": "string", "scene": "string", "activity": "string", "start_at": "local datetime text (e.g. 2026-03-05 22:00)", "end_at": "local datetime text (e.g. 2026-03-05 23:30)", "move_reason": "string"},
     "relationships": {
-      "<channel:user_id>": {"affinity": "low|mid|high", "trust": "low|mid|high", "familiarity": "low|mid|high", "last_interaction_at": "RFC3339 timestamp", "last_channel": "string", "last_chat_id": "string", "last_peer_kind": "string", "last_user_message_at": "RFC3339 timestamp", "last_agent_message_at": "RFC3339 timestamp", "last_proactive_attempt_at": "RFC3339 timestamp", "last_proactive_success_at": "RFC3339 timestamp", "notes": "string"}
+      "<channel:user_id>": {"affinity": "low|mid|high", "trust": "low|mid|high", "familiarity": "low|mid|high", "last_interaction_at": "RFC3339 timestamp", "last_channel": "string", "last_chat_id": "string", "last_peer_kind": "string", "last_session_key": "string", "last_user_message_at": "RFC3339 timestamp", "last_agent_message_at": "RFC3339 timestamp", "last_proactive_attempt_at": "RFC3339 timestamp", "last_proactive_success_at": "RFC3339 timestamp", "notes": "string"}
     },
     "habits": ["string"],
     "recent_events": [{"at": "RFC3339", "type": "string", "summary": "string"}]
@@ -856,7 +858,7 @@ Rules:
 - Example: previous_state angry/high cannot become calm in one update; lower intensity first.
 - location tracks off-chat activity and whereabouts; use start_at/end_at as local datetime text when available.
 - If previous_state.location indicates an active outing window (between start_at and end_at), keep the outing location/activity and add a multitasking cue for chatting remotely.
-- Preserve relationship contact/timestamp fields unless the current interaction updates them.
+- Preserve relationship contact/session/timestamp fields unless the current interaction updates them.
 - Ensure relationship key %q exists and is updated.
 - Keep memory_notes concise, deduplicated, and <= %d.
 - Merge/edit existing notes when possible instead of blind append.

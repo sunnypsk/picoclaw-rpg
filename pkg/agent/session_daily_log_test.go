@@ -78,8 +78,26 @@ func TestProcessMessage_NewCommandRotatesSessionAndLogsDailyNotes(t *testing.T) 
 	if err != nil {
 		t.Fatalf("/new failed: %v", err)
 	}
-	if !strings.Contains(resp, "Started a new session") {
+	const newSessionPrefix = "Started a new session. New session key: "
+	if !strings.HasPrefix(resp, newSessionPrefix) {
 		t.Fatalf("unexpected /new response: %q", resp)
+	}
+	newSessionKey := strings.TrimSpace(strings.TrimPrefix(resp, newSessionPrefix))
+	if newSessionKey == "" {
+		t.Fatalf("missing rotated session key in response: %q", resp)
+	}
+
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("default agent is nil")
+	}
+	state, err := agent.StateStore.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState() error: %v", err)
+	}
+	rel := state.Relationships["test:u1"]
+	if rel.LastSessionKey != newSessionKey {
+		t.Fatalf("relationship LastSessionKey = %q, want %q", rel.LastSessionKey, newSessionKey)
 	}
 
 	if _, err := al.processMessage(ctx, bus.InboundMessage{

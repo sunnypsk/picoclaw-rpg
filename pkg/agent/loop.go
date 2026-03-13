@@ -51,15 +51,18 @@ type AgentLoop struct {
 
 // processOptions configures how a message is processed
 type processOptions struct {
-	SessionKey      string   // Session identifier for history/context
-	Channel         string   // Target channel for tool execution
-	ChatID          string   // Target chat ID for tool execution
-	UserMessage     string   // User message content (may include prefix)
-	Media           []string // media:// refs from inbound message
-	DefaultResponse string   // Response when LLM returns empty
-	EnableSummary   bool     // Whether to trigger summarization
-	SendResponse    bool     // Whether to send response via bus
-	NoHistory       bool     // If true, don't load session history (for heartbeat)
+	SessionKey        string   // Session identifier for persistence/tool traces
+	ContextSessionKey string   // Optional session identifier to read history/summary from
+	Channel           string   // Target channel for tool execution
+	ChatID            string   // Target chat ID for tool execution
+	UserMessage       string   // User message content (may include prefix)
+	AutoRecallQuery   string   // Optional auto-recall query override
+	Media             []string // media:// refs from inbound message
+	DefaultResponse   string   // Response when LLM returns empty
+	EnableSummary     bool     // Whether to trigger summarization
+	SendResponse      bool     // Whether to send response via bus
+	NoHistory         bool     // If true, don't load session history (for heartbeat)
+	PersistSession    bool     // Whether to persist conversation/tool traces to SessionKey
 }
 
 const defaultResponse = "I've completed processing but have no response to give. Increase `max_tool_iterations` in config.json."
@@ -154,7 +157,7 @@ func registerSharedToolsForAgent(
 
 	// Message tool
 	messageTool := tools.NewMessageTool()
-	messageTool.SetSendCallback(func(channel, chatID, content string) error {
+	messageTool.SetSendCallback(func(ctx context.Context, channel, chatID, content string) error {
 		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer pubCancel()
 		err := msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
@@ -164,6 +167,9 @@ func registerSharedToolsForAgent(
 		})
 		if err == nil {
 			recordOutboundMessageForRegistry(registry, agentID, channel, chatID, false)
+			if capture := proactiveOutputCaptureFromContext(ctx); capture != nil {
+				capture.Add(content)
+			}
 		}
 		return err
 	})
@@ -453,6 +459,7 @@ func (al *AgentLoop) ProcessHeartbeat(
 		EnableSummary:   false,
 		SendResponse:    false,
 		NoHistory:       true, // Don't load session history for heartbeat
+		PersistSession:  true,
 	})
 	if err != nil {
 		return "", err
@@ -533,7 +540,11 @@ func (al *AgentLoop) processMessageCore(
 	if agent == nil {
 		return "", nil, fmt.Errorf("no agent available for route (agent_id=%s)", route.AgentID)
 	}
-	if err := prepareRelationshipTarget(agent, msg); err != nil {
+
+	// Use routed session key, but honor pre-set agent-scoped keys (for ProcessDirect/cron)
+	sessionKey := al.resolveSessionKey(route, msg)
+
+	if err := prepareRelationshipTarget(agent, msg, sessionKey); err != nil {
 		logger.WarnCF("agent", "Failed to prepare relationship target", map[string]any{
 			"agent_id": agent.ID,
 			"channel":  msg.Channel,
@@ -556,9 +567,6 @@ func (al *AgentLoop) processMessageCore(
 			resetter.ResetSentInRound()
 		}
 	}
-
-	// Use routed session key, but honor pre-set agent-scoped keys (for ProcessDirect/cron)
-	sessionKey := al.resolveSessionKey(route, msg)
 
 	trimmedContent := strings.TrimSpace(msg.Content)
 	parts := strings.Fields(trimmedContent)
@@ -593,6 +601,7 @@ func (al *AgentLoop) processMessageCore(
 		DefaultResponse: defaultResponse,
 		EnableSummary:   true,
 		SendResponse:    sendResponse,
+		PersistSession:  true,
 	})
 	if err == nil {
 		updateCtx := context.Background()
@@ -666,6 +675,7 @@ func (al *AgentLoop) processSystemMessage(
 		DefaultResponse: "Background task completed.",
 		EnableSummary:   false,
 		SendResponse:    true,
+		PersistSession:  true,
 	})
 }
 
@@ -693,10 +703,14 @@ func (al *AgentLoop) runAgentLoop(
 	// 1. Build messages (skip history for heartbeat)
 	var history []providers.Message
 	var summary string
+	contextSessionKey := opts.SessionKey
+	if strings.TrimSpace(opts.ContextSessionKey) != "" {
+		contextSessionKey = strings.TrimSpace(opts.ContextSessionKey)
+	}
 	if !opts.NoHistory {
-		history = agent.Sessions.GetHistory(opts.SessionKey)
-		summary = agent.Sessions.GetSummary(opts.SessionKey)
-		if len(history) == 0 {
+		history = agent.Sessions.GetHistory(contextSessionKey)
+		summary = agent.Sessions.GetSummary(contextSessionKey)
+		if len(history) == 0 && opts.PersistSession && contextSessionKey == opts.SessionKey {
 			al.appendDailyLogJSONL(
 				agent,
 				opts.SessionKey,
@@ -715,14 +729,20 @@ func (al *AgentLoop) runAgentLoop(
 		opts.Channel,
 		opts.ChatID,
 	)
-	messages = injectAutoRecallHints(messages, al.buildAutoRecallHints(ctx, agent, opts.UserMessage))
+	autoRecallQuery := opts.UserMessage
+	if strings.TrimSpace(opts.AutoRecallQuery) != "" {
+		autoRecallQuery = opts.AutoRecallQuery
+	}
+	messages = injectAutoRecallHints(messages, al.buildAutoRecallHints(ctx, agent, autoRecallQuery))
 
 	// Resolve media:// refs to base64 data URLs (streaming)
 	maxMediaSize := al.cfg.Agents.Defaults.GetMaxMediaSize()
 	messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize)
 
 	// 2. Save user message to session
-	agent.Sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
+	if opts.PersistSession {
+		agent.Sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
+	}
 
 	// 3. Run LLM iteration loop
 	finalContent, iteration, err := al.runLLMIteration(ctx, agent, messages, opts)
@@ -739,11 +759,13 @@ func (al *AgentLoop) runAgentLoop(
 	}
 
 	// 5. Save final assistant message to session
-	agent.Sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
-	agent.Sessions.Save(opts.SessionKey)
+	if opts.PersistSession {
+		agent.Sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
+		agent.Sessions.Save(opts.SessionKey)
+	}
 
 	// 6. Optional: summarization
-	if opts.EnableSummary {
+	if opts.EnableSummary && opts.PersistSession {
 		al.maybeSummarize(agent, opts.SessionKey, opts.Channel, opts.ChatID)
 	}
 
@@ -975,6 +997,14 @@ func (al *AgentLoop) runLLMIteration(
 					)
 				}
 
+				if !opts.PersistSession || (strings.TrimSpace(opts.ContextSessionKey) != "" && opts.ContextSessionKey != opts.SessionKey) {
+					logger.WarnCF("agent", "Context window retry skipped for ephemeral/session-split run", map[string]any{
+						"agent_id":    agent.ID,
+						"session_key": opts.SessionKey,
+					})
+					break
+				}
+
 				al.forceCompression(agent, opts.SessionKey, opts.Channel, opts.ChatID)
 				newHistory := agent.Sessions.GetHistory(opts.SessionKey)
 				newSummary := agent.Sessions.GetSummary(opts.SessionKey)
@@ -1075,7 +1105,9 @@ func (al *AgentLoop) runLLMIteration(
 		messages = append(messages, assistantMsg)
 
 		// Save assistant message with tool calls to session
-		agent.Sessions.AddFullMessage(opts.SessionKey, assistantMsg)
+		if opts.PersistSession {
+			agent.Sessions.AddFullMessage(opts.SessionKey, assistantMsg)
+		}
 
 		// Execute tool calls
 		for _, tc := range normalizedToolCalls {
@@ -1159,7 +1191,9 @@ func (al *AgentLoop) runLLMIteration(
 			messages = append(messages, toolResultMsg)
 
 			// Save tool result message to session
-			agent.Sessions.AddFullMessage(opts.SessionKey, toolResultMsg)
+			if opts.PersistSession {
+				agent.Sessions.AddFullMessage(opts.SessionKey, toolResultMsg)
+			}
 		}
 	}
 

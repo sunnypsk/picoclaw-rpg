@@ -146,6 +146,15 @@ func (al *AgentLoop) handleNewSessionCommand(
 	newSessionKey := buildRotatedSessionKey(currentSessionKey)
 	al.setSessionRotation(rotationAgentID, currentSessionKey, newSessionKey)
 	al.appendDailyLogJSONL(agent, newSessionKey, msg.Channel, msg.ChatID, dailyLogEventSessionStarted, nil)
+	if err := recordRelationshipSessionKey(agent, msg, newSessionKey); err != nil {
+		logger.WarnCF("agent", "Failed to record rotated relationship session key", map[string]any{
+			"agent_id":    agent.ID,
+			"session_key": newSessionKey,
+			"channel":     msg.Channel,
+			"sender":      msg.SenderID,
+			"error":       err.Error(),
+		})
+	}
 
 	return fmt.Sprintf("Started a new session. New session key: %s", newSessionKey), nil
 }
