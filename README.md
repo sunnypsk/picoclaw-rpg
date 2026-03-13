@@ -763,6 +763,20 @@ PicoClaw stores data in your configured workspace (default: `~/.picoclaw/workspa
 └── (no USER.md)      # User profile moved to memory/MEMORY.md
 ```
 
+For agent workspaces created next to the default workspace (for example `workspace-<agent-id>`), PicoClaw manages
+these files as syncable defaults:
+
+- `AGENTS.md`
+- `SOUL.md`
+- `IDENTITY.md`
+- `skills/**`
+
+When one of those files still matches the last synced copy, restarting PicoClaw will refresh it from
+`agents.defaults.workspace`. If you customize one of those files inside an agent workspace, PicoClaw preserves your
+local edit and stops auto-overwriting that file.
+
+`STATE.md` and `memory/MEMORY.md` are different: they are only created when missing and are never auto-overwritten.
+
 ### Session Rotation and Daily Logs
 
 - Use `/new` in chat to rotate to a fresh session key while keeping the previous session file in `sessions/`.
@@ -882,6 +896,22 @@ Behavior:
 - Each auto-created agent gets its own workspace path next to the configured default workspace (for example `~/.picoclaw/workspace-<agent-id>`).
 - Explicit `bindings` still take precedence over auto-provision routing.
 - If `agents.defaults.persona_preset` is set (for example `momonga`), seeded `SOUL.md` and `IDENTITY.md` use the preset content for new auto-workspaces.
+- Managed defaults in existing auto-workspaces are refreshed on startup when unchanged: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, and `skills/**`.
+- Local edits to those managed files are preserved instead of being overwritten.
+- `STATE.md` and `memory/MEMORY.md` are seed-only and are never auto-overwritten.
+- Legacy workspaces created before this sync metadata existed need a one-time backfill: `picoclaw agent sync-defaults --force-legacy`.
+
+#### Sync Managed Defaults
+
+Use this command to backfill or inspect managed default files across existing agent workspaces:
+
+```bash
+picoclaw agent sync-defaults --dry-run
+picoclaw agent sync-defaults --force-legacy
+```
+
+- `--dry-run` shows what would change without writing files.
+- `--force-legacy` updates older workspaces that predate sync metadata and adopts the current defaults as the new managed baseline.
 
 #### Protected Tools
 
@@ -1443,6 +1473,7 @@ picoclaw agent -m "Hello"
 | `picoclaw onboard`        | Initialize config & workspace |
 | `picoclaw agent -m "..."` | Chat with the agent           |
 | `picoclaw agent`          | Interactive chat mode         |
+| `picoclaw agent sync-defaults` | Sync managed default workspace files |
 | `picoclaw gateway`        | Start the gateway             |
 | `picoclaw status`         | Show status                   |
 | `picoclaw cron list`      | List all scheduled jobs       |
