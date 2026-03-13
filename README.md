@@ -766,6 +766,7 @@ PicoClaw stores data in your configured workspace (default: `~/.picoclaw/workspa
 ### Session Rotation and Daily Logs
 
 - Use `/new` in chat to rotate to a fresh session key while keeping the previous session file in `sessions/`.
+- `/new` also updates the relationship's active session target, so future proactive outreach and follow-up replies continue in the new session.
 - Daily logs are appended to `memory/YYYYMM/YYYYMMDD.md` in JSONL format (one JSON object per line).
 - Flush events:
   - `session_started`
@@ -1043,7 +1044,7 @@ The subagent has access to tools (message, web_search, etc.) and can communicate
       "initial_probability": 0.15,
       "probability_ramp_per_heartbeat": 0.1,
       "max_probability": 0.65,
-      "cooldown_minutes": 360
+      "cooldown_minutes": 240
     }
   }
 }
@@ -1066,6 +1067,8 @@ The subagent has access to tools (message, web_search, etc.) and can communicate
 * Uses the existing heartbeat tick to evaluate whether an agent should proactively message a chat
 * Lower relationship tolerance means closer relationships become eligible sooner
 * The model still decides whether to stay silent, even after the probability gate passes
+* Proactive generation reads the same routed session history and summary as a normal reply so it can stay aligned with the current conversation
+* Only the visible proactive assistant message is appended to that routed session; internal proactive control prompts and tool traces are kept out of chat history
 * When enabled, a shorter heartbeat interval such as `5`-`10` minutes usually works better than `30`
 
 ### Providers
@@ -1425,7 +1428,7 @@ picoclaw agent -m "Hello"
       "initial_probability": 0.15,
       "probability_ramp_per_heartbeat": 0.1,
       "max_probability": 0.65,
-      "cooldown_minutes": 360
+      "cooldown_minutes": 240
     }
   }
 }
