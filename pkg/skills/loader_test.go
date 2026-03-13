@@ -3,6 +3,7 @@ package skills
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -107,6 +108,13 @@ func TestExtractFrontmatter(t *testing.T) {
 			name:           "classic-mac-line-endings",
 			lineEndingType: "Classic Mac (\\r)",
 			content:        "---\rname: test-skill\rdescription: A test skill\r---\r\r# Skill Content",
+			expectedName:   "test-skill",
+			expectedDesc:   "A test skill",
+		},
+		{
+			name:           "bom-prefixed-frontmatter",
+			lineEndingType: "UTF-8 BOM + Unix (\\n)",
+			content:        "\ufeff---\nname: test-skill\ndescription: A test skill\n---\n\n# Skill Content",
 			expectedName:   "test-skill",
 			expectedDesc:   "A test skill",
 		},
@@ -311,6 +319,12 @@ func TestStripFrontmatter(t *testing.T) {
 			content:         "# Skill Content\n\nSome content here.",
 			expectedContent: "# Skill Content\n\nSome content here.",
 		},
+		{
+			name:            "bom-prefixed-frontmatter",
+			lineEndingType:  "UTF-8 BOM + Unix (\\n)",
+			content:         "\ufeff---\nname: test-skill\ndescription: A test skill\n---\n\n# Skill Content",
+			expectedContent: "# Skill Content",
+		},
 	}
 
 	for _, tc := range testcases {
@@ -341,4 +355,35 @@ func TestSkillRootsTrimsWhitespaceAndDedups(t *testing.T) {
 		global,
 		builtin,
 	}, roots)
+}
+
+func TestCanonicalWorkspaceSkillsHaveRequiredMetadata(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok, "runtime.Caller() should resolve the current test file")
+
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
+	skillsRoot := filepath.Join(repoRoot, "workspace", "skills")
+	entries, err := os.ReadDir(skillsRoot)
+	require.NoError(t, err)
+
+	sl := &SkillsLoader{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		skillPath := filepath.Join(skillsRoot, entry.Name(), "SKILL.md")
+		if _, err := os.Stat(skillPath); err != nil {
+			t.Fatalf("expected sample skill %q to include SKILL.md: %v", entry.Name(), err)
+		}
+
+		metadata := sl.getSkillMetadata(skillPath)
+		require.NotNilf(t, metadata, "expected metadata for %s", skillPath)
+
+		info := SkillInfo{
+			Name:        metadata.Name,
+			Description: metadata.Description,
+		}
+		assert.NoErrorf(t, info.validate(), "sample skill metadata should be valid for %s", skillPath)
+	}
 }

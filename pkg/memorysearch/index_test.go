@@ -108,6 +108,75 @@ func TestIndex_SearchPathPrefixFilter(t *testing.T) {
 	}
 }
 
+func TestIndex_SearchNaturalLanguagePunctuationDoesNotErrorOnMiss(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "MEMORY.md"), []byte("Favorite editor is neovim."), 0o644); err != nil {
+		t.Fatalf("write MEMORY.md: %v", err)
+	}
+
+	idx := NewIndex(tmpDir)
+	results, err := idx.Search(context.Background(), "do you know my name?", 3, "")
+	if err != nil {
+		t.Fatalf("Search() error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no results, got %d", len(results))
+	}
+}
+
+func TestIndex_SearchNaturalLanguagePunctuationStillFindsHits(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "MEMORY.md"), []byte("Favorite editor is neovim."), 0o644); err != nil {
+		t.Fatalf("write MEMORY.md: %v", err)
+	}
+
+	idx := NewIndex(tmpDir)
+	results, err := idx.Search(context.Background(), "favorite editor?", 3, "")
+	if err != nil {
+		t.Fatalf("Search() error: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected search hit")
+	}
+	if results[0].Path != "MEMORY.md" {
+		t.Fatalf("first result path = %q, want %q", results[0].Path, "MEMORY.md")
+	}
+}
+
+func TestIndex_QueryCandidatesLockedTreatsSuccessfulMissAsMiss(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctx := context.Background()
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "MEMORY.md"), []byte("Favorite editor is neovim."), 0o644); err != nil {
+		t.Fatalf("write MEMORY.md: %v", err)
+	}
+
+	idx := NewIndex(tmpDir)
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	defer idx.closeLocked()
+
+	if err := idx.ensureDBLocked(ctx); err != nil {
+		t.Fatalf("ensure DB: %v", err)
+	}
+	if err := idx.syncLocked(ctx); err != nil {
+		t.Fatalf("sync DB: %v", err)
+	}
+
+	results, err := idx.queryCandidatesLocked(ctx, "memory_fts_u", []string{
+		"do you know my name?",
+		`"missing"`,
+	}, 3, "")
+	if err != nil {
+		t.Fatalf("queryCandidatesLocked() error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no results, got %d", len(results))
+	}
+}
+
 func TestIndex_UpsertDocRollbackPreservesMetaOnFTSFailure(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "memory-search-tx-*")
 	if err != nil {

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -127,7 +126,12 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 				info.Name = metadata.Name
 			}
 			if err := info.validate(); err != nil {
-				slog.Warn("invalid skill from "+source, "name", info.Name, "error", err)
+				logger.WarnCF("skills", "Invalid skill from "+source, map[string]any{
+					"name":       info.Name,
+					"source":     source,
+					"skill_path": skillFile,
+					"error":      err.Error(),
+				})
 				continue
 			}
 			if seen[info.Name] {
@@ -284,6 +288,7 @@ func (sl *SkillsLoader) parseSimpleYAML(content string) map[string]string {
 
 func (sl *SkillsLoader) extractFrontmatter(content string) string {
 	// Support \n (Unix), \r\n (Windows), and \r (classic Mac) line endings for frontmatter blocks
+	content = trimBOMPrefix(content)
 	match := reFrontmatter.FindStringSubmatch(content)
 	if len(match) > 1 {
 		return match[1]
@@ -292,7 +297,12 @@ func (sl *SkillsLoader) extractFrontmatter(content string) string {
 }
 
 func (sl *SkillsLoader) stripFrontmatter(content string) string {
+	content = trimBOMPrefix(content)
 	return reStripFrontmatter.ReplaceAllString(content, "")
+}
+
+func trimBOMPrefix(content string) string {
+	return strings.TrimPrefix(content, "\uFEFF")
 }
 
 func escapeXML(s string) string {

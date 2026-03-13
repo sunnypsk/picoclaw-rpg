@@ -142,6 +142,7 @@ func TestSyncDefaultsCommandCopiesManagedSkillIntoExistingWorkspace(t *testing.T
 		t.Fatalf("SaveConfig: %v", err)
 	}
 	t.Setenv("PICOCLAW_CONFIG", configPath)
+	wantSkill := embeddedCommandWorkspaceFile(t, "skills/edge-tts/SKILL.md")
 
 	cmd := newSyncDefaultsCommand()
 	cmd.SetOut(&bytes.Buffer{})
@@ -153,7 +154,7 @@ func TestSyncDefaultsCommandCopiesManagedSkillIntoExistingWorkspace(t *testing.T
 	assertCommandFileContent(
 		t,
 		filepath.Join(legacyWorkspace, "skills", "edge-tts", "SKILL.md"),
-		"---\nname: edge-tts\ndescription: edge tts\n---\n# Edge TTS\n",
+		wantSkill,
 	)
 }
 

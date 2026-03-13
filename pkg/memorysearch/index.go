@@ -435,6 +435,16 @@ func (i *Index) queryTableLocked(
 	limit int,
 	pathPrefix string,
 ) ([]Result, error) {
+	return i.queryCandidatesLocked(ctx, table, buildMatchCandidates(query), limit, pathPrefix)
+}
+
+func (i *Index) queryCandidatesLocked(
+	ctx context.Context,
+	table string,
+	candidates []string,
+	limit int,
+	pathPrefix string,
+) ([]Result, error) {
 	if limit <= 0 {
 		limit = 5
 	}
@@ -445,7 +455,7 @@ func (i *Index) queryTableLocked(
 	}
 
 	var lastErr error
-	candidates := buildMatchCandidates(query)
+	var hadSuccessfulCandidate bool
 	for _, matchQuery := range candidates {
 		sqlText := fmt.Sprintf(
 			`SELECT path, snippet(%[1]s, 1, '[', ']', ' … ', 24) AS snippet, bm25(%[1]s) AS rank
@@ -492,11 +502,15 @@ func (i *Index) queryTableLocked(
 			continue
 		}
 		_ = rows.Close()
+		hadSuccessfulCandidate = true
 		if len(results) > 0 {
 			return results, nil
 		}
 	}
 
+	if hadSuccessfulCandidate {
+		return []Result{}, nil
+	}
 	if lastErr != nil {
 		return nil, lastErr
 	}
@@ -530,7 +544,9 @@ func buildMatchCandidates(query string) []string {
 	}
 
 	candidates := make([]string, 0, 3)
-	candidates = addCandidate(candidates, trimmed)
+	if isSafeRawMatchCandidate(trimmed) {
+		candidates = addCandidate(candidates, trimmed)
+	}
 
 	quoted := `"` + strings.ReplaceAll(trimmed, `"`, `""`) + `"`
 	candidates = addCandidate(candidates, quoted)
@@ -556,6 +572,16 @@ func buildMatchCandidates(query string) []string {
 	}
 
 	return candidates
+}
+
+func isSafeRawMatchCandidate(query string) bool {
+	for _, r := range query {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsSpace(r) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func previewForLog(value string, maxRunes int) string {
