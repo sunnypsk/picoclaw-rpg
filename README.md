@@ -1449,7 +1449,7 @@ picoclaw agent -m "Hello"
 
 | Command | Description |
 | --- | --- |
-| `/new` | Rotate to a new chat session key and keep previous session history |
+| `/new` | Rotate to a new chat session key, keep previous session history, and make the new session the active target for future replies/proactive outreach |
 
 ### Scheduled Tasks / Reminders
 
@@ -1527,3 +1527,4 @@ This happens when another instance of the bot is running. Make sure only one `pi
 | **Brave Search** | 2000 queries/month  | Web search functionality              |
 | **Groq**         | Free tier available | Fast inference (Llama, Mixtral)       |
 | **Cerebras**     | Free tier available | Fast inference (Llama, Qwen, etc.)    |
+
