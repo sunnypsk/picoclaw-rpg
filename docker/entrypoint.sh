@@ -37,6 +37,22 @@ seed_builtin_skills_if_empty() {
     rm -rf "$tmp_root"
 }
 
+sync_managed_defaults() {
+    if [ "${PICOCLAW_AUTO_SYNC_DEFAULTS:-1}" = "0" ]; then
+        return
+    fi
+
+    if [ ! -f "$CONFIG_PATH" ]; then
+        return
+    fi
+
+    if /usr/local/bin/picoclaw agent sync-defaults --force-legacy >/dev/null 2>&1; then
+        echo "Synced managed workspace defaults"
+    else
+        echo "Warning: failed to sync managed workspace defaults" >&2
+    fi
+}
+
 PICOCLAW_HOME_DIR="$(picoclaw_home)"
 CONFIG_PATH="${PICOCLAW_CONFIG:-$PICOCLAW_HOME_DIR/config.json}"
 WORKSPACE_DIR="${PICOCLAW_WORKSPACE:-$PICOCLAW_HOME_DIR/workspace}"
@@ -53,6 +69,7 @@ if [ ! -d "$WORKSPACE_DIR" ] && [ ! -f "$CONFIG_PATH" ]; then
 fi
 
 seed_builtin_skills_if_empty "$WORKSPACE_DIR"
+sync_managed_defaults
 
 if [ "$#" -eq 0 ]; then
     set -- gateway
