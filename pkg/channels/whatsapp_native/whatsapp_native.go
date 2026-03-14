@@ -350,6 +350,37 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 	if content == "" && evt.Message.ExtendedTextMessage != nil {
 		content = evt.Message.ExtendedTextMessage.GetText()
 	}
+
+	// Media captions in WhatsApp are carried on the media message payload
+	// rather than the top-level conversation text. Prefer those captions when
+	// present so image/video/document + caption messages stay intact.
+	if content == "" {
+		switch {
+		case evt.Message.GetImageMessage() != nil:
+			content = evt.Message.GetImageMessage().GetCaption()
+		case evt.Message.GetVideoMessage() != nil:
+			content = evt.Message.GetVideoMessage().GetCaption()
+		case evt.Message.GetDocumentMessage() != nil:
+			content = evt.Message.GetDocumentMessage().GetCaption()
+		}
+	}
+
+	// Keep non-text interactions visible to the agent so stickers/media can
+	// still trigger a response in chat.
+	if content == "" {
+		switch {
+		case evt.Message.GetStickerMessage() != nil:
+			content = "[Sticker]"
+		case evt.Message.GetImageMessage() != nil:
+			content = "[Image]"
+		case evt.Message.GetVideoMessage() != nil:
+			content = "[Video]"
+		case evt.Message.GetAudioMessage() != nil:
+			content = "[Audio]"
+		case evt.Message.GetDocumentMessage() != nil:
+			content = "[Document]"
+		}
+	}
 	content = utils.SanitizeMessageContent(content)
 
 	if content == "" {
