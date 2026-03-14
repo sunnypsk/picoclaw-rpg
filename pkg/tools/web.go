@@ -396,24 +396,26 @@ func (p *PerplexitySearchProvider) Search(ctx context.Context, query string, cou
 }
 
 type WebSearchTool struct {
-	provider   SearchProvider
-	maxResults int
+	provider                SearchProvider
+	maxResults              int
+	hideIntermediateResults bool
 }
 
 type WebSearchToolOptions struct {
-	BraveAPIKey          string
-	BraveMaxResults      int
-	BraveEnabled         bool
-	TavilyAPIKey         string
-	TavilyBaseURL        string
-	TavilyMaxResults     int
-	TavilyEnabled        bool
-	DuckDuckGoMaxResults int
-	DuckDuckGoEnabled    bool
-	PerplexityAPIKey     string
-	PerplexityMaxResults int
-	PerplexityEnabled    bool
-	Proxy                string
+	BraveAPIKey             string
+	BraveMaxResults         int
+	BraveEnabled            bool
+	TavilyAPIKey            string
+	TavilyBaseURL           string
+	TavilyMaxResults        int
+	TavilyEnabled           bool
+	DuckDuckGoMaxResults    int
+	DuckDuckGoEnabled       bool
+	PerplexityAPIKey        string
+	PerplexityMaxResults    int
+	PerplexityEnabled       bool
+	HideIntermediateResults bool
+	Proxy                   string
 }
 
 func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
@@ -467,8 +469,9 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 	}
 
 	return &WebSearchTool{
-		provider:   provider,
-		maxResults: maxResults,
+		provider:                provider,
+		maxResults:              maxResults,
+		hideIntermediateResults: opts.HideIntermediateResults,
 	}, nil
 }
 
@@ -517,25 +520,31 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult(fmt.Sprintf("search failed: %v", err))
 	}
 
+	forUser := result
+	if t.hideIntermediateResults {
+		forUser = ""
+	}
+
 	return &ToolResult{
 		ForLLM:  result,
-		ForUser: result,
+		ForUser: forUser,
 	}
 }
 
 type WebFetchTool struct {
-	maxChars        int
-	proxy           string
-	client          *http.Client
-	fetchLimitBytes int64
+	maxChars                int
+	proxy                   string
+	client                  *http.Client
+	fetchLimitBytes         int64
+	hideIntermediateResults bool
 }
 
 func NewWebFetchTool(maxChars int, fetchLimitBytes int64) (*WebFetchTool, error) {
 	// createHTTPClient cannot fail with an empty proxy string.
-	return NewWebFetchToolWithProxy(maxChars, "", fetchLimitBytes)
+	return NewWebFetchToolWithProxy(maxChars, "", fetchLimitBytes, false)
 }
 
-func NewWebFetchToolWithProxy(maxChars int, proxy string, fetchLimitBytes int64) (*WebFetchTool, error) {
+func NewWebFetchToolWithProxy(maxChars int, proxy string, fetchLimitBytes int64, hideIntermediateResults bool) (*WebFetchTool, error) {
 	if maxChars <= 0 {
 		maxChars = defaultMaxChars
 	}
@@ -553,10 +562,11 @@ func NewWebFetchToolWithProxy(maxChars int, proxy string, fetchLimitBytes int64)
 		fetchLimitBytes = 10 * 1024 * 1024 // Security Fallback
 	}
 	return &WebFetchTool{
-		maxChars:        maxChars,
-		proxy:           proxy,
-		client:          client,
-		fetchLimitBytes: fetchLimitBytes,
+		maxChars:                maxChars,
+		proxy:                   proxy,
+		client:                  client,
+		fetchLimitBytes:         fetchLimitBytes,
+		hideIntermediateResults: hideIntermediateResults,
 	}, nil
 }
 
@@ -676,15 +686,20 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	resultJSON, _ := json.MarshalIndent(result, "", "  ")
 
+	forUser := fmt.Sprintf(
+		"Fetched %d bytes from %s (extractor: %s, truncated: %v)",
+		len(text),
+		urlStr,
+		extractor,
+		truncated,
+	)
+	if t.hideIntermediateResults {
+		forUser = ""
+	}
+
 	return &ToolResult{
-		ForLLM: string(resultJSON),
-		ForUser: fmt.Sprintf(
-			"Fetched %d bytes from %s (extractor: %s, truncated: %v)",
-			len(text),
-			urlStr,
-			extractor,
-			truncated,
-		),
+		ForLLM:  string(resultJSON),
+		ForUser: forUser,
 	}
 }
 

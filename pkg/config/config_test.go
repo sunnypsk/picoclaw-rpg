@@ -353,6 +353,9 @@ func TestDefaultConfig_WebTools(t *testing.T) {
 	if cfg.Tools.Web.DuckDuckGo.MaxResults != 5 {
 		t.Error("Expected DuckDuckGo MaxResults 5, got ", cfg.Tools.Web.DuckDuckGo.MaxResults)
 	}
+	if !cfg.Tools.Web.HideIntermediateResults {
+		t.Error("HideIntermediateResults should be true by default")
+	}
 }
 
 func TestSaveConfig_FilePermissions(t *testing.T) {

@@ -125,26 +125,27 @@ func registerSharedToolsForAgent(
 
 	// Web tools
 	searchTool, err := tools.NewWebSearchTool(tools.WebSearchToolOptions{
-		BraveAPIKey:          cfg.Tools.Web.Brave.APIKey,
-		BraveMaxResults:      cfg.Tools.Web.Brave.MaxResults,
-		BraveEnabled:         cfg.Tools.Web.Brave.Enabled,
-		TavilyAPIKey:         cfg.Tools.Web.Tavily.APIKey,
-		TavilyBaseURL:        cfg.Tools.Web.Tavily.BaseURL,
-		TavilyMaxResults:     cfg.Tools.Web.Tavily.MaxResults,
-		TavilyEnabled:        cfg.Tools.Web.Tavily.Enabled,
-		DuckDuckGoMaxResults: cfg.Tools.Web.DuckDuckGo.MaxResults,
-		DuckDuckGoEnabled:    cfg.Tools.Web.DuckDuckGo.Enabled,
-		PerplexityAPIKey:     cfg.Tools.Web.Perplexity.APIKey,
-		PerplexityMaxResults: cfg.Tools.Web.Perplexity.MaxResults,
-		PerplexityEnabled:    cfg.Tools.Web.Perplexity.Enabled,
-		Proxy:                cfg.Tools.Web.Proxy,
+		BraveAPIKey:             cfg.Tools.Web.Brave.APIKey,
+		BraveMaxResults:         cfg.Tools.Web.Brave.MaxResults,
+		BraveEnabled:            cfg.Tools.Web.Brave.Enabled,
+		TavilyAPIKey:            cfg.Tools.Web.Tavily.APIKey,
+		TavilyBaseURL:           cfg.Tools.Web.Tavily.BaseURL,
+		TavilyMaxResults:        cfg.Tools.Web.Tavily.MaxResults,
+		TavilyEnabled:           cfg.Tools.Web.Tavily.Enabled,
+		DuckDuckGoMaxResults:    cfg.Tools.Web.DuckDuckGo.MaxResults,
+		DuckDuckGoEnabled:       cfg.Tools.Web.DuckDuckGo.Enabled,
+		PerplexityAPIKey:        cfg.Tools.Web.Perplexity.APIKey,
+		PerplexityMaxResults:    cfg.Tools.Web.Perplexity.MaxResults,
+		PerplexityEnabled:       cfg.Tools.Web.Perplexity.Enabled,
+		HideIntermediateResults: cfg.Tools.Web.HideIntermediateResults,
+		Proxy:                   cfg.Tools.Web.Proxy,
 	})
 	if err != nil {
 		logger.ErrorCF("agent", "Failed to create web search tool", map[string]any{"error": err.Error()})
 	} else if searchTool != nil {
 		agent.Tools.Register(searchTool)
 	}
-	fetchTool, err := tools.NewWebFetchToolWithProxy(50000, cfg.Tools.Web.Proxy, cfg.Tools.Web.FetchLimitBytes)
+	fetchTool, err := tools.NewWebFetchToolWithProxy(50000, cfg.Tools.Web.Proxy, cfg.Tools.Web.FetchLimitBytes, cfg.Tools.Web.HideIntermediateResults)
 	if err != nil {
 		logger.ErrorCF("agent", "Failed to create web fetch tool", map[string]any{"error": err.Error()})
 	} else {

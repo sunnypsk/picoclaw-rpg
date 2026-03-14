@@ -306,7 +306,8 @@ picoclaw onboard
       "duckduckgo": {
         "enabled": true,
         "max_results": 5
-      }
+      },
+      "hide_intermediate_results": true
     }
   }
 }
@@ -1520,6 +1521,10 @@ This is normal if you haven't configured a search API key yet. PicoClaw will pro
 
 To enable web search:
 
+
+When `tools.web.hide_intermediate_results` is `true`, web tools still return full `ForLLM` content for reasoning, but their intermediate outputs are hidden from direct user messages.
+Use this if you want cleaner chat responses while preserving tool context for the model.
+
 1. **Option 1 (Recommended)**: Get a free API key at [https://brave.com/search/api](https://brave.com/search/api) (2000 free queries/month) for the best results.
 2. **Option 2 (No Credit Card)**: If you don't have a key, we automatically fall back to **DuckDuckGo** (no key required).
 
@@ -1537,7 +1542,8 @@ Add the key to `~/.picoclaw/config.json` if using Brave:
       "duckduckgo": {
         "enabled": true,
         "max_results": 5
-      }
+      },
+      "hide_intermediate_results": true
     }
   }
 }

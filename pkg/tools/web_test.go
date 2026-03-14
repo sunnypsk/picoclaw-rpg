@@ -16,6 +16,30 @@ import (
 
 const testFetchLimit = int64(10 * 1024 * 1024)
 
+type stubSearchProvider struct {
+	output string
+}
+
+func (s *stubSearchProvider) Search(_ context.Context, _ string, _ int) (string, error) {
+	return s.output, nil
+}
+
+func TestWebSearchTool_HideIntermediateResultsSuppressesForUser(t *testing.T) {
+	tool := &WebSearchTool{
+		provider:                &stubSearchProvider{output: "search output"},
+		maxResults:              5,
+		hideIntermediateResults: true,
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{"query": "x"})
+	if result.ForUser != "" {
+		t.Fatalf("ForUser = %q, want empty", result.ForUser)
+	}
+	if result.ForLLM != "search output" {
+		t.Fatalf("ForLLM = %q, want %q", result.ForLLM, "search output")
+	}
+}
+
 // TestWebTool_WebFetch_Success verifies successful URL fetching
 func TestWebTool_WebFetch_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -528,7 +552,7 @@ func TestCreateHTTPClient_ProxyFromEnvironmentWhenConfigEmpty(t *testing.T) {
 }
 
 func TestNewWebFetchToolWithProxy(t *testing.T) {
-	tool, err := NewWebFetchToolWithProxy(1024, "http://127.0.0.1:7890", testFetchLimit)
+	tool, err := NewWebFetchToolWithProxy(1024, "http://127.0.0.1:7890", testFetchLimit, false)
 	if err != nil {
 		logger.ErrorCF("agent", "Failed to create web fetch tool", map[string]any{"error": err.Error()})
 	} else if tool.maxChars != 1024 {
@@ -539,7 +563,7 @@ func TestNewWebFetchToolWithProxy(t *testing.T) {
 		t.Fatalf("proxy = %q, want %q", tool.proxy, "http://127.0.0.1:7890")
 	}
 
-	tool, err = NewWebFetchToolWithProxy(0, "http://127.0.0.1:7890", testFetchLimit)
+	tool, err = NewWebFetchToolWithProxy(0, "http://127.0.0.1:7890", testFetchLimit, false)
 	if err != nil {
 		logger.ErrorCF("agent", "Failed to create web fetch tool", map[string]any{"error": err.Error()})
 	}
@@ -679,5 +703,49 @@ func TestWebTool_TavilySearch_Success(t *testing.T) {
 	// Should mention via Tavily
 	if !strings.Contains(result.ForUser, "via Tavily") {
 		t.Errorf("Expected 'via Tavily' in output, got: %s", result.ForUser)
+	}
+}
+
+func TestWebTools_HideIntermediateResults(t *testing.T) {
+	searchTool, err := NewWebSearchTool(WebSearchToolOptions{
+		DuckDuckGoEnabled:       true,
+		DuckDuckGoMaxResults:    1,
+		HideIntermediateResults: true,
+	})
+	if err != nil {
+		t.Fatalf("NewWebSearchTool() error: %v", err)
+	}
+	if !searchTool.hideIntermediateResults {
+		t.Fatalf("expected hideIntermediateResults=true")
+	}
+
+	fetchTool, err := NewWebFetchToolWithProxy(1024, "", testFetchLimit, true)
+	if err != nil {
+		t.Fatalf("NewWebFetchToolWithProxy() error: %v", err)
+	}
+	if !fetchTool.hideIntermediateResults {
+		t.Fatalf("expected hideIntermediateResults=true")
+	}
+}
+
+func TestWebFetchTool_HideIntermediateResultsSuppressesForUser(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("hello"))
+	}))
+	defer server.Close()
+
+	tool, err := NewWebFetchToolWithProxy(50000, "", testFetchLimit, true)
+	if err != nil {
+		t.Fatalf("NewWebFetchToolWithProxy() error: %v", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{"url": server.URL})
+	if result.ForUser != "" {
+		t.Fatalf("ForUser = %q, want empty", result.ForUser)
+	}
+	if !strings.Contains(result.ForLLM, "hello") {
+		t.Fatalf("ForLLM missing content: %s", result.ForLLM)
 	}
 }
