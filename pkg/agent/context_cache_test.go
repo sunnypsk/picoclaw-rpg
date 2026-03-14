@@ -148,6 +148,12 @@ func TestSystemPromptIncludesSoftMemoryAndStateGuidance(t *testing.T) {
 	if !strings.Contains(prompt, "summarize older content") {
 		t.Fatal("system prompt should instruct agents to summarize older content when trimming")
 	}
+	if !strings.Contains(prompt, "1-3 short sentences") {
+		t.Fatal("system prompt should enforce short IM-style replies")
+	}
+	if !strings.Contains(prompt, "avoid repetitive closing templates") {
+		t.Fatal("system prompt should discourage repetitive closing templates")
+	}
 }
 
 // TestMtimeAutoInvalidation verifies that the cache detects source file changes
