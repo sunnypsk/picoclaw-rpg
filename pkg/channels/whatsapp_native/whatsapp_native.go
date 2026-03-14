@@ -443,7 +443,7 @@ func (c *WhatsAppNativeChannel) extractIncomingMedia(msg *waE2E.Message) []strin
 	paths := make([]string, 0, 1)
 
 	if image := msg.GetImageMessage(); image != nil {
-		if p, err := c.downloadIncomingMedia(client, image, image.GetMimetype(), "wa-image"); err == nil {
+		if p, err := c.downloadIncomingMedia(c.runCtx, client, image, image.GetMimetype(), "wa-image"); err == nil {
 			paths = append(paths, p)
 		} else {
 			logger.WarnCF("whatsapp", "Failed to download incoming image", map[string]any{"error": err.Error()})
@@ -451,7 +451,7 @@ func (c *WhatsAppNativeChannel) extractIncomingMedia(msg *waE2E.Message) []strin
 	}
 
 	if sticker := msg.GetStickerMessage(); sticker != nil {
-		if p, err := c.downloadIncomingMedia(client, sticker, sticker.GetMimetype(), "wa-sticker"); err == nil {
+		if p, err := c.downloadIncomingMedia(c.runCtx, client, sticker, sticker.GetMimetype(), "wa-sticker"); err == nil {
 			paths = append(paths, p)
 		} else {
 			logger.WarnCF("whatsapp", "Failed to download incoming sticker", map[string]any{"error": err.Error()})
@@ -462,12 +462,17 @@ func (c *WhatsAppNativeChannel) extractIncomingMedia(msg *waE2E.Message) []strin
 }
 
 func (c *WhatsAppNativeChannel) downloadIncomingMedia(
+	ctx context.Context,
 	client *whatsmeow.Client,
 	media whatsmeow.DownloadableMessage,
 	mimeType string,
 	prefix string,
 ) (string, error) {
-	data, err := client.Download(media)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	data, err := client.Download(ctx, media)
 	if err != nil {
 		return "", err
 	}
