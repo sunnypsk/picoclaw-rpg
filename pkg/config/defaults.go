@@ -335,8 +335,9 @@ func DefaultConfig() *Config {
 				Interval: 5,
 			},
 			Web: WebToolsConfig{
-				Proxy:           "",
-				FetchLimitBytes: 10 * 1024 * 1024, // 10MB by default
+				HideIntermediateResults: true,
+				Proxy:                   "",
+				FetchLimitBytes:         10 * 1024 * 1024, // 10MB by default
 				Brave: BraveConfig{
 					Enabled:    false,
 					APIKey:     "",

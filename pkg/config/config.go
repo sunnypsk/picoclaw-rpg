@@ -630,6 +630,9 @@ type WebToolsConfig struct {
 	Tavily     TavilyConfig     `json:"tavily"`
 	DuckDuckGo DuckDuckGoConfig `json:"duckduckgo"`
 	Perplexity PerplexityConfig `json:"perplexity"`
+	// HideIntermediateResults controls whether web tool execution details are hidden from direct user output.
+	// Results are always preserved in ForLLM context.
+	HideIntermediateResults bool `json:"hide_intermediate_results,omitempty" env:"PICOCLAW_TOOLS_WEB_HIDE_INTERMEDIATE_RESULTS"`
 	// Proxy is an optional proxy URL for web tools (http/https/socks5/socks5h).
 	// For authenticated proxies, prefer HTTP_PROXY/HTTPS_PROXY env vars instead of embedding credentials in config.
 	Proxy           string `json:"proxy,omitempty"             env:"PICOCLAW_TOOLS_WEB_PROXY"`
