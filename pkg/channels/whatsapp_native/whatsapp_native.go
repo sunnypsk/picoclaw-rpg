@@ -46,6 +46,7 @@ const (
 	reconnectMax          = 5 * time.Minute
 	reconnectMultiplier   = 2.0
 	typingRefreshInterval = 4 * time.Second
+	typingStopTimeout     = 2 * time.Second
 )
 
 // WhatsAppNativeChannel implements the WhatsApp channel using whatsmeow (in-process, no external bridge).
@@ -604,7 +605,10 @@ func (c *WhatsAppNativeChannel) StartTyping(ctx context.Context, chatID string) 
 			return
 		}
 		cancel()
-		if err := c.sendChatPresence(context.Background(), chatID, types.ChatPresencePaused); err != nil {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), typingStopTimeout)
+		defer stopCancel()
+
+		if err := c.sendChatPresence(stopCtx, chatID, types.ChatPresencePaused); err != nil {
 			logger.DebugCF("whatsapp", "Failed to send WhatsApp typing paused presence", map[string]any{
 				"chat_id": chatID,
 				"error":   err.Error(),
