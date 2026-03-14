@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -27,6 +28,8 @@ type WhatsAppChannel struct {
 	mu        sync.Mutex
 	connected bool
 }
+
+const typingRefreshInterval = 4 * time.Second
 
 func NewWhatsAppChannel(cfg config.WhatsAppConfig, bus *bus.MessageBus) (*WhatsAppChannel, error) {
 	base := channels.NewBaseChannel(
@@ -138,6 +141,83 @@ func (c *WhatsAppChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 	if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
 		_ = c.conn.SetWriteDeadline(time.Time{})
 		return fmt.Errorf("whatsapp send: %w", channels.ErrTemporary)
+	}
+	_ = c.conn.SetWriteDeadline(time.Time{})
+
+	return nil
+}
+
+// StartTyping implements channels.TypingCapable for bridge mode.
+// It sends a best-effort typing start event immediately, then refreshes periodically,
+// and emits a typing stop event when the returned stop function is called.
+func (c *WhatsAppChannel) StartTyping(ctx context.Context, chatID string) (func(), error) {
+	if !c.IsRunning() {
+		return func() {}, channels.ErrNotRunning
+	}
+
+	if err := c.sendTypingEvent(chatID, "start"); err != nil {
+		return func() {}, err
+	}
+
+	typingCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		ticker := time.NewTicker(typingRefreshInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-typingCtx.Done():
+				return
+			case <-ticker.C:
+				if err := c.sendTypingEvent(chatID, "start"); err != nil {
+					logger.DebugCF("whatsapp", "Failed to refresh typing event", map[string]any{
+						"chat_id": chatID,
+						"error":   err.Error(),
+					})
+				}
+			}
+		}
+	}()
+
+	var stopped atomic.Bool
+	stop := func() {
+		if !stopped.CompareAndSwap(false, true) {
+			return
+		}
+		cancel()
+		if err := c.sendTypingEvent(chatID, "stop"); err != nil {
+			logger.DebugCF("whatsapp", "Failed to send typing stop event", map[string]any{
+				"chat_id": chatID,
+				"error":   err.Error(),
+			})
+		}
+	}
+
+	return stop, nil
+}
+
+func (c *WhatsAppChannel) sendTypingEvent(chatID, state string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.conn == nil {
+		return fmt.Errorf("whatsapp connection not established: %w", channels.ErrTemporary)
+	}
+
+	payload := map[string]any{
+		"type":   "typing",
+		"to":     chatID,
+		"action": state,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal typing payload: %w", err)
+	}
+
+	_ = c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		_ = c.conn.SetWriteDeadline(time.Time{})
+		return fmt.Errorf("whatsapp typing event: %w", channels.ErrTemporary)
 	}
 	_ = c.conn.SetWriteDeadline(time.Time{})
 
