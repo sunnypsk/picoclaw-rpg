@@ -22,9 +22,14 @@ Use it when the user asks to:
 - If the user provides a specific Space URL or `owner/space` slug, use that Space.
 - Otherwise use `multimodalart/nano-banana` as the first/default choice for general multimodal image generation and editing.
 
+## Setup
+
+- For fallback mode, set `CPA_API_BASE`, `CPA_API_KEY`, and `CPA_IMAGE_MODEL` in `~/.picoclaw/.env` (or `$PICOCLAW_HOME/.env`).
+- Never print, echo, or expose `CPA_API_KEY`.
+
 ## Implementation
 
-This workflow skill delegates execution to the base `huggingface-spaces` skill:
+This workflow skill delegates execution to the base `huggingface-spaces` skill and supports CPA fallback:
 
 - Inspect API:
 
@@ -32,15 +37,18 @@ This workflow skill delegates execution to the base `huggingface-spaces` skill:
 python3 workspace/skills/huggingface-spaces/scripts/inspect_space.py "multimodalart/nano-banana"
 ```
 
-- Call API:
+- Generate/edit with fallback wrapper (recommended):
 
 ```bash
-python3 workspace/skills/huggingface-spaces/scripts/call_space.py \
-  "multimodalart/nano-banana" \
-  --payload-file payload.json
+python3 workspace/skills/hf-image/scripts/generate_with_fallback.py \
+  --space "multimodalart/nano-banana" \
+  --payload-file payload.json \
+  --timeout 300
 ```
 
-Use `--timeout 300` for slow-starting Spaces.
+Fallback behavior:
+- It tries the selected Hugging Face Space first.
+- If that fails, or no image output is detected, it sends a fallback request to `CPA_API_BASE/images/generations` using `CPA_API_KEY` and `CPA_IMAGE_MODEL`.
 
 ## Payload guidance
 
@@ -59,6 +67,6 @@ Example payload:
 
 ## Response guidance
 
-- Return the chosen Space name.
+- Return whether output came from the Space or CPA fallback.
 - Return generated file URLs or paths when present.
-- Keep the result concise and mention if the Space timed out or required a longer timeout.
+- Keep the result concise and mention if the Space timed out, produced no image output, or required fallback.
