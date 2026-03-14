@@ -11,6 +11,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"mime"
 	"os"
 	"path/filepath"
 	"strings"
@@ -350,13 +351,44 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 	if content == "" && evt.Message.ExtendedTextMessage != nil {
 		content = evt.Message.ExtendedTextMessage.GetText()
 	}
+
+	// Media captions in WhatsApp are carried on the media message payload
+	// rather than the top-level conversation text. Prefer those captions when
+	// present so image/video/document + caption messages stay intact.
+	if content == "" {
+		switch {
+		case evt.Message.GetImageMessage() != nil:
+			content = evt.Message.GetImageMessage().GetCaption()
+		case evt.Message.GetVideoMessage() != nil:
+			content = evt.Message.GetVideoMessage().GetCaption()
+		case evt.Message.GetDocumentMessage() != nil:
+			content = evt.Message.GetDocumentMessage().GetCaption()
+		}
+	}
+
+	// Keep non-text interactions visible to the agent so stickers/media can
+	// still trigger a response in chat.
+	if content == "" {
+		switch {
+		case evt.Message.GetStickerMessage() != nil:
+			content = "[Sticker]"
+		case evt.Message.GetImageMessage() != nil:
+			content = "[Image]"
+		case evt.Message.GetVideoMessage() != nil:
+			content = "[Video]"
+		case evt.Message.GetAudioMessage() != nil:
+			content = "[Audio]"
+		case evt.Message.GetDocumentMessage() != nil:
+			content = "[Document]"
+		}
+	}
 	content = utils.SanitizeMessageContent(content)
 
 	if content == "" {
 		return
 	}
 
-	var mediaPaths []string
+	mediaPaths := c.extractIncomingMedia(evt.Message)
 
 	metadata := make(map[string]string)
 	metadata["message_id"] = evt.Info.ID
@@ -394,6 +426,69 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 		map[string]any{"sender_id": senderID, "content_preview": utils.Truncate(content, 50)},
 	)
 	c.HandleMessage(c.runCtx, peer, messageID, senderID, chatID, content, mediaPaths, metadata, sender)
+}
+
+func (c *WhatsAppNativeChannel) extractIncomingMedia(msg *waE2E.Message) []string {
+	if msg == nil {
+		return nil
+	}
+
+	c.mu.Lock()
+	client := c.client
+	c.mu.Unlock()
+	if client == nil {
+		return nil
+	}
+
+	paths := make([]string, 0, 1)
+
+	if image := msg.GetImageMessage(); image != nil {
+		if p, err := c.downloadIncomingMedia(client, image, image.GetMimetype(), "wa-image"); err == nil {
+			paths = append(paths, p)
+		} else {
+			logger.WarnCF("whatsapp", "Failed to download incoming image", map[string]any{"error": err.Error()})
+		}
+	}
+
+	if sticker := msg.GetStickerMessage(); sticker != nil {
+		if p, err := c.downloadIncomingMedia(client, sticker, sticker.GetMimetype(), "wa-sticker"); err == nil {
+			paths = append(paths, p)
+		} else {
+			logger.WarnCF("whatsapp", "Failed to download incoming sticker", map[string]any{"error": err.Error()})
+		}
+	}
+
+	return paths
+}
+
+func (c *WhatsAppNativeChannel) downloadIncomingMedia(
+	client *whatsmeow.Client,
+	media whatsmeow.DownloadableMessage,
+	mimeType string,
+	prefix string,
+) (string, error) {
+	data, err := client.Download(media)
+	if err != nil {
+		return "", err
+	}
+
+	ext := ".bin"
+	if exts, err := mime.ExtensionsByType(mimeType); err == nil && len(exts) > 0 {
+		ext = exts[0]
+	}
+
+	tmp, err := os.CreateTemp("", prefix+"-*"+ext)
+	if err != nil {
+		return "", err
+	}
+	defer tmp.Close()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = os.Remove(tmp.Name())
+		return "", err
+	}
+
+	return tmp.Name(), nil
 }
 
 func (c *WhatsAppNativeChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
