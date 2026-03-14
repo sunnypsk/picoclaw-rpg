@@ -1257,8 +1257,8 @@ make test                                       # 全量测试
 | `pkg/channels/wecom/` | `"wecom"` | WebhookHandler, HealthChecker |
 | `pkg/channels/wecom/` | `"wecom_app"` | MediaSender, WebhookHandler, HealthChecker |
 | `pkg/channels/qq/` | `"qq"` | — |
-| `pkg/channels/whatsapp/` | `"whatsapp"` | — (Bridge 模式) |
-| `pkg/channels/whatsapp_native/` | `"whatsapp_native"` | — (原生 whatsmeow 模式) |
+| `pkg/channels/whatsapp/` | `"whatsapp"` | TypingCapable (Bridge 模式) |
+| `pkg/channels/whatsapp_native/` | `"whatsapp_native"` | TypingCapable (原生 whatsmeow 模式) |
 | `pkg/channels/maixcam/` | `"maixcam"` | — |
 | `pkg/channels/pico/` | `"pico"` | TypingCapable, PlaceholderCapable, MessageEditor, WebhookHandler |
 

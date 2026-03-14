@@ -42,9 +42,10 @@ const (
 	sqliteDriver   = "sqlite"
 	whatsappDBName = "store.db"
 
-	reconnectInitial    = 5 * time.Second
-	reconnectMax        = 5 * time.Minute
-	reconnectMultiplier = 2.0
+	reconnectInitial      = 5 * time.Second
+	reconnectMax          = 5 * time.Minute
+	reconnectMultiplier   = 2.0
+	typingRefreshInterval = 4 * time.Second
 )
 
 // WhatsAppNativeChannel implements the WhatsApp channel using whatsmeow (in-process, no external bridge).
@@ -563,6 +564,85 @@ func (c *WhatsAppNativeChannel) Send(ctx context.Context, msg bus.OutboundMessag
 	if _, err = client.SendMessage(ctx, to, waMsg); err != nil {
 		return fmt.Errorf("whatsapp send: %w", channels.ErrTemporary)
 	}
+	return nil
+}
+
+// StartTyping implements channels.TypingCapable for native mode.
+// It sends composing presence immediately, refreshes periodically,
+// and sends paused presence when the returned stop function is called.
+func (c *WhatsAppNativeChannel) StartTyping(ctx context.Context, chatID string) (func(), error) {
+	if !c.IsRunning() {
+		return func() {}, channels.ErrNotRunning
+	}
+
+	if err := c.sendChatPresence(ctx, chatID, types.ChatPresenceComposing); err != nil {
+		return func() {}, err
+	}
+
+	typingCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		ticker := time.NewTicker(typingRefreshInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-typingCtx.Done():
+				return
+			case <-ticker.C:
+				if err := c.sendChatPresence(typingCtx, chatID, types.ChatPresenceComposing); err != nil {
+					logger.DebugCF("whatsapp", "Failed to refresh WhatsApp typing presence", map[string]any{
+						"chat_id": chatID,
+						"error":   err.Error(),
+					})
+				}
+			}
+		}
+	}()
+
+	var stopped atomic.Bool
+	stop := func() {
+		if !stopped.CompareAndSwap(false, true) {
+			return
+		}
+		cancel()
+		if err := c.sendChatPresence(context.Background(), chatID, types.ChatPresencePaused); err != nil {
+			logger.DebugCF("whatsapp", "Failed to send WhatsApp typing paused presence", map[string]any{
+				"chat_id": chatID,
+				"error":   err.Error(),
+			})
+		}
+	}
+
+	return stop, nil
+}
+
+func (c *WhatsAppNativeChannel) sendChatPresence(ctx context.Context, chatID string, state types.ChatPresence) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	c.mu.Lock()
+	client := c.client
+	c.mu.Unlock()
+
+	if client == nil || !client.IsConnected() {
+		return fmt.Errorf("whatsapp connection not established: %w", channels.ErrTemporary)
+	}
+
+	if client.Store.ID == nil {
+		return fmt.Errorf("whatsapp not yet paired (QR login pending): %w", channels.ErrTemporary)
+	}
+
+	to, err := parseJID(chatID)
+	if err != nil {
+		return fmt.Errorf("invalid chat id %q: %w", chatID, err)
+	}
+
+	if err := client.SendChatPresence(ctx, to, state, types.ChatPresenceMediaText); err != nil {
+		return fmt.Errorf("whatsapp chat presence: %w", channels.ErrTemporary)
+	}
+
 	return nil
 }
 
