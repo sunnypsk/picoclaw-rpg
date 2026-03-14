@@ -125,11 +125,24 @@ def collect_image_candidates(value: Any) -> list[str]:
 def extract_prompt(payload: Any) -> str:
     if isinstance(payload, str):
         return payload.strip()
+
     if isinstance(payload, dict):
         for key in ("prompt", "text", "instruction", "query"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
+
+        for value in payload.values():
+            prompt = extract_prompt(value)
+            if prompt:
+                return prompt
+
+    if isinstance(payload, list):
+        for item in payload:
+            prompt = extract_prompt(item)
+            if prompt:
+                return prompt
+
     return ""
 
 
