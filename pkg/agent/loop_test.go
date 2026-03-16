@@ -354,6 +354,31 @@ func (m *captureOptsProvider) GetDefaultModel() string {
 	return "mock-model"
 }
 
+type captureMessagesProvider struct {
+	response string
+	calls    [][]providers.Message
+}
+
+func (m *captureMessagesProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	cloned := make([]providers.Message, len(messages))
+	copy(cloned, messages)
+	m.calls = append(m.calls, cloned)
+	return &providers.LLMResponse{
+		Content:   m.response,
+		ToolCalls: []providers.ToolCall{},
+	}, nil
+}
+
+func (m *captureMessagesProvider) GetDefaultModel() string {
+	return "mock-capture-model"
+}
+
 type scriptedSummaryResult struct {
 	content string
 	err     error
@@ -583,6 +608,217 @@ func TestFindNearestUserMessage(t *testing.T) {
 				t.Fatalf("findNearestUserMessage() = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBestSenderLabel(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  bus.InboundMessage
+		want string
+	}{
+		{
+			name: "display name wins",
+			msg: bus.InboundMessage{
+				Sender: bus.SenderInfo{
+					DisplayName: "Alice",
+					Username:    "alice123",
+					PlatformID:  "42",
+				},
+				Metadata: map[string]string{"sender_name": "Alias"},
+			},
+			want: "Alice",
+		},
+		{
+			name: "username before metadata",
+			msg: bus.InboundMessage{
+				Sender:   bus.SenderInfo{Username: "alice123", PlatformID: "42"},
+				Metadata: map[string]string{"sender_name": "Alias"},
+			},
+			want: "alice123",
+		},
+		{
+			name: "metadata fallback",
+			msg: bus.InboundMessage{
+				Sender:   bus.SenderInfo{PlatformID: "42"},
+				Metadata: map[string]string{"user_name": "WhatsApp Alice"},
+			},
+			want: "WhatsApp Alice",
+		},
+		{
+			name: "platform id fallback",
+			msg: bus.InboundMessage{
+				Sender: bus.SenderInfo{PlatformID: "42"},
+			},
+			want: "42",
+		},
+		{
+			name: "sender id fallback",
+			msg: bus.InboundMessage{
+				SenderID: "whatsapp:42",
+			},
+			want: "whatsapp:42",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := bestSenderLabel(tt.msg); got != tt.want {
+				t.Fatalf("bestSenderLabel() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProcessMessage_GroupMessagePersistsAttributedHistory(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &captureMessagesProvider{response: "ok"}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	helper := testHelper{al: al}
+	sessionKey := al.registry.ResolveRoute(routing.RouteInput{
+		Channel: "whatsapp",
+		Peer:    &routing.RoutePeer{Kind: "group", ID: "group-1"},
+	}).SessionKey
+
+	first := bus.InboundMessage{
+		Channel:  "whatsapp",
+		SenderID: "whatsapp:1",
+		Sender: bus.SenderInfo{
+			Platform:    "whatsapp",
+			PlatformID:  "1",
+			DisplayName: "Alice",
+		},
+		ChatID:  "group-1",
+		Content: "hello there",
+		Peer:    bus.Peer{Kind: "group", ID: "group-1"},
+	}
+	second := bus.InboundMessage{
+		Channel:  "whatsapp",
+		SenderID: "whatsapp:2",
+		Sender: bus.SenderInfo{
+			Platform:    "whatsapp",
+			PlatformID:  "2",
+			DisplayName: "Bob",
+		},
+		ChatID:  "group-1",
+		Content: "hi again",
+		Peer:    bus.Peer{Kind: "group", ID: "group-1"},
+	}
+
+	if got := helper.executeAndGetResponse(t, context.Background(), first); got != "ok" {
+		t.Fatalf("first response = %q, want ok", got)
+	}
+	if got := helper.executeAndGetResponse(t, context.Background(), second); got != "ok" {
+		t.Fatalf("second response = %q, want ok", got)
+	}
+
+	if len(provider.calls) != 2 {
+		t.Fatalf("provider calls = %d, want 2", len(provider.calls))
+	}
+
+	firstCall := provider.calls[0]
+	if got := firstCall[len(firstCall)-1].Content; got != "[From: Alice] hello there" {
+		t.Fatalf("first call current user = %q, want %q", got, "[From: Alice] hello there")
+	}
+
+	secondCall := provider.calls[1]
+	if len(secondCall) < 4 {
+		t.Fatalf("second call message count = %d, want at least 4", len(secondCall))
+	}
+	if got := secondCall[1].Content; got != "[From: Alice] hello there" {
+		t.Fatalf("second call history user = %q, want %q", got, "[From: Alice] hello there")
+	}
+	if got := secondCall[len(secondCall)-1].Content; got != "[From: Bob] hi again" {
+		t.Fatalf("second call current user = %q, want %q", got, "[From: Bob] hi again")
+	}
+
+	history := al.registry.GetDefaultAgent().Sessions.GetHistory(sessionKey)
+	if len(history) != 4 {
+		t.Fatalf("history len = %d, want 4", len(history))
+	}
+	if got := history[0].Content; got != "[From: Alice] hello there" {
+		t.Fatalf("history[0] = %q, want %q", got, "[From: Alice] hello there")
+	}
+	if got := history[2].Content; got != "[From: Bob] hi again" {
+		t.Fatalf("history[2] = %q, want %q", got, "[From: Bob] hi again")
+	}
+}
+
+func TestProcessMessage_DirectMessageDoesNotAddSenderAttribution(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &captureMessagesProvider{response: "ok"}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	helper := testHelper{al: al}
+	sessionKey := al.registry.ResolveRoute(routing.RouteInput{
+		Channel: "telegram",
+		Peer:    &routing.RoutePeer{Kind: "direct", ID: "42"},
+	}).SessionKey
+
+	msg := bus.InboundMessage{
+		Channel:  "telegram",
+		SenderID: "telegram:42",
+		Sender: bus.SenderInfo{
+			Platform:    "telegram",
+			PlatformID:  "42",
+			DisplayName: "Alice",
+		},
+		ChatID:  "42",
+		Content: "hello",
+		Peer:    bus.Peer{Kind: "direct", ID: "42"},
+	}
+
+	if got := helper.executeAndGetResponse(t, context.Background(), msg); got != "ok" {
+		t.Fatalf("response = %q, want ok", got)
+	}
+
+	if len(provider.calls) != 1 {
+		t.Fatalf("provider calls = %d, want 1", len(provider.calls))
+	}
+	call := provider.calls[0]
+	if got := call[len(call)-1].Content; got != "hello" {
+		t.Fatalf("current user = %q, want %q", got, "hello")
+	}
+
+	history := al.registry.GetDefaultAgent().Sessions.GetHistory(sessionKey)
+	if len(history) != 2 {
+		t.Fatalf("history len = %d, want 2", len(history))
+	}
+	if got := history[0].Content; got != "hello" {
+		t.Fatalf("history[0] = %q, want %q", got, "hello")
 	}
 }
 

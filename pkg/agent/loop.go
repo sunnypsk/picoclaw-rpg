@@ -51,21 +51,55 @@ type AgentLoop struct {
 
 // processOptions configures how a message is processed
 type processOptions struct {
-	SessionKey        string   // Session identifier for persistence/tool traces
-	ContextSessionKey string   // Optional session identifier to read history/summary from
-	Channel           string   // Target channel for tool execution
-	ChatID            string   // Target chat ID for tool execution
-	UserMessage       string   // User message content (may include prefix)
-	AutoRecallQuery   string   // Optional auto-recall query override
-	Media             []string // media:// refs from inbound message
-	DefaultResponse   string   // Response when LLM returns empty
-	EnableSummary     bool     // Whether to trigger summarization
-	SendResponse      bool     // Whether to send response via bus
-	NoHistory         bool     // If true, don't load session history (for heartbeat)
-	PersistSession    bool     // Whether to persist conversation/tool traces to SessionKey
+	SessionKey         string   // Session identifier for persistence/tool traces
+	ContextSessionKey  string   // Optional session identifier to read history/summary from
+	Channel            string   // Target channel for tool execution
+	ChatID             string   // Target chat ID for tool execution
+	UserMessage        string   // User message content (may include prefix)
+	SessionUserMessage string   // User message content as stored in session history
+	AutoRecallQuery    string   // Optional auto-recall query override
+	Media              []string // media:// refs from inbound message
+	DefaultResponse    string   // Response when LLM returns empty
+	EnableSummary      bool     // Whether to trigger summarization
+	SendResponse       bool     // Whether to send response via bus
+	NoHistory          bool     // If true, don't load session history (for heartbeat)
+	PersistSession     bool     // Whether to persist conversation/tool traces to SessionKey
 }
 
 const defaultResponse = "I've completed processing but have no response to give. Increase `max_tool_iterations` in config.json."
+
+func attributeInboundMessage(msg bus.InboundMessage) string {
+	content := strings.TrimSpace(msg.Content)
+	if content == "" {
+		return ""
+	}
+	if msg.Peer.Kind != "group" && msg.Peer.Kind != "channel" {
+		return content
+	}
+	label := bestSenderLabel(msg)
+	if label == "" {
+		return content
+	}
+	return fmt.Sprintf("[From: %s] %s", label, content)
+}
+
+func bestSenderLabel(msg bus.InboundMessage) string {
+	if display := strings.TrimSpace(msg.Sender.DisplayName); display != "" {
+		return display
+	}
+	if username := strings.TrimSpace(msg.Sender.Username); username != "" {
+		return username
+	}
+	for _, key := range []string{"sender_name", "display_name", "user_name", "username", "nickname"} {
+		if value := strings.TrimSpace(msg.Metadata[key]); value != "" {
+			return value
+		}
+	}
+	if platformID := strings.TrimSpace(msg.Sender.PlatformID); platformID != "" {
+		return platformID
+	}
+	return strings.TrimSpace(msg.SenderID)
+}
 
 func NewAgentLoop(
 	cfg *config.Config,
@@ -613,16 +647,19 @@ func (al *AgentLoop) processMessageCore(
 			"matched_by":  route.MatchedBy,
 		})
 
+	attributedUserMessage := attributeInboundMessage(msg)
 	response, err := al.runAgentLoop(ctx, agent, processOptions{
-		SessionKey:      sessionKey,
-		Channel:         msg.Channel,
-		ChatID:          msg.ChatID,
-		UserMessage:     msg.Content,
-		Media:           msg.Media,
-		DefaultResponse: defaultResponse,
-		EnableSummary:   true,
-		SendResponse:    sendResponse,
-		PersistSession:  true,
+		SessionKey:         sessionKey,
+		Channel:            msg.Channel,
+		ChatID:             msg.ChatID,
+		UserMessage:        attributedUserMessage,
+		SessionUserMessage: attributedUserMessage,
+		AutoRecallQuery:    msg.Content,
+		Media:              msg.Media,
+		DefaultResponse:    defaultResponse,
+		EnableSummary:      true,
+		SendResponse:       sendResponse,
+		PersistSession:     true,
 	})
 	if err == nil {
 		updateCtx := context.Background()
@@ -706,6 +743,11 @@ func (al *AgentLoop) runAgentLoop(
 	agent *AgentInstance,
 	opts processOptions,
 ) (string, error) {
+	sessionUserMessage := opts.SessionUserMessage
+	if strings.TrimSpace(sessionUserMessage) == "" {
+		sessionUserMessage = opts.UserMessage
+	}
+
 	// 0. Record last channel for heartbeat notifications (skip internal channels)
 	if opts.Channel != "" && opts.ChatID != "" {
 		// Don't record internal channels (cli, system, subagent)
@@ -762,7 +804,7 @@ func (al *AgentLoop) runAgentLoop(
 
 	// 2. Save user message to session
 	if opts.PersistSession {
-		agent.Sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
+		agent.Sessions.AddMessage(opts.SessionKey, "user", sessionUserMessage)
 	}
 
 	// 3. Run LLM iteration loop
