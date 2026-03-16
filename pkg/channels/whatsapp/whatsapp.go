@@ -147,6 +147,72 @@ func (c *WhatsAppChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 	return nil
 }
 
+// SendMedia implements the channels.MediaSender interface for bridge mode.
+func (c *WhatsAppChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) error {
+	if !c.IsRunning() {
+		return channels.ErrNotRunning
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	store := c.GetMediaStore()
+	if store == nil {
+		return fmt.Errorf("no media store available: %w", channels.ErrSendFailed)
+	}
+
+	mediaPaths := make([]string, 0, len(msg.Parts))
+	caption := ""
+	for _, part := range msg.Parts {
+		localPath, err := store.Resolve(part.Ref)
+		if err != nil {
+			logger.ErrorCF("whatsapp", "Failed to resolve media ref", map[string]any{
+				"ref":   part.Ref,
+				"error": err.Error(),
+			})
+			continue
+		}
+		mediaPaths = append(mediaPaths, localPath)
+		if caption == "" && part.Caption != "" {
+			caption = part.Caption
+		}
+	}
+	if len(mediaPaths) == 0 {
+		return nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.conn == nil {
+		return fmt.Errorf("whatsapp connection not established: %w", channels.ErrTemporary)
+	}
+
+	payload := map[string]any{
+		"type":    "message",
+		"to":      msg.ChatID,
+		"content": caption,
+		"media":   mediaPaths,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal media payload: %w", err)
+	}
+
+	_ = c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		_ = c.conn.SetWriteDeadline(time.Time{})
+		return fmt.Errorf("whatsapp send media: %w", channels.ErrTemporary)
+	}
+	_ = c.conn.SetWriteDeadline(time.Time{})
+
+	return nil
+}
+
 // StartTyping implements channels.TypingCapable for bridge mode.
 // It sends a best-effort typing start event immediately, then refreshes periodically,
 // and emits a typing stop event when the returned stop function is called.

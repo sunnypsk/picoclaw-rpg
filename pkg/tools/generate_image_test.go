@@ -1,0 +1,297 @@
+package tools
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/media"
+)
+
+func TestGenerateImageTool_RequiresEnv(t *testing.T) {
+	tool := NewGenerateImageTool(t.TempDir())
+	tool.SetMediaStore(media.NewFileMediaStore())
+	tool.getenv = func(string) string { return "" }
+
+	result := tool.Execute(context.Background(), map[string]any{"prompt": "cat"})
+	if !result.IsError {
+		t.Fatal("expected error result")
+	}
+	if !strings.Contains(result.ForLLM, "CPA_API_KEY") {
+		t.Fatalf("expected missing env message, got %q", result.ForLLM)
+	}
+}
+
+func TestGenerateImageTool_StoresURLResult(t *testing.T) {
+	workspace := t.TempDir()
+	store := media.NewFileMediaStore()
+	imageBytes := []byte("pngdata")
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat/completions":
+			if r.Method != http.MethodPost {
+				t.Fatalf("unexpected method %s", r.Method)
+			}
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode payload: %v", err)
+			}
+			if payload["model"] != "test-model" {
+				t.Fatalf("unexpected model: %v", payload["model"])
+			}
+			messages, ok := payload["messages"].([]any)
+			if !ok || len(messages) != 1 {
+				t.Fatalf("unexpected messages: %#v", payload["messages"])
+			}
+			msg, ok := messages[0].(map[string]any)
+			if !ok || msg["role"] != "user" {
+				t.Fatalf("unexpected message: %#v", messages[0])
+			}
+			content, ok := msg["content"].([]any)
+			if !ok || len(content) != 1 {
+				t.Fatalf("unexpected content: %#v", msg["content"])
+			}
+			part, ok := content[0].(map[string]any)
+			if !ok || part["type"] != "text" || part["text"] != "cat" {
+				t.Fatalf("unexpected content part: %#v", content[0])
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{{"url": server.URL + "/generated.png"}},
+			})
+		case "/generated.png":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(imageBytes)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	tool := NewGenerateImageTool(workspace)
+	tool.SetMediaStore(store)
+	tool.getenv = func(name string) string {
+		switch name {
+		case "CPA_API_KEY":
+			return "test-key"
+		case "CPA_API_BASE":
+			return server.URL
+		case "CPA_IMAGE_MODEL":
+			return "test-model"
+		default:
+			return ""
+		}
+	}
+
+	result := tool.Execute(WithToolContext(context.Background(), "telegram", "chat-1"), map[string]any{"prompt": "cat"})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if len(result.Media) != 1 {
+		t.Fatalf("expected one media ref, got %v", result.Media)
+	}
+	path, meta, err := store.ResolveWithMeta(result.Media[0])
+	if err != nil {
+		t.Fatalf("resolve media ref: %v", err)
+	}
+	if meta.Source != "tool:generate_image" {
+		t.Fatalf("unexpected media source %q", meta.Source)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read stored image: %v", err)
+	}
+	if string(data) != string(imageBytes) {
+		t.Fatalf("unexpected stored image bytes: %q", string(data))
+	}
+}
+
+func TestGenerateImageTool_IncludesImageAndOptionsInChatPayload(t *testing.T) {
+	workspace := t.TempDir()
+	store := media.NewFileMediaStore()
+	sourceImage := filepath.Join(workspace, "source.png")
+	if err := os.WriteFile(sourceImage, []byte("input-image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		messages := payload["messages"].([]any)
+		msg := messages[0].(map[string]any)
+		content := msg["content"].([]any)
+		if len(content) != 4 {
+			t.Fatalf("unexpected content length: %d", len(content))
+		}
+		if content[1].(map[string]any)["text"] != "size: 1536x1024" {
+			t.Fatalf("missing size part: %#v", content[1])
+		}
+		if content[2].(map[string]any)["text"] != "aspect_ratio: 16:9" {
+			t.Fatalf("missing aspect ratio part: %#v", content[2])
+		}
+		imagePart := content[3].(map[string]any)
+		if imagePart["type"] != "image_url" {
+			t.Fatalf("unexpected image part type: %#v", imagePart)
+		}
+		imageURL := imagePart["image_url"].(map[string]any)["url"].(string)
+		if !strings.HasPrefix(imageURL, "data:image/png;base64,") {
+			t.Fatalf("unexpected image url: %s", imageURL)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{"b64_json": base64.StdEncoding.EncodeToString([]byte("inline-image"))}},
+		})
+	}))
+	defer server.Close()
+
+	tool := NewGenerateImageTool(workspace)
+	tool.SetMediaStore(store)
+	tool.getenv = func(name string) string {
+		switch name {
+		case "CPA_API_KEY":
+			return "test-key"
+		case "CPA_API_BASE":
+			return server.URL
+		case "CPA_IMAGE_MODEL":
+			return "test-model"
+		default:
+			return ""
+		}
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"prompt":       "edit this",
+		"image":        "source.png",
+		"size":         "1536x1024",
+		"aspect_ratio": "16:9",
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if len(result.Media) != 1 {
+		t.Fatalf("expected one media ref, got %v", result.Media)
+	}
+}
+
+func TestGenerateImageTool_StoresB64JSONResult(t *testing.T) {
+	workspace := t.TempDir()
+	store := media.NewFileMediaStore()
+	imageBytes := []byte("inline-image")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{"b64_json": base64.StdEncoding.EncodeToString(imageBytes)}},
+		})
+	}))
+	defer server.Close()
+
+	tool := NewGenerateImageTool(workspace)
+	tool.SetMediaStore(store)
+	tool.getenv = func(name string) string {
+		switch name {
+		case "CPA_API_KEY":
+			return "test-key"
+		case "CPA_API_BASE":
+			return server.URL
+		case "CPA_IMAGE_MODEL":
+			return "test-model"
+		default:
+			return ""
+		}
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{"prompt": "cat"})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if len(result.Media) != 1 {
+		t.Fatalf("expected one media ref, got %v", result.Media)
+	}
+	path, _, err := store.ResolveWithMeta(result.Media[0])
+	if err != nil {
+		t.Fatalf("resolve media ref: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read stored image: %v", err)
+	}
+	if string(data) != string(imageBytes) {
+		t.Fatalf("unexpected stored inline image bytes: %q", string(data))
+	}
+}
+
+func TestGenerateImageTool_RejectsEmptyResult(t *testing.T) {
+	tool := NewGenerateImageTool(t.TempDir())
+	tool.SetMediaStore(media.NewFileMediaStore())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{}})
+	}))
+	defer server.Close()
+	tool.getenv = func(name string) string {
+		switch name {
+		case "CPA_API_KEY":
+			return "test-key"
+		case "CPA_API_BASE":
+			return server.URL
+		case "CPA_IMAGE_MODEL":
+			return "test-model"
+		default:
+			return ""
+		}
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{"prompt": "cat"})
+	if !result.IsError {
+		t.Fatal("expected error result")
+	}
+	if !strings.Contains(result.ForLLM, "usable image output") {
+		t.Fatalf("unexpected error message: %q", result.ForLLM)
+	}
+}
+
+func TestGenerateImageTool_RejectsMultipleInputImages(t *testing.T) {
+	workspace := t.TempDir()
+	tool := NewGenerateImageTool(workspace)
+	tool.SetMediaStore(media.NewFileMediaStore())
+	tool.getenv = func(name string) string {
+		switch name {
+		case "CPA_API_KEY", "CPA_API_BASE", "CPA_IMAGE_MODEL":
+			return "x"
+		default:
+			return ""
+		}
+	}
+	first := filepath.Join(workspace, "a.png")
+	second := filepath.Join(workspace, "b.png")
+	if err := os.WriteFile(first, []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("b"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"prompt":       "edit",
+		"input_images": []any{"a.png", "b.png"},
+	})
+	if !result.IsError {
+		t.Fatal("expected error result")
+	}
+	if !strings.Contains(result.ForLLM, "multiple input images") {
+		t.Fatalf("unexpected error message: %q", result.ForLLM)
+	}
+}

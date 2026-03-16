@@ -568,6 +568,92 @@ func (c *WhatsAppNativeChannel) Send(ctx context.Context, msg bus.OutboundMessag
 	return nil
 }
 
+// SendMedia implements channels.MediaSender for native WhatsApp.
+func (c *WhatsAppNativeChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) error {
+	if !c.IsRunning() {
+		return channels.ErrNotRunning
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	store := c.GetMediaStore()
+	if store == nil {
+		return fmt.Errorf("no media store available: %w", channels.ErrSendFailed)
+	}
+
+	c.mu.Lock()
+	client := c.client
+	c.mu.Unlock()
+
+	if client == nil || !client.IsConnected() {
+		return fmt.Errorf("whatsapp connection not established: %w", channels.ErrTemporary)
+	}
+	if client.Store.ID == nil {
+		return fmt.Errorf("whatsapp not yet paired (QR login pending): %w", channels.ErrTemporary)
+	}
+
+	to, err := parseJID(msg.ChatID)
+	if err != nil {
+		return fmt.Errorf("invalid chat id %q: %w", msg.ChatID, err)
+	}
+
+	for _, part := range msg.Parts {
+		localPath, _, err := store.ResolveWithMeta(part.Ref)
+		if err != nil {
+			logger.ErrorCF("whatsapp", "Failed to resolve media ref", map[string]any{
+				"ref":   part.Ref,
+				"error": err.Error(),
+			})
+			continue
+		}
+
+		data, err := os.ReadFile(localPath)
+		if err != nil {
+			logger.ErrorCF("whatsapp", "Failed to read media file", map[string]any{
+				"path":  localPath,
+				"error": err.Error(),
+			})
+			continue
+		}
+
+		contentType := part.ContentType
+		if contentType == "" {
+			contentType = mime.TypeByExtension(strings.ToLower(filepath.Ext(localPath)))
+		}
+		if contentType == "" {
+			contentType = "image/png"
+		}
+
+		uploadResp, err := client.Upload(ctx, data, whatsmeow.MediaImage)
+		if err != nil {
+			return fmt.Errorf("whatsapp upload media: %w", channels.ErrTemporary)
+		}
+
+		imageMsg := &waE2E.ImageMessage{
+			Caption:       proto.String(part.Caption),
+			Mimetype:      proto.String(contentType),
+			URL:           &uploadResp.URL,
+			DirectPath:    &uploadResp.DirectPath,
+			MediaKey:      uploadResp.MediaKey,
+			FileEncSHA256: uploadResp.FileEncSHA256,
+			FileSHA256:    uploadResp.FileSHA256,
+			FileLength:    &uploadResp.FileLength,
+		}
+		waMsg := &waE2E.Message{
+			ImageMessage: imageMsg,
+		}
+
+		if _, err = client.SendMessage(ctx, to, waMsg); err != nil {
+			return fmt.Errorf("whatsapp send media: %w", channels.ErrTemporary)
+		}
+	}
+
+	return nil
+}
+
 // StartTyping implements channels.TypingCapable for native mode.
 // It sends composing presence immediately, refreshes periodically,
 // and sends paused presence when the returned stop function is called.

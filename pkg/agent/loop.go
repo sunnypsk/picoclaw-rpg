@@ -75,7 +75,7 @@ func NewAgentLoop(
 	registry := NewAgentRegistry(cfg, provider)
 
 	// Register shared tools to all agents
-	registerSharedTools(cfg, msgBus, registry, provider)
+	registerSharedTools(cfg, msgBus, registry, provider, nil)
 
 	// Set up shared fallback chain
 	cooldown := providers.NewCooldownTracker()
@@ -105,9 +105,10 @@ func registerSharedTools(
 	msgBus *bus.MessageBus,
 	registry *AgentRegistry,
 	provider providers.LLMProvider,
+	store media.MediaStore,
 ) {
 	for _, agentID := range registry.ListAgentIDs() {
-		registerSharedToolsForAgent(cfg, msgBus, registry, provider, agentID)
+		registerSharedToolsForAgent(cfg, msgBus, registry, provider, store, agentID)
 	}
 }
 
@@ -116,6 +117,7 @@ func registerSharedToolsForAgent(
 	msgBus *bus.MessageBus,
 	registry *AgentRegistry,
 	provider providers.LLMProvider,
+	store media.MediaStore,
 	agentID string,
 ) {
 	agent, ok := registry.GetAgent(agentID)
@@ -175,6 +177,9 @@ func registerSharedToolsForAgent(
 		return err
 	})
 	agent.Tools.Register(messageTool)
+	imageTool := tools.NewGenerateImageTool(agent.Workspace)
+	imageTool.SetMediaStore(store)
+	agent.Tools.Register(imageTool)
 
 	// Skill discovery and installation tools
 	registryMgr := skills.NewRegistryManagerFromConfig(skills.RegistryConfig{
@@ -369,6 +374,21 @@ func (al *AgentLoop) SetChannelManager(cm *channels.Manager) {
 // SetMediaStore injects a MediaStore for media lifecycle management.
 func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 	al.mediaStore = s
+	for _, agentID := range al.registry.ListAgentIDs() {
+		agent, ok := al.registry.GetAgent(agentID)
+		if !ok {
+			continue
+		}
+		for _, toolName := range agent.Tools.List() {
+			tool, ok := agent.Tools.Get(toolName)
+			if !ok {
+				continue
+			}
+			if setter, ok := tool.(interface{ SetMediaStore(media.MediaStore) }); ok {
+				setter.SetMediaStore(s)
+			}
+		}
+	}
 }
 
 // inferMediaType determines the media type ("image", "audio", "video", "file")
@@ -524,7 +544,7 @@ func (al *AgentLoop) processMessageCore(
 		created := false
 		agent, created = al.registry.GetOrCreateAgent(route.AgentID)
 		if created {
-			registerSharedToolsForAgent(al.cfg, al.bus, al.registry, al.registry.provider, route.AgentID)
+			registerSharedToolsForAgent(al.cfg, al.bus, al.registry, al.registry.provider, al.mediaStore, route.AgentID)
 		}
 		al.registerGlobalToolsForAgent(agent)
 	} else {

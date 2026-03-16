@@ -815,7 +815,8 @@ Sample workspace skills in this repo include:
 
 - `weather` for forecasts without an API key
 - `summarize` for URL/file/video summaries and transcript extraction
-- `huggingface-spaces` / `hf-image` for Gradio-based Hugging Face Space workflows
+- `huggingface-spaces` for generic Gradio-based Hugging Face Space workflows
+- `generate-image` for CPA-based image generation and editing with in-chat media delivery
 - `edge-tts` for text-to-speech via the public `innoai/Edge-TTS-Text-to-Speech` Hugging Face Space
 - `stt` for local audio transcription via the CPA OpenAI-compatible endpoint using `CPA_API_KEY`
 
