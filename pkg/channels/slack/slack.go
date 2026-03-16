@@ -325,6 +325,7 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 			ref, err := store.Store(localPath, media.MediaMeta{
 				Filename: filename,
 				Source:   "slack",
+				Owned:    true,
 			}, scope)
 			if err == nil {
 				return ref

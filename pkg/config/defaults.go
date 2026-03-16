@@ -331,7 +331,7 @@ func DefaultConfig() *Config {
 		Tools: ToolsConfig{
 			MediaCleanup: MediaCleanupConfig{
 				Enabled:  true,
-				MaxAge:   30,
+				MaxAge:   180,
 				Interval: 5,
 			},
 			Web: WebToolsConfig{

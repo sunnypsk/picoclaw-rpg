@@ -16,6 +16,7 @@ type MediaMeta struct {
 	Filename    string
 	ContentType string
 	Source      string // "telegram", "discord", "tool:image-gen", etc.
+	Owned       bool   // true when Picoclaw created/downloaded the file and may safely delete it
 }
 
 // MediaStore manages the lifecycle of media files associated with processing scopes.
@@ -31,7 +32,7 @@ type MediaStore interface {
 	// ResolveWithMeta returns the local file path and metadata for a given ref.
 	ResolveWithMeta(ref string) (localPath string, meta MediaMeta, err error)
 
-	// ReleaseAll deletes all files registered under the given scope
+	// ReleaseAll deletes owned files registered under the given scope
 	// and removes the mapping entries. File-not-exist errors are ignored.
 	ReleaseAll(scope string) error
 }
@@ -132,7 +133,7 @@ func (s *FileMediaStore) ResolveWithMeta(ref string) (string, MediaMeta, error) 
 	return entry.path, entry.meta, nil
 }
 
-// ReleaseAll removes all files under the given scope and cleans up mappings.
+// ReleaseAll removes all refs under the given scope and deletes owned files.
 // Phase 1 (under lock): remove entries from maps.
 // Phase 2 (no lock): delete files from disk.
 func (s *FileMediaStore) ReleaseAll(scope string) error {
@@ -148,7 +149,9 @@ func (s *FileMediaStore) ReleaseAll(scope string) error {
 
 	for ref := range refs {
 		if entry, exists := s.refs[ref]; exists {
-			paths = append(paths, entry.path)
+			if entry.meta.Owned {
+				paths = append(paths, entry.path)
+			}
 		}
 		delete(s.refs, ref)
 		delete(s.refToScope, ref)
@@ -179,8 +182,9 @@ func (s *FileMediaStore) CleanExpired() int {
 
 	// Phase 1: collect expired entries under lock
 	type expiredEntry struct {
-		ref  string
-		path string
+		ref   string
+		path  string
+		owned bool
 	}
 
 	s.mu.Lock()
@@ -189,7 +193,7 @@ func (s *FileMediaStore) CleanExpired() int {
 
 	for ref, entry := range s.refs {
 		if entry.storedAt.Before(cutoff) {
-			expired = append(expired, expiredEntry{ref: ref, path: entry.path})
+			expired = append(expired, expiredEntry{ref: ref, path: entry.path, owned: entry.meta.Owned})
 
 			if scope, ok := s.refToScope[ref]; ok {
 				if scopeRefs, ok := s.scopeToRefs[scope]; ok {
@@ -208,6 +212,9 @@ func (s *FileMediaStore) CleanExpired() int {
 
 	// Phase 2: delete files without holding the lock
 	for _, e := range expired {
+		if !e.owned {
+			continue
+		}
 		if err := os.Remove(e.path); err != nil && !os.IsNotExist(err) {
 			logger.WarnCF("media", "cleanup: failed to remove file", map[string]any{
 				"path":  e.path,

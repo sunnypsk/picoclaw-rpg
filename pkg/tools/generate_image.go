@@ -531,6 +531,7 @@ func (t *GenerateImageTool) storeOutput(ctx context.Context, output imageOutput)
 		Filename:    filename,
 		ContentType: contentType,
 		Source:      "tool:generate_image",
+		Owned:       true,
 	}, scope)
 	if err != nil {
 		return "", fmt.Errorf("store generated image: %w", err)

@@ -52,7 +52,7 @@ func TestReleaseAll(t *testing.T) {
 	for i := range 3 {
 		paths[i] = createTempFile(t, dir, strings.Repeat("a", i+1)+".jpg")
 		var err error
-		refs[i], err = store.Store(paths[i], MediaMeta{Source: "test"}, "scope1")
+		refs[i], err = store.Store(paths[i], MediaMeta{Source: "test", Owned: true}, "scope1")
 		if err != nil {
 			t.Fatalf("Store failed: %v", err)
 		}
@@ -84,8 +84,8 @@ func TestMultiScopeIsolation(t *testing.T) {
 	pathA := createTempFile(t, dir, "fileA.jpg")
 	pathB := createTempFile(t, dir, "fileB.jpg")
 
-	refA, _ := store.Store(pathA, MediaMeta{Source: "test"}, "scopeA")
-	refB, _ := store.Store(pathB, MediaMeta{Source: "test"}, "scopeB")
+	refA, _ := store.Store(pathA, MediaMeta{Source: "test", Owned: true}, "scopeA")
+	refB, _ := store.Store(pathB, MediaMeta{Source: "test", Owned: true}, "scopeB")
 
 	// Release only scopeA
 	if err := store.ReleaseAll("scopeA"); err != nil {
@@ -124,7 +124,7 @@ func TestReleaseAllIdempotent(t *testing.T) {
 	// Create and release, then release again
 	dir := t.TempDir()
 	path := createTempFile(t, dir, "file.jpg")
-	_, _ = store.Store(path, MediaMeta{Source: "test"}, "scope1")
+	_, _ = store.Store(path, MediaMeta{Source: "test", Owned: true}, "scope1")
 
 	if err := store.ReleaseAll("scope1"); err != nil {
 		t.Fatalf("first ReleaseAll failed: %v", err)
@@ -139,7 +139,7 @@ func TestReleaseAllCleansMappingsIfRefsMissing(t *testing.T) {
 	store := NewFileMediaStore()
 
 	path := createTempFile(t, dir, "file.jpg")
-	ref, err := store.Store(path, MediaMeta{Source: "test"}, "scope1")
+	ref, err := store.Store(path, MediaMeta{Source: "test", Owned: true}, "scope1")
 	if err != nil {
 		t.Fatalf("Store failed: %v", err)
 	}
@@ -161,6 +161,28 @@ func TestReleaseAllCleansMappingsIfRefsMissing(t *testing.T) {
 	}
 	if _, ok := store.scopeToRefs["scope1"]; ok {
 		t.Error("scopeToRefs should not contain scope1 after ReleaseAll")
+	}
+}
+
+func TestReleaseAllPreservesUnownedFiles(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileMediaStore()
+
+	path := createTempFile(t, dir, "original.jpg")
+	ref, err := store.Store(path, MediaMeta{Source: "test"}, "scope1")
+	if err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	if err := store.ReleaseAll("scope1"); err != nil {
+		t.Fatalf("ReleaseAll failed: %v", err)
+	}
+
+	if _, err := store.Resolve(ref); err == nil {
+		t.Fatal("ref should be unresolvable after ReleaseAll")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("unowned file should still exist: %v", err)
 	}
 }
 
@@ -235,7 +257,7 @@ func TestConcurrentSafety(t *testing.T) {
 
 			for i := range filesPerGoroutine {
 				path := createTempFile(t, dir, strings.Repeat("f", gIdx*filesPerGoroutine+i+1)+".tmp")
-				ref, err := store.Store(path, MediaMeta{Source: "test"}, scope)
+				ref, err := store.Store(path, MediaMeta{Source: "test", Owned: true}, scope)
 				if err != nil {
 					t.Errorf("Store failed: %v", err)
 					return
@@ -273,7 +295,7 @@ func TestCleanExpiredRemovesOldEntries(t *testing.T) {
 	store.nowFunc = func() time.Time { return now.Add(-20 * time.Minute) }
 
 	path := createTempFile(t, dir, "old.jpg")
-	ref, err := store.Store(path, MediaMeta{Source: "test"}, "scope1")
+	ref, err := store.Store(path, MediaMeta{Source: "test", Owned: true}, "scope1")
 	if err != nil {
 		t.Fatalf("Store failed: %v", err)
 	}
@@ -326,12 +348,12 @@ func TestCleanExpiredMixedAges(t *testing.T) {
 	// Store old entry
 	store.nowFunc = func() time.Time { return now.Add(-20 * time.Minute) }
 	oldPath := createTempFile(t, dir, "old.jpg")
-	oldRef, _ := store.Store(oldPath, MediaMeta{Source: "test"}, "scope1")
+	oldRef, _ := store.Store(oldPath, MediaMeta{Source: "test", Owned: true}, "scope1")
 
 	// Store fresh entry
 	store.nowFunc = func() time.Time { return now }
 	freshPath := createTempFile(t, dir, "fresh.jpg")
-	freshRef, _ := store.Store(freshPath, MediaMeta{Source: "test"}, "scope1")
+	freshRef, _ := store.Store(freshPath, MediaMeta{Source: "test", Owned: true}, "scope1")
 
 	removed := store.CleanExpired()
 	if removed != 1 {
@@ -354,7 +376,7 @@ func TestCleanExpiredCleansEmptyScopes(t *testing.T) {
 	// Store old entry as the only one in scope
 	store.nowFunc = func() time.Time { return now.Add(-20 * time.Minute) }
 	path := createTempFile(t, dir, "only.jpg")
-	store.Store(path, MediaMeta{Source: "test"}, "lonely_scope")
+	store.Store(path, MediaMeta{Source: "test", Owned: true}, "lonely_scope")
 
 	store.nowFunc = func() time.Time { return now }
 	store.CleanExpired()
@@ -382,6 +404,31 @@ func TestStartStopLifecycle(t *testing.T) {
 
 	// Double stop should not panic
 	store.Stop()
+}
+
+func TestCleanExpiredPreservesUnownedFiles(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	store := newTestStoreWithCleanup(10 * time.Minute)
+	store.nowFunc = func() time.Time { return now.Add(-20 * time.Minute) }
+
+	path := createTempFile(t, dir, "original.jpg")
+	ref, err := store.Store(path, MediaMeta{Source: "test"}, "scope1")
+	if err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	store.nowFunc = func() time.Time { return now }
+	removed := store.CleanExpired()
+	if removed != 1 {
+		t.Fatalf("expected 1 removed, got %d", removed)
+	}
+	if _, err := store.Resolve(ref); err == nil {
+		t.Fatal("expired ref should be unresolvable")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("unowned expired file should still exist: %v", err)
+	}
 }
 
 func TestCleanExpiredZeroMaxAge(t *testing.T) {

@@ -1521,3 +1521,103 @@ func TestResolveMediaRefs_UsesMetaContentType(t *testing.T) {
 		t.Fatalf("expected jpeg prefix, got %q", result[0].Media[0][:30])
 	}
 }
+
+func TestProcessMessage_KeepsOwnedInboundMediaUntilTTL(t *testing.T) {
+	al, _, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+
+	store := media.NewFileMediaStore()
+	al.SetMediaStore(store)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "inbound.png")
+	pngHeader := []byte{
+		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
+		0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
+	}
+	if err := os.WriteFile(path, pngHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	scope := "telegram:chat-1:msg-1"
+	ref, err := store.Store(path, media.MediaMeta{Filename: "inbound.png", Owned: true}, scope)
+	if err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	_, err = al.processMessage(context.Background(), bus.InboundMessage{
+		Channel:    "telegram",
+		SenderID:   "telegram:user-1",
+		ChatID:     "chat-1",
+		Content:    "describe the image",
+		Media:      []string{ref},
+		MediaScope: scope,
+		SessionKey: "session-1",
+	})
+	if err != nil {
+		t.Fatalf("processMessage failed: %v", err)
+	}
+
+	resolved, err := store.Resolve(ref)
+	if err != nil {
+		t.Fatalf("owned media ref should remain available until TTL cleanup: %v", err)
+	}
+	if resolved != path {
+		t.Fatalf("Resolve returned %q, want %q", resolved, path)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("owned temp file should still exist before TTL cleanup: %v", err)
+	}
+}
+
+func TestProcessMessage_KeepsUnownedInboundMediaUntilTTL(t *testing.T) {
+	al, _, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+
+	store := media.NewFileMediaStore()
+	al.SetMediaStore(store)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "original.png")
+	pngHeader := []byte{
+		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
+		0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
+	}
+	if err := os.WriteFile(path, pngHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	scope := "telegram:chat-1:msg-2"
+	ref, err := store.Store(path, media.MediaMeta{Filename: "original.png"}, scope)
+	if err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	_, err = al.processMessage(context.Background(), bus.InboundMessage{
+		Channel:    "telegram",
+		SenderID:   "telegram:user-1",
+		ChatID:     "chat-1",
+		Content:    "describe the image",
+		Media:      []string{ref},
+		MediaScope: scope,
+		SessionKey: "session-1",
+	})
+	if err != nil {
+		t.Fatalf("processMessage failed: %v", err)
+	}
+
+	resolved, err := store.Resolve(ref)
+	if err != nil {
+		t.Fatalf("unowned media ref should remain available until TTL cleanup: %v", err)
+	}
+	if resolved != path {
+		t.Fatalf("Resolve returned %q, want %q", resolved, path)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("unowned source file should remain on disk: %v", err)
+	}
+}

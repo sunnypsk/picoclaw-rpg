@@ -449,6 +449,7 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 			ref, err := store.Store(localPath, media.MediaMeta{
 				Filename: filename,
 				Source:   "telegram",
+				Owned:    true,
 			}, scope)
 			if err == nil {
 				return ref

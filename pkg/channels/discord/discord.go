@@ -350,6 +350,7 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 			ref, err := store.Store(localPath, media.MediaMeta{
 				Filename: filename,
 				Source:   "discord",
+				Owned:    true,
 			}, scope)
 			if err == nil {
 				return ref

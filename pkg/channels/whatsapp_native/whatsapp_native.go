@@ -65,6 +65,14 @@ type WhatsAppNativeChannel struct {
 	wg           sync.WaitGroup // tracks background goroutines (QR handler, reconnect)
 }
 
+type incomingMediaAttachment struct {
+	media    whatsmeow.DownloadableMessage
+	mimeType string
+	prefix   string
+	kind     string
+	logLabel string
+}
+
 // NewWhatsAppNativeChannel creates a WhatsApp channel that uses whatsmeow for connection.
 // storePath is the directory for the SQLite session store (e.g. workspace/whatsapp).
 func NewWhatsAppNativeChannel(
@@ -445,29 +453,100 @@ func (c *WhatsAppNativeChannel) extractIncomingMedia(msg *waE2E.Message, chatID,
 
 	paths := make([]string, 0, 1)
 
-	scope := "whatsapp_native:inbound:" + chatID
+	scope := channels.BuildMediaScope(c.Name(), chatID, messageID)
 
-	if image := msg.GetImageMessage(); image != nil {
-		if p, err := c.downloadIncomingMedia(c.runCtx, client, image, image.GetMimetype(), "wa-image"); err == nil {
-			if ref := c.storeIncomingMedia(p, image.GetMimetype(), "image", messageID, scope); ref != "" {
+	for _, attachment := range collectIncomingMediaAttachments(msg) {
+		if ref, err := c.downloadAndStoreIncomingMedia(
+			client,
+			attachment.media,
+			attachment.mimeType,
+			attachment.prefix,
+			attachment.kind,
+			messageID,
+			scope,
+		); err == nil {
+			if ref != "" {
 				paths = append(paths, ref)
 			}
 		} else {
-			logger.WarnCF("whatsapp", "Failed to download incoming image", map[string]any{"error": err.Error()})
-		}
-	}
-
-	if sticker := msg.GetStickerMessage(); sticker != nil {
-		if p, err := c.downloadIncomingMedia(c.runCtx, client, sticker, sticker.GetMimetype(), "wa-sticker"); err == nil {
-			if ref := c.storeIncomingMedia(p, sticker.GetMimetype(), "sticker", messageID, scope); ref != "" {
-				paths = append(paths, ref)
-			}
-		} else {
-			logger.WarnCF("whatsapp", "Failed to download incoming sticker", map[string]any{"error": err.Error()})
+			logger.WarnCF("whatsapp", "Failed to download incoming "+attachment.logLabel, map[string]any{"error": err.Error()})
 		}
 	}
 
 	return paths
+}
+
+func collectIncomingMediaAttachments(msg *waE2E.Message) []incomingMediaAttachment {
+	if msg == nil {
+		return nil
+	}
+
+	attachments := make([]incomingMediaAttachment, 0, 5)
+
+	if image := msg.GetImageMessage(); image != nil {
+		attachments = append(attachments, incomingMediaAttachment{
+			media:    image,
+			mimeType: image.GetMimetype(),
+			prefix:   "wa-image",
+			kind:     "image",
+			logLabel: "image",
+		})
+	}
+
+	if sticker := msg.GetStickerMessage(); sticker != nil {
+		attachments = append(attachments, incomingMediaAttachment{
+			media:    sticker,
+			mimeType: sticker.GetMimetype(),
+			prefix:   "wa-sticker",
+			kind:     "sticker",
+			logLabel: "sticker",
+		})
+	}
+
+	if audio := msg.GetAudioMessage(); audio != nil {
+		attachments = append(attachments, incomingMediaAttachment{
+			media:    audio,
+			mimeType: audio.GetMimetype(),
+			prefix:   "wa-audio",
+			kind:     "audio",
+			logLabel: "audio",
+		})
+	}
+
+	if video := msg.GetVideoMessage(); video != nil {
+		attachments = append(attachments, incomingMediaAttachment{
+			media:    video,
+			mimeType: video.GetMimetype(),
+			prefix:   "wa-video",
+			kind:     "video",
+			logLabel: "video",
+		})
+	}
+
+	if doc := msg.GetDocumentMessage(); doc != nil {
+		attachments = append(attachments, incomingMediaAttachment{
+			media:    doc,
+			mimeType: doc.GetMimetype(),
+			prefix:   "wa-document",
+			kind:     "file",
+			logLabel: "document",
+		})
+	}
+
+	return attachments
+}
+
+func (c *WhatsAppNativeChannel) downloadAndStoreIncomingMedia(
+	client *whatsmeow.Client,
+	media whatsmeow.DownloadableMessage,
+	mimeType, prefix, kind, messageID, scope string,
+) (string, error) {
+	path, err := c.downloadIncomingMedia(c.runCtx, client, media, mimeType, prefix)
+	if err != nil {
+		return "", err
+	}
+
+	return c.storeIncomingMedia(path, mimeType, kind, messageID, scope), nil
 }
 
 func (c *WhatsAppNativeChannel) downloadIncomingMedia(
@@ -521,7 +600,12 @@ func (c *WhatsAppNativeChannel) storeIncomingMedia(localPath, mimeType, kind, me
 	}
 	filename := fmt.Sprintf("%s-%s%s", kind, messageID, ext)
 
-	ref, err := store.Store(localPath, media.MediaMeta{Filename: filename, ContentType: mimeType}, scope)
+	ref, err := store.Store(localPath, media.MediaMeta{
+		Filename:    filename,
+		ContentType: mimeType,
+		Source:      "whatsapp_native",
+		Owned:       true,
+	}, scope)
 	if err != nil {
 		logger.WarnCF("whatsapp", "Failed to store inbound media", map[string]any{"error": err.Error(), "path": localPath})
 		return ""

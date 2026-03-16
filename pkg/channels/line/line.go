@@ -294,6 +294,7 @@ func (c *LINEChannel) processEvent(event lineEvent) {
 			ref, err := store.Store(localPath, media.MediaMeta{
 				Filename: filename,
 				Source:   "line",
+				Owned:    true,
 			}, scope)
 			if err == nil {
 				return ref

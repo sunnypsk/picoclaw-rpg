@@ -751,6 +751,7 @@ func (c *OneBotChannel) parseMessageSegments(
 			ref, err := store.Store(localPath, media.MediaMeta{
 				Filename: filename,
 				Source:   "onebot",
+				Owned:    true,
 			}, scope)
 			if err == nil {
 				return ref
