@@ -15,35 +15,31 @@ func prepareRelationshipTarget(agent *AgentInstance, msg bus.InboundMessage, ses
 	if agent == nil || agent.StateStore == nil {
 		return nil
 	}
-	state, err := agent.StateStore.LoadState()
-	if err != nil {
-		return err
-	}
-	state = normalizeNPCState(state)
-	if state.Relationships == nil {
-		state.Relationships = make(map[string]NPCRelationship)
-	}
 	relationshipKey := buildRelationshipKey(msg.Channel, msg.SenderID)
 	if relationshipKey == "" {
 		return nil
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	rel, ok := state.Relationships[relationshipKey]
-	if !ok {
-		rel = NPCRelationship{
-			Affinity:    NPCLevelMid,
-			Trust:       NPCLevelMid,
-			Familiarity: NPCLevelLow,
+
+	return agent.StateStore.UpdateState(func(state *NPCState) (bool, error) {
+		now := time.Now().UTC().Format(time.RFC3339)
+		rel, ok := state.Relationships[relationshipKey]
+		if !ok {
+			rel = NPCRelationship{
+				Affinity:    NPCLevelMid,
+				Trust:       NPCLevelMid,
+				Familiarity: NPCLevelLow,
+			}
 		}
-	}
-	rel.LastChannel = normalizeRelationshipChannel(msg.Channel)
-	rel.LastChatID = strings.TrimSpace(msg.ChatID)
-	rel.LastPeerKind = normalizeRelationshipPeerKind(msg.Peer.Kind)
-	rel.LastSessionKey = strings.TrimSpace(sessionKey)
-	rel.LastUserMessageAt = now
-	rel.LastInteractionAt = now
-	state.Relationships[relationshipKey] = rel
-	return agent.StateStore.SaveState(state)
+		rel.LastChannel = normalizeRelationshipChannel(msg.Channel)
+		rel.LastChatID = strings.TrimSpace(msg.ChatID)
+		rel.LastPeerKind = normalizeRelationshipPeerKind(msg.Peer.Kind)
+		rel.LastSessionKey = strings.TrimSpace(sessionKey)
+		rel.LastUserMessageAt = now
+		rel.LastInteractionAt = now
+		state.Relationships[relationshipKey] = rel
+
+		return true, nil
+	})
 }
 
 func recordRelationshipSessionKey(agent *AgentInstance, msg bus.InboundMessage, sessionKey string) error {
@@ -69,42 +65,35 @@ func recordMinimalRelationshipTurn(agent *AgentInstance, msg bus.InboundMessage,
 	if agent == nil || agent.StateStore == nil {
 		return nil
 	}
-	state, err := agent.StateStore.LoadState()
-	if err != nil {
-		return err
-	}
-	previousState := normalizeNPCState(state)
-	nextState := previousState
-	applyMinimalTurnUpdate(&nextState, msg, assistantReply)
-	preserveActiveOutingDuringChat(previousState.Location, &nextState.Location, time.Now())
-	return agent.StateStore.SaveState(nextState)
+
+	return agent.StateStore.UpdateState(func(state *NPCState) (bool, error) {
+		previousLocation := state.Location
+		applyMinimalTurnUpdate(state, msg, assistantReply)
+		preserveActiveOutingDuringChat(previousLocation, &state.Location, time.Now())
+		return true, nil
+	})
 }
 
 func recordNPCOutboundMessage(agent *AgentInstance, channel, chatID string) error {
 	if agent == nil || agent.StateStore == nil {
 		return nil
 	}
-	state, err := agent.StateStore.LoadState()
-	if err != nil {
-		return err
-	}
-	state = normalizeNPCState(state)
-	updated := false
-	now := time.Now().UTC().Format(time.RFC3339)
-	normalizedChannel := normalizeRelationshipChannel(channel)
-	normalizedChatID := strings.TrimSpace(chatID)
-	for key, rel := range state.Relationships {
-		if rel.LastChannel != normalizedChannel || strings.TrimSpace(rel.LastChatID) != normalizedChatID {
-			continue
+
+	return agent.StateStore.UpdateState(func(state *NPCState) (bool, error) {
+		updated := false
+		now := time.Now().UTC().Format(time.RFC3339)
+		normalizedChannel := normalizeRelationshipChannel(channel)
+		normalizedChatID := strings.TrimSpace(chatID)
+		for key, rel := range state.Relationships {
+			if rel.LastChannel != normalizedChannel || strings.TrimSpace(rel.LastChatID) != normalizedChatID {
+				continue
+			}
+			rel.LastAgentMessageAt = now
+			state.Relationships[key] = rel
+			updated = true
 		}
-		rel.LastAgentMessageAt = now
-		state.Relationships[key] = rel
-		updated = true
-	}
-	if !updated {
-		return nil
-	}
-	return agent.StateStore.SaveState(state)
+		return updated, nil
+	})
 }
 
 func recordProactiveAttempt(agent *AgentInstance, relationshipKey string, at time.Time) error {
@@ -125,22 +114,16 @@ func updateRelationshipState(agent *AgentInstance, relationshipKey string, updat
 	if agent == nil || agent.StateStore == nil || strings.TrimSpace(relationshipKey) == "" || update == nil {
 		return nil
 	}
-	state, err := agent.StateStore.LoadState()
-	if err != nil {
-		return err
-	}
-	state = normalizeNPCState(state)
-	if state.Relationships == nil {
-		state.Relationships = make(map[string]NPCRelationship)
-	}
 	key := strings.ToLower(strings.TrimSpace(relationshipKey))
-	rel, ok := state.Relationships[key]
-	if !ok {
-		return nil
-	}
-	update(&rel)
-	state.Relationships[key] = rel
-	return agent.StateStore.SaveState(state)
+	return agent.StateStore.UpdateState(func(state *NPCState) (bool, error) {
+		rel, ok := state.Relationships[key]
+		if !ok {
+			return false, nil
+		}
+		update(&rel)
+		state.Relationships[key] = rel
+		return true, nil
+	})
 }
 
 func normalizeRelationshipChannel(channel string) string {

@@ -23,11 +23,11 @@ const (
 	npcMemoryBeginMarker = "<!-- NPC_MEMORY_BEGIN -->"
 	npcMemoryEndMarker   = "<!-- NPC_MEMORY_END -->"
 
-	maxNPCRecentEvents  = 30
-	maxNPCMemoryNotes   = 50
+	maxNPCRecentEvents   = 30
+	maxNPCMemoryNotes    = 50
 	npcUpdaterEveryTurns = 5
-	npcUpdaterTimeout   = 5 * time.Minute
-	npcUpdaterPromptTag = "NPC_STATE_MEMORY_UPDATER_V1"
+	npcUpdaterTimeout    = 5 * time.Minute
+	npcUpdaterPromptTag  = "NPC_STATE_MEMORY_UPDATER_V1"
 
 	npcLocationTimeLayout              = "2006-01-02 15:04"
 	npcHeartbeatIdleThreshold          = 2 * time.Hour
@@ -270,6 +270,33 @@ func (s *NPCStateStore) SaveState(state NPCState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	return s.saveStateLocked(state)
+}
+
+func (s *NPCStateStore) UpdateState(update func(state *NPCState) (bool, error)) error {
+	if update == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.loadStateLocked()
+	if err != nil {
+		return err
+	}
+	changed, err := update(&state)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return nil
+	}
+
+	return s.saveStateLocked(state)
+}
+
+func (s *NPCStateStore) saveStateLocked(state NPCState) error {
 	start := time.Now()
 	state = normalizeNPCState(state)
 	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
@@ -791,13 +818,12 @@ func (al *AgentLoop) updateNPCStateAndMemory(
 			return fmt.Errorf("record minimal relationship turn: %w", err)
 		}
 
-		latestState, err := agent.StateStore.LoadState()
-		if err != nil {
-			return fmt.Errorf("reload state after minimal relationship turn: %w", err)
-		}
-		latestState = normalizeNPCState(latestState)
-		latestState.TrackedTurns = previousState.TrackedTurns
-		if err := agent.StateStore.SaveState(latestState); err != nil {
+		trackedTurns := previousState.TrackedTurns
+		if err := agent.StateStore.UpdateState(func(state *NPCState) (bool, error) {
+			state.TrackedTurns = max(state.TrackedTurns, previousState.TrackedTurns)
+			trackedTurns = state.TrackedTurns
+			return true, nil
+		}); err != nil {
 			return fmt.Errorf("save state after throttled relationship turn: %w", err)
 		}
 
@@ -806,7 +832,7 @@ func (al *AgentLoop) updateNPCStateAndMemory(
 			"channel":       msg.Channel,
 			"chat_id":       msg.ChatID,
 			"sender":        msg.SenderID,
-			"tracked_turns": previousState.TrackedTurns,
+			"tracked_turns": trackedTurns,
 			"run_every":     npcUpdaterEveryTurns,
 			"status":        "skipped",
 		})
@@ -828,7 +854,10 @@ func (al *AgentLoop) updateNPCStateAndMemory(
 
 	update, err := al.requestNPCStateUpdate(ctx, agent, fallbackState, fallbackNotes, msg, assistantReply)
 	if err != nil {
-		if saveErr := agent.StateStore.SaveState(fallbackState); saveErr != nil {
+		if saveErr := agent.StateStore.UpdateState(func(state *NPCState) (bool, error) {
+			*state = mergeNPCState(*state, fallbackState)
+			return true, nil
+		}); saveErr != nil {
 			return fmt.Errorf("save fallback state after update failure (%v): %w", err, saveErr)
 		}
 		if saveErr := agent.StateStore.SaveMemoryNotes(fallbackNotes); saveErr != nil {
@@ -851,7 +880,10 @@ func (al *AgentLoop) updateNPCStateAndMemory(
 	nextState.TrackedTurns = previousState.TrackedTurns
 	ensureRelationshipPresent(&nextState, msg)
 	preserveActiveOutingDuringChat(previousState.Location, &nextState.Location, time.Now())
-	if err := agent.StateStore.SaveState(nextState); err != nil {
+	if err := agent.StateStore.UpdateState(func(state *NPCState) (bool, error) {
+		*state = mergeNPCState(*state, nextState)
+		return true, nil
+	}); err != nil {
 		return fmt.Errorf("save state: %w", err)
 	}
 
@@ -1077,6 +1109,75 @@ func applyMinimalTurnUpdate(state *NPCState, msg bus.InboundMessage, assistantRe
 	state.RecentEvents = append(state.RecentEvents, event)
 	state.RecentEvents = normalizeRecentEvents(state.RecentEvents)
 	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+}
+
+func mergeNPCState(latest NPCState, next NPCState) NPCState {
+	latest = normalizeNPCState(latest)
+	next = normalizeNPCState(next)
+
+	merged := next
+	merged.TrackedTurns = max(latest.TrackedTurns, next.TrackedTurns)
+	merged.Relationships = make(map[string]NPCRelationship, len(latest.Relationships)+len(next.Relationships))
+
+	for key, rel := range latest.Relationships {
+		merged.Relationships[key] = rel
+	}
+	for key, rel := range next.Relationships {
+		merged.Relationships[key] = mergeNPCRelationship(merged.Relationships[key], rel)
+	}
+
+	return normalizeNPCState(merged)
+}
+
+func mergeNPCRelationship(latest NPCRelationship, next NPCRelationship) NPCRelationship {
+	merged := next
+	merged.LastChannel = preferLatestNonEmptyString(latest.LastChannel, next.LastChannel)
+	merged.LastChatID = preferLatestNonEmptyString(latest.LastChatID, next.LastChatID)
+	merged.LastPeerKind = preferLatestNonEmptyString(latest.LastPeerKind, next.LastPeerKind)
+	merged.LastSessionKey = preferLatestNonEmptyString(latest.LastSessionKey, next.LastSessionKey)
+	merged.LastInteractionAt = laterRFC3339String(latest.LastInteractionAt, next.LastInteractionAt)
+	merged.LastUserMessageAt = laterRFC3339String(latest.LastUserMessageAt, next.LastUserMessageAt)
+	merged.LastAgentMessageAt = laterRFC3339String(latest.LastAgentMessageAt, next.LastAgentMessageAt)
+	merged.LastProactiveAttemptAt = laterRFC3339String(latest.LastProactiveAttemptAt, next.LastProactiveAttemptAt)
+	merged.LastProactiveSuccessAt = laterRFC3339String(latest.LastProactiveSuccessAt, next.LastProactiveSuccessAt)
+	return merged
+}
+
+func preferLatestNonEmptyString(latest string, next string) string {
+	latest = strings.TrimSpace(latest)
+	if latest != "" {
+		return latest
+	}
+	return strings.TrimSpace(next)
+}
+
+func laterRFC3339String(left string, right string) string {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" {
+		return right
+	}
+	if right == "" {
+		return left
+	}
+
+	leftAt, leftErr := time.Parse(time.RFC3339, left)
+	rightAt, rightErr := time.Parse(time.RFC3339, right)
+	switch {
+	case leftErr == nil && rightErr == nil:
+		if rightAt.After(leftAt) {
+			return right
+		}
+		return left
+	case leftErr == nil:
+		return left
+	case rightErr == nil:
+		return right
+	case right > left:
+		return right
+	default:
+		return left
+	}
 }
 
 func preserveActiveOutingDuringChat(previous NPCLocation, next *NPCLocation, now time.Time) {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -118,6 +119,202 @@ func TestNPCStateStore_LoadState_LegacyMovedAtMapsToStartAt(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "\"moved_at\"") {
 		t.Fatalf("saved state should not contain legacy moved_at field: %s", string(raw))
+	}
+}
+
+func TestNPCStateStore_UpdateState_AppliesConcurrentMutationsAtomically(t *testing.T) {
+	workspace := t.TempDir()
+	store := NewNPCStateStore(workspace)
+
+	if err := store.SaveState(defaultNPCState()); err != nil {
+		t.Fatalf("SaveState() error: %v", err)
+	}
+
+	const workers = 24
+
+	start := make(chan struct{})
+	errs := make(chan error, workers*2)
+	var wg sync.WaitGroup
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- store.UpdateState(func(state *NPCState) (bool, error) {
+				state.TrackedTurns++
+				return true, nil
+			})
+		}()
+
+		sessionKey := fmt.Sprintf("session-%d", i+1)
+		wg.Add(1)
+		go func(sessionKey string) {
+			defer wg.Done()
+			<-start
+			errs <- store.UpdateState(func(state *NPCState) (bool, error) {
+				rel := state.Relationships["telegram:user1"]
+				if rel.Affinity == "" {
+					rel.Affinity = NPCLevelMid
+				}
+				if rel.Trust == "" {
+					rel.Trust = NPCLevelMid
+				}
+				if rel.Familiarity == "" {
+					rel.Familiarity = NPCLevelLow
+				}
+				rel.LastChannel = "telegram"
+				rel.LastChatID = "chat1"
+				rel.LastPeerKind = "direct"
+				rel.LastSessionKey = sessionKey
+				state.Relationships["telegram:user1"] = rel
+				return true, nil
+			})
+		}(sessionKey)
+	}
+
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("UpdateState() error: %v", err)
+		}
+	}
+
+	state, err := store.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState() error: %v", err)
+	}
+	if state.TrackedTurns != workers {
+		t.Fatalf("TrackedTurns = %d, want %d", state.TrackedTurns, workers)
+	}
+	rel, ok := state.Relationships["telegram:user1"]
+	if !ok {
+		t.Fatal("expected relationship telegram:user1")
+	}
+	if rel.LastSessionKey == "" {
+		t.Fatal("expected LastSessionKey to survive concurrent updates")
+	}
+}
+
+func TestNPCStateStore_UpdateState_PreservesLatestRelationshipWhileBumpingTrackedTurns(t *testing.T) {
+	workspace := t.TempDir()
+	store := NewNPCStateStore(workspace)
+	agent := &AgentInstance{StateStore: store}
+
+	initial := defaultNPCState()
+	initial.TrackedTurns = npcUpdaterEveryTurns - 2
+	if err := store.SaveState(initial); err != nil {
+		t.Fatalf("SaveState() error: %v", err)
+	}
+
+	msg := bus.InboundMessage{
+		Channel:  "telegram",
+		SenderID: "user1",
+		ChatID:   "chat1",
+		Content:  "hello there",
+		Peer:     bus.Peer{Kind: "direct", ID: "user1"},
+	}
+
+	if err := recordMinimalRelationshipTurn(agent, msg, "reply"); err != nil {
+		t.Fatalf("recordMinimalRelationshipTurn() error: %v", err)
+	}
+	if err := prepareRelationshipTarget(agent, msg, "session-new"); err != nil {
+		t.Fatalf("prepareRelationshipTarget() error: %v", err)
+	}
+
+	trackedTurns := 0
+	wantTrackedTurns := initial.TrackedTurns + 1
+	if err := store.UpdateState(func(state *NPCState) (bool, error) {
+		state.TrackedTurns = max(state.TrackedTurns, wantTrackedTurns)
+		trackedTurns = state.TrackedTurns
+		return true, nil
+	}); err != nil {
+		t.Fatalf("UpdateState() error: %v", err)
+	}
+
+	state, err := store.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState() error: %v", err)
+	}
+	if state.TrackedTurns != wantTrackedTurns {
+		t.Fatalf("TrackedTurns = %d, want %d", state.TrackedTurns, wantTrackedTurns)
+	}
+	if trackedTurns != wantTrackedTurns {
+		t.Fatalf("trackedTurns = %d, want %d", trackedTurns, wantTrackedTurns)
+	}
+	rel, ok := state.Relationships["telegram:user1"]
+	if !ok {
+		t.Fatal("expected relationship telegram:user1")
+	}
+	if rel.LastSessionKey != "session-new" {
+		t.Fatalf("LastSessionKey = %q, want %q", rel.LastSessionKey, "session-new")
+	}
+	if len(state.RecentEvents) != 1 {
+		t.Fatalf("RecentEvents length = %d, want 1", len(state.RecentEvents))
+	}
+}
+
+func TestMergeNPCState_PreservesLatestRelationshipSessionFields(t *testing.T) {
+	latest := defaultNPCState()
+	latest.TrackedTurns = 4
+	latest.Relationships["telegram:user1"] = NPCRelationship{
+		Affinity:           NPCLevelLow,
+		Trust:              NPCLevelLow,
+		Familiarity:        NPCLevelMid,
+		LastChannel:        "telegram",
+		LastChatID:         "chat-new",
+		LastPeerKind:       "direct",
+		LastSessionKey:     "session-new",
+		LastInteractionAt:  "2026-03-05T12:05:00Z",
+		LastUserMessageAt:  "2026-03-05T12:05:00Z",
+		LastAgentMessageAt: "2026-03-05T12:06:00Z",
+	}
+
+	next := defaultNPCState()
+	next.TrackedTurns = 5
+	next.Emotion = NPCEmotion{Name: "cheerful", Intensity: NPCEmotionIntensityMid, Reason: "fresh update"}
+	next.Relationships["telegram:user1"] = NPCRelationship{
+		Affinity:          NPCLevelHigh,
+		Trust:             NPCLevelHigh,
+		Familiarity:       NPCLevelHigh,
+		LastChannel:       "telegram",
+		LastChatID:        "chat-old",
+		LastPeerKind:      "direct",
+		LastSessionKey:    "",
+		LastInteractionAt: "2026-03-05T12:04:00Z",
+		LastUserMessageAt: "2026-03-05T12:04:00Z",
+		Notes:             "updated notes",
+	}
+
+	merged := mergeNPCState(latest, next)
+
+	if merged.TrackedTurns != 5 {
+		t.Fatalf("TrackedTurns = %d, want 5", merged.TrackedTurns)
+	}
+	if merged.Emotion.Name != "cheerful" {
+		t.Fatalf("Emotion.Name = %q, want cheerful", merged.Emotion.Name)
+	}
+	rel := merged.Relationships["telegram:user1"]
+	if rel.Affinity != NPCLevelHigh || rel.Trust != NPCLevelHigh || rel.Familiarity != NPCLevelHigh {
+		t.Fatalf("expected computed relationship levels to win, got %+v", rel)
+	}
+	if rel.LastSessionKey != "session-new" {
+		t.Fatalf("LastSessionKey = %q, want session-new", rel.LastSessionKey)
+	}
+	if rel.LastChatID != "chat-new" {
+		t.Fatalf("LastChatID = %q, want chat-new", rel.LastChatID)
+	}
+	if rel.LastUserMessageAt != "2026-03-05T12:05:00Z" {
+		t.Fatalf("LastUserMessageAt = %q, want latest timestamp", rel.LastUserMessageAt)
+	}
+	if rel.LastAgentMessageAt != "2026-03-05T12:06:00Z" {
+		t.Fatalf("LastAgentMessageAt = %q, want latest timestamp", rel.LastAgentMessageAt)
+	}
+	if rel.Notes != "updated notes" {
+		t.Fatalf("Notes = %q, want updated notes", rel.Notes)
 	}
 }
 
@@ -344,10 +541,10 @@ func TestNPCStateStore_SaveOperations_LogStatus(t *testing.T) {
 }
 
 type npcStateTestProvider struct {
-	updaterDelay        time.Duration
-	updaterCalls        atomic.Int32
-	updaterInFlight     atomic.Int32
-	updaterMaxInFlight  atomic.Int32
+	updaterDelay       time.Duration
+	updaterCalls       atomic.Int32
+	updaterInFlight    atomic.Int32
+	updaterMaxInFlight atomic.Int32
 }
 
 func (m *npcStateTestProvider) Chat(
