@@ -24,15 +24,17 @@ const defaultImageTimeout = 300 * time.Second
 
 type GenerateImageTool struct {
 	workspace  string
+	restrict   bool
 	mediaStore media.MediaStore
 	httpClient *http.Client
 	getenv     func(string) string
 	tempDir    func() string
 }
 
-func NewGenerateImageTool(workspace string) *GenerateImageTool {
+func NewGenerateImageTool(workspace string, restrict bool) *GenerateImageTool {
 	return &GenerateImageTool{
 		workspace: workspace,
+		restrict:  restrict,
 		httpClient: &http.Client{
 			Timeout: defaultImageTimeout,
 		},
@@ -212,13 +214,19 @@ func (t *GenerateImageTool) resolveInputRef(value string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("resolve input media %q: %w", value, err)
 		}
+		path, err = validatePath(path, t.workspace, t.restrict)
+		if err != nil {
+			return "", err
+		}
+		if _, err := os.Stat(path); err != nil {
+			return "", fmt.Errorf("input image not found: %s", path)
+		}
 		return path, nil
 	}
-	path := value
-	if !filepath.IsAbs(path) && t.workspace != "" {
-		path = filepath.Join(t.workspace, path)
+	path, err := validatePath(value, t.workspace, t.restrict)
+	if err != nil {
+		return "", err
 	}
-	path = filepath.Clean(path)
 	if _, err := os.Stat(path); err != nil {
 		return "", fmt.Errorf("input image not found: %s", path)
 	}

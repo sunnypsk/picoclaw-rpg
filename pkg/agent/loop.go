@@ -177,7 +177,7 @@ func registerSharedToolsForAgent(
 		return err
 	})
 	agent.Tools.Register(messageTool)
-	imageTool := tools.NewGenerateImageTool(agent.Workspace)
+	imageTool := tools.NewGenerateImageTool(agent.Workspace, cfg.Agents.Defaults.RestrictToWorkspace)
 	imageTool.SetMediaStore(store)
 	agent.Tools.Register(imageTool)
 

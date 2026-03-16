@@ -15,7 +15,7 @@ import (
 )
 
 func TestGenerateImageTool_RequiresEnv(t *testing.T) {
-	tool := NewGenerateImageTool(t.TempDir())
+	tool := NewGenerateImageTool(t.TempDir(), false)
 	tool.SetMediaStore(media.NewFileMediaStore())
 	tool.getenv = func(string) string { return "" }
 
@@ -75,7 +75,7 @@ func TestGenerateImageTool_StoresURLResult(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewGenerateImageTool(workspace)
+	tool := NewGenerateImageTool(workspace, false)
 	tool.SetMediaStore(store)
 	tool.getenv = func(name string) string {
 		switch name {
@@ -157,7 +157,7 @@ func TestGenerateImageTool_IncludesImageAndOptionsInChatPayload(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewGenerateImageTool(workspace)
+	tool := NewGenerateImageTool(workspace, false)
 	tool.SetMediaStore(store)
 	tool.getenv = func(name string) string {
 		switch name {
@@ -206,7 +206,7 @@ func TestGenerateImageTool_StoresNestedMessageImageURLResult(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewGenerateImageTool(workspace)
+	tool := NewGenerateImageTool(workspace, false)
 	tool.SetMediaStore(store)
 	tool.getenv = func(name string) string {
 		switch name {
@@ -253,7 +253,7 @@ func TestGenerateImageTool_StoresB64JSONResult(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewGenerateImageTool(workspace)
+	tool := NewGenerateImageTool(workspace, false)
 	tool.SetMediaStore(store)
 	tool.getenv = func(name string) string {
 		switch name {
@@ -289,7 +289,7 @@ func TestGenerateImageTool_StoresB64JSONResult(t *testing.T) {
 }
 
 func TestGenerateImageTool_RejectsEmptyResult(t *testing.T) {
-	tool := NewGenerateImageTool(t.TempDir())
+	tool := NewGenerateImageTool(t.TempDir(), false)
 	tool.SetMediaStore(media.NewFileMediaStore())
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -320,7 +320,7 @@ func TestGenerateImageTool_RejectsEmptyResult(t *testing.T) {
 
 func TestGenerateImageTool_RejectsMultipleInputImages(t *testing.T) {
 	workspace := t.TempDir()
-	tool := NewGenerateImageTool(workspace)
+	tool := NewGenerateImageTool(workspace, false)
 	tool.SetMediaStore(media.NewFileMediaStore())
 	tool.getenv = func(name string) string {
 		switch name {
@@ -348,5 +348,55 @@ func TestGenerateImageTool_RejectsMultipleInputImages(t *testing.T) {
 	}
 	if !strings.Contains(result.ForLLM, "multiple input images") {
 		t.Fatalf("unexpected error message: %q", result.ForLLM)
+	}
+}
+
+func TestGenerateImageTool_RejectsAbsolutePathOutsideWorkspaceWhenRestricted(t *testing.T) {
+	workspace := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.png")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewGenerateImageTool(workspace, true)
+	tool.SetMediaStore(media.NewFileMediaStore())
+
+	_, err := tool.resolveInputRef(outside)
+	if err == nil {
+		t.Fatal("expected absolute path outside workspace to be rejected")
+	}
+	if !strings.Contains(err.Error(), "outside the workspace") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGenerateImageTool_RejectsSymlinkEscapeWhenRestricted(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outsideDir := filepath.Join(root, "outside")
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(outsideDir, "secret.png")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(workspace, "escape.png")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink creation not supported: %v", err)
+	}
+
+	tool := NewGenerateImageTool(workspace, true)
+	tool.SetMediaStore(media.NewFileMediaStore())
+
+	_, err := tool.resolveInputRef("escape.png")
+	if err == nil {
+		t.Fatal("expected symlink escape to be rejected")
+	}
+	if !strings.Contains(err.Error(), "symlink resolves outside workspace") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
