@@ -186,6 +186,61 @@ func TestGenerateImageTool_IncludesImageAndOptionsInChatPayload(t *testing.T) {
 	}
 }
 
+func TestGenerateImageTool_StoresNestedMessageImageURLResult(t *testing.T) {
+	workspace := t.TempDir()
+	store := media.NewFileMediaStore()
+	imageDataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("nested-image"))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{
+					"images": []map[string]any{{
+						"image_url": map[string]any{
+							"url": imageDataURL,
+						},
+					}},
+				},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	tool := NewGenerateImageTool(workspace)
+	tool.SetMediaStore(store)
+	tool.getenv = func(name string) string {
+		switch name {
+		case "CPA_API_KEY":
+			return "test-key"
+		case "CPA_API_BASE":
+			return server.URL
+		case "CPA_IMAGE_MODEL":
+			return "test-model"
+		default:
+			return ""
+		}
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{"prompt": "cat"})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if len(result.Media) != 1 {
+		t.Fatalf("expected one media ref, got %v", result.Media)
+	}
+	path, _, err := store.ResolveWithMeta(result.Media[0])
+	if err != nil {
+		t.Fatalf("resolve media ref: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read stored image: %v", err)
+	}
+	if string(data) != "nested-image" {
+		t.Fatalf("unexpected stored nested image bytes: %q", string(data))
+	}
+}
+
 func TestGenerateImageTool_StoresB64JSONResult(t *testing.T) {
 	workspace := t.TempDir()
 	store := media.NewFileMediaStore()

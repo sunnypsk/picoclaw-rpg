@@ -293,7 +293,7 @@ func (t *GenerateImageTool) sendCPARequest(
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("call CPA image endpoint: %w", err)
+		return nil, fmt.Errorf("call CPA chat completions endpoint: %w", err)
 	}
 	defer resp.Body.Close()
 
