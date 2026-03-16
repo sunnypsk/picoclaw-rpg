@@ -25,7 +25,8 @@ const (
 
 	maxNPCRecentEvents  = 30
 	maxNPCMemoryNotes   = 50
-	npcUpdaterTimeout   = 25 * time.Second
+	npcUpdaterEveryTurns = 5
+	npcUpdaterTimeout   = 5 * time.Minute
 	npcUpdaterPromptTag = "NPC_STATE_MEMORY_UPDATER_V1"
 
 	npcLocationTimeLayout              = "2006-01-02 15:04"
@@ -199,6 +200,7 @@ type NPCRecentEvent struct {
 type NPCState struct {
 	Version       int                        `json:"version,omitempty"`
 	UpdatedAt     string                     `json:"updated_at,omitempty"`
+	TrackedTurns  int                        `json:"tracked_turns,omitempty"`
 	Emotion       NPCEmotion                 `json:"emotion,omitempty"`
 	Location      NPCLocation                `json:"location,omitempty"`
 	Relationships map[string]NPCRelationship `json:"relationships,omitempty"`
@@ -753,6 +755,9 @@ func (al *AgentLoop) maybeUpdateNPCStateAndMemory(
 		return
 	}
 
+	unlock := lockNPCUpdater(agent)
+	defer unlock()
+
 	if err := al.updateNPCStateAndMemory(ctx, agent, msg, assistantReply); err != nil {
 		logger.WarnCF("agent", "Failed to update NPC state/memory",
 			map[string]any{
@@ -770,6 +775,44 @@ func (al *AgentLoop) updateNPCStateAndMemory(
 	msg bus.InboundMessage,
 	assistantReply string,
 ) error {
+	state, err := agent.StateStore.LoadState()
+	if err != nil {
+		return fmt.Errorf("load state: %w", err)
+	}
+	previousState := normalizeNPCState(state)
+	previousState.TrackedTurns++
+	memoryNotes, err := agent.StateStore.LoadMemoryNotes()
+	if err != nil {
+		return fmt.Errorf("load memory notes: %w", err)
+	}
+
+	if previousState.TrackedTurns%npcUpdaterEveryTurns != 0 {
+		if err := recordMinimalRelationshipTurn(agent, msg, assistantReply); err != nil {
+			return fmt.Errorf("record minimal relationship turn: %w", err)
+		}
+
+		latestState, err := agent.StateStore.LoadState()
+		if err != nil {
+			return fmt.Errorf("reload state after minimal relationship turn: %w", err)
+		}
+		latestState = normalizeNPCState(latestState)
+		latestState.TrackedTurns = previousState.TrackedTurns
+		if err := agent.StateStore.SaveState(latestState); err != nil {
+			return fmt.Errorf("save state after throttled relationship turn: %w", err)
+		}
+
+		logger.InfoCF("agent", "NPC state/memory updater skipped by cadence", map[string]any{
+			"agent_id":      agent.ID,
+			"channel":       msg.Channel,
+			"chat_id":       msg.ChatID,
+			"sender":        msg.SenderID,
+			"tracked_turns": previousState.TrackedTurns,
+			"run_every":     npcUpdaterEveryTurns,
+			"status":        "skipped",
+		})
+		return nil
+	}
+
 	baseCtx := parentCtx
 	if baseCtx == nil {
 		baseCtx = context.Background()
@@ -777,16 +820,6 @@ func (al *AgentLoop) updateNPCStateAndMemory(
 
 	ctx, cancel := context.WithTimeout(baseCtx, npcUpdaterTimeout)
 	defer cancel()
-
-	state, err := agent.StateStore.LoadState()
-	if err != nil {
-		return fmt.Errorf("load state: %w", err)
-	}
-	previousState := normalizeNPCState(state)
-	memoryNotes, err := agent.StateStore.LoadMemoryNotes()
-	if err != nil {
-		return fmt.Errorf("load memory notes: %w", err)
-	}
 
 	fallbackState := previousState
 	applyMinimalTurnUpdate(&fallbackState, msg, assistantReply)
@@ -815,6 +848,7 @@ func (al *AgentLoop) updateNPCStateAndMemory(
 	}
 
 	nextState := normalizeNPCState(update.State)
+	nextState.TrackedTurns = previousState.TrackedTurns
 	ensureRelationshipPresent(&nextState, msg)
 	preserveActiveOutingDuringChat(previousState.Location, &nextState.Location, time.Now())
 	if err := agent.StateStore.SaveState(nextState); err != nil {
@@ -830,6 +864,19 @@ func (al *AgentLoop) updateNPCStateAndMemory(
 	}
 
 	return nil
+}
+
+var npcUpdaterLocks sync.Map
+
+func lockNPCUpdater(agent *AgentInstance) func() {
+	if agent == nil {
+		return func() {}
+	}
+
+	v, _ := npcUpdaterLocks.LoadOrStore(agent.ID, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 func (al *AgentLoop) maybeApplyHeartbeatLocationPolicy(agent *AgentInstance) {
