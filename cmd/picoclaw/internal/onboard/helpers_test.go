@@ -28,6 +28,27 @@ func TestCopyEmbeddedToTargetUsesAgentsMarkdown(t *testing.T) {
 	}
 }
 
+func TestCopyEmbeddedWorkspaceTemplates_ProactiveGuidanceIncludesAntiRepeatAndWalkImageBias(t *testing.T) {
+	targetDir := t.TempDir()
+
+	if err := CopyEmbeddedWorkspaceTemplates(targetDir); err != nil {
+		t.Fatalf("CopyEmbeddedWorkspaceTemplates() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(targetDir, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+
+	text := string(data)
+	if !strings.Contains(text, "Do not repeat the same proactive point when the user has not replied") {
+		t.Fatalf("expected anti-repeat proactive guidance in embedded AGENTS.md")
+	}
+	if !strings.Contains(text, "treat that as a stronger reason to share a brief life update or a scene image") {
+		t.Fatalf("expected walk/image proactive guidance in embedded AGENTS.md")
+	}
+}
+
 func TestGeneratedWorkspaceMatchesCanonicalWorkspace(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {

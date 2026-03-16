@@ -397,6 +397,16 @@ func TestNewAgentInstance_SeedsFallbackBootstrapFilesWhenDefaultWorkspaceMissing
 	}
 }
 
+func TestDefaultWorkspaceBootstrapContent_ProactiveGuidanceIncludesAntiRepeatAndWalkImageBias(t *testing.T) {
+	agents := defaultWorkspaceBootstrapContent["AGENTS.md"]
+	if !strings.Contains(agents, "Do not repeat the same proactive point when the user has not replied") {
+		t.Fatalf("expected anti-repeat proactive guidance in fallback AGENTS.md template")
+	}
+	if !strings.Contains(agents, "treat that as a stronger reason to share a brief life update or a scene image") {
+		t.Fatalf("expected walk/image proactive guidance in fallback AGENTS.md template")
+	}
+}
+
 func TestNewAgentInstance_DoesNotOverwriteExistingBootstrapFile(t *testing.T) {
 	root := t.TempDir()
 	defaultWorkspace := filepath.Join(root, "workspace-main")
