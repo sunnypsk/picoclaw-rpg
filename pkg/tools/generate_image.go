@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -116,15 +117,15 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]any) *T
 		return ErrorResult("image generation is not configured with a media store")
 	}
 
-	apiKey := strings.TrimSpace(t.getenv("CPA_API_KEY"))
+	apiKey := strings.TrimSpace(t.lookupEnv("CPA_API_KEY"))
 	if apiKey == "" {
 		return ErrorResult("CPA_API_KEY is required")
 	}
-	apiBase := strings.TrimSpace(t.getenv("CPA_API_BASE"))
+	apiBase := strings.TrimSpace(t.lookupEnv("CPA_API_BASE"))
 	if apiBase == "" {
 		return ErrorResult("CPA_API_BASE is required")
 	}
-	model := strings.TrimSpace(t.getenv("CPA_IMAGE_MODEL"))
+	model := strings.TrimSpace(t.lookupEnv("CPA_IMAGE_MODEL"))
 	if model == "" {
 		return ErrorResult("CPA_IMAGE_MODEL is required")
 	}
@@ -164,6 +165,62 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]any) *T
 
 	summary := fmt.Sprintf("Generated %d image(s) with model %s.", len(refs), model)
 	return MediaResult(summary, refs)
+}
+
+func (t *GenerateImageTool) lookupEnv(name string) string {
+	if value := strings.TrimSpace(t.getenv(name)); value != "" {
+		return value
+	}
+	envFile := filepath.Join(picoclawHomeFromGetenv(t.getenv), ".env")
+	values, err := loadSimpleEnvFile(envFile)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(values[name])
+}
+
+func picoclawHomeFromGetenv(getenv func(string) string) string {
+	if home := strings.TrimSpace(getenv("PICOCLAW_HOME")); home != "" {
+		return home
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".picoclaw")
+}
+
+func loadSimpleEnvFile(path string) (map[string]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	values := make(map[string]string)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, "=") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		if key == "" {
+			continue
+		}
+		if len(value) >= 2 {
+			if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
+				value = value[1 : len(value)-1]
+			}
+		}
+		values[key] = value
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return values, nil
 }
 
 type imageOutput struct {

@@ -28,6 +28,56 @@ func TestGenerateImageTool_RequiresEnv(t *testing.T) {
 	}
 }
 
+func TestGenerateImageTool_LoadsCPAEnvFromPicoclawHome(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".env"), []byte("CPA_API_KEY=file-key\nCPA_API_BASE=https://example.invalid\nCPA_IMAGE_MODEL=file-model\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewGenerateImageTool(t.TempDir(), false)
+	tool.SetMediaStore(media.NewFileMediaStore())
+	tool.getenv = func(name string) string {
+		if name == "PICOCLAW_HOME" {
+			return home
+		}
+		return ""
+	}
+
+	if got := tool.lookupEnv("CPA_API_KEY"); got != "file-key" {
+		t.Fatalf("lookupEnv(CPA_API_KEY) = %q, want file-key", got)
+	}
+	if got := tool.lookupEnv("CPA_API_BASE"); got != "https://example.invalid" {
+		t.Fatalf("lookupEnv(CPA_API_BASE) = %q", got)
+	}
+	if got := tool.lookupEnv("CPA_IMAGE_MODEL"); got != "file-model" {
+		t.Fatalf("lookupEnv(CPA_IMAGE_MODEL) = %q", got)
+	}
+}
+
+func TestGenerateImageTool_ProcessEnvOverridesEnvFile(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".env"), []byte("CPA_API_KEY=file-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewGenerateImageTool(t.TempDir(), false)
+	tool.SetMediaStore(media.NewFileMediaStore())
+	tool.getenv = func(name string) string {
+		switch name {
+		case "PICOCLAW_HOME":
+			return home
+		case "CPA_API_KEY":
+			return "process-key"
+		default:
+			return ""
+		}
+	}
+
+	if got := tool.lookupEnv("CPA_API_KEY"); got != "process-key" {
+		t.Fatalf("lookupEnv(CPA_API_KEY) = %q, want process-key", got)
+	}
+}
+
 func TestGenerateImageTool_StoresURLResult(t *testing.T) {
 	workspace := t.TempDir()
 	store := media.NewFileMediaStore()
