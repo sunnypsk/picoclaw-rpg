@@ -30,6 +30,8 @@ config/config.json
 # Test
 coverage.txt
 coverage.html
+.gocache/
+tmp_chat_probe_result.json
 
 # OS
 .DS_Store
