@@ -771,11 +771,18 @@ func (al *AgentLoop) runAgentLoop(
 			)
 		}
 	}
+	liveUserMessage, sessionUserMessage, promptMedia := normalizeInboundPromptMedia(
+		opts.UserMessage,
+		sessionUserMessage,
+		agent.Workspace,
+		opts.Media,
+		al.mediaStore,
+	)
 	messages := agent.ContextBuilder.BuildMessages(
 		history,
 		summary,
-		opts.UserMessage,
-		opts.Media,
+		liveUserMessage,
+		promptMedia,
 		opts.Channel,
 		opts.ChatID,
 	)

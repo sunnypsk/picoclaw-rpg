@@ -650,6 +650,56 @@ func TestSerializeMessages_WithMedia(t *testing.T) {
 	}
 }
 
+func TestSerializeMessages_DropsAudioMedia(t *testing.T) {
+	messages := []protocoltypes.Message{
+		{Role: "user", Content: "voice note", Media: []string{"data:audio/ogg;base64,abc123"}},
+	}
+	result := serializeMessages(messages)
+
+	data, _ := json.Marshal(result)
+	var msgs []map[string]any
+	json.Unmarshal(data, &msgs)
+
+	if msgs[0]["content"] != "voice note" {
+		t.Fatalf("expected plain string content when only audio media is present, got %v", msgs[0]["content"])
+	}
+}
+
+func TestSerializeMessages_FiltersMixedMediaToImages(t *testing.T) {
+	messages := []protocoltypes.Message{
+		{
+			Role:    "user",
+			Content: "mixed attachments",
+			Media: []string{
+				"data:audio/ogg;base64,voice",
+				"data:image/png;base64,image",
+			},
+		},
+	}
+	result := serializeMessages(messages)
+
+	data, _ := json.Marshal(result)
+	var msgs []map[string]any
+	json.Unmarshal(data, &msgs)
+
+	content, ok := msgs[0]["content"].([]any)
+	if !ok {
+		t.Fatalf("expected multipart content for mixed media message, got %T", msgs[0]["content"])
+	}
+	if len(content) != 2 {
+		t.Fatalf("expected only text + image parts after filtering, got %d", len(content))
+	}
+
+	imgPart := content[1].(map[string]any)
+	if imgPart["type"] != "image_url" {
+		t.Fatalf("expected image_url type after filtering, got %v", imgPart["type"])
+	}
+	imgURL := imgPart["image_url"].(map[string]any)
+	if imgURL["url"] != "data:image/png;base64,image" {
+		t.Fatalf("image url mismatch after filtering: %v", imgURL["url"])
+	}
+}
+
 func TestSerializeMessages_MediaWithToolCallID(t *testing.T) {
 	messages := []protocoltypes.Message{
 		{Role: "tool", Content: "image result", Media: []string{"data:image/png;base64,xyz"}, ToolCallID: "call_1"},

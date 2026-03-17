@@ -362,12 +362,14 @@ type openaiMessage struct {
 
 // serializeMessages converts internal Message structs to the OpenAI wire format.
 // - Strips SystemParts (unknown to third-party endpoints)
-// - Converts messages with Media to multipart content format (text + image_url parts)
+// - Converts messages with image Media to multipart content format (text + image_url parts)
+// - Silently drops non-image media URLs from multipart serialization
 // - Preserves ToolCallID, ToolCalls, and ReasoningContent for all messages
 func serializeMessages(messages []Message) []any {
 	out := make([]any, 0, len(messages))
 	for _, m := range messages {
-		if len(m.Media) == 0 {
+		imageMedia := filterImageMedia(m.Media)
+		if len(imageMedia) == 0 {
 			out = append(out, openaiMessage{
 				Role:             m.Role,
 				Content:          m.Content,
@@ -379,14 +381,14 @@ func serializeMessages(messages []Message) []any {
 		}
 
 		// Multipart content format for messages with media
-		parts := make([]map[string]any, 0, 1+len(m.Media))
+		parts := make([]map[string]any, 0, 1+len(imageMedia))
 		if m.Content != "" {
 			parts = append(parts, map[string]any{
 				"type": "text",
 				"text": m.Content,
 			})
 		}
-		for _, mediaURL := range m.Media {
+		for _, mediaURL := range imageMedia {
 			parts = append(parts, map[string]any{
 				"type": "image_url",
 				"image_url": map[string]any{
@@ -411,6 +413,20 @@ func serializeMessages(messages []Message) []any {
 		out = append(out, msg)
 	}
 	return out
+}
+
+func filterImageMedia(media []string) []string {
+	if len(media) == 0 {
+		return nil
+	}
+
+	filtered := make([]string, 0, len(media))
+	for _, mediaURL := range media {
+		if strings.HasPrefix(strings.ToLower(mediaURL), "data:image/") {
+			filtered = append(filtered, mediaURL)
+		}
+	}
+	return filtered
 }
 
 func normalizeModel(model, apiBase string) string {

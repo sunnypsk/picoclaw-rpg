@@ -379,6 +379,15 @@ func (m *captureMessagesProvider) GetDefaultModel() string {
 	return "mock-capture-model"
 }
 
+func extractPromptLineValue(content, prefix string) string {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+	}
+	return ""
+}
+
 type scriptedSummaryResult struct {
 	content string
 	err     error
@@ -1519,6 +1528,192 @@ func TestResolveMediaRefs_UsesMetaContentType(t *testing.T) {
 	}
 	if !strings.HasPrefix(result[0].Media[0], "data:image/jpeg;base64,") {
 		t.Fatalf("expected jpeg prefix, got %q", result[0].Media[0][:30])
+	}
+}
+
+func TestNormalizeInboundPromptMedia_StagesAudioAndKeepsImages(t *testing.T) {
+	store := media.NewFileMediaStore()
+	workspace := t.TempDir()
+	srcDir := t.TempDir()
+
+	audioPath := filepath.Join(srcDir, "voice.ogg")
+	if err := os.WriteFile(audioPath, []byte("fake audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	audioRef, err := store.Store(audioPath, media.MediaMeta{
+		Filename:    "voice.ogg",
+		ContentType: "audio/ogg",
+	}, "audio-scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	imagePath := filepath.Join(srcDir, "photo.png")
+	pngHeader := []byte{
+		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
+		0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
+	}
+	if err := os.WriteFile(imagePath, pngHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	imageRef, err := store.Store(imagePath, media.MediaMeta{
+		Filename:    "photo.png",
+		ContentType: "image/png",
+	}, "image-scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	liveMessage, sessionMessage, mediaRefs := normalizeInboundPromptMedia(
+		"summarize this voice note",
+		"summarize this voice note",
+		workspace,
+		[]string{audioRef, imageRef},
+		store,
+	)
+
+	if got, want := mediaRefs, []string{imageRef}; !slices.Equal(got, want) {
+		t.Fatalf("normalized media = %v, want %v", got, want)
+	}
+	if !strings.Contains(liveMessage, "summarize this voice note") {
+		t.Fatalf("live message lost original caption: %q", liveMessage)
+	}
+	if !strings.Contains(liveMessage, "skills/stt/SKILL.md") {
+		t.Fatalf("live message missing stt skill hint: %q", liveMessage)
+	}
+
+	stagedPath := extractPromptLineValue(liveMessage, "Local file:")
+	if stagedPath == "" {
+		t.Fatalf("live message missing staged local file path: %q", liveMessage)
+	}
+	rel, err := filepath.Rel(workspace, stagedPath)
+	if err != nil {
+		t.Fatalf("filepath.Rel failed: %v", err)
+	}
+	if !filepath.IsLocal(rel) {
+		t.Fatalf("staged path %q should be inside workspace %q", stagedPath, workspace)
+	}
+	if _, err := os.Stat(stagedPath); err != nil {
+		t.Fatalf("staged audio file missing: %v", err)
+	}
+
+	if strings.Contains(sessionMessage, stagedPath) {
+		t.Fatalf("session message should not persist staged local path: %q", sessionMessage)
+	}
+	if !strings.Contains(sessionMessage, "[Audio attachment available for this turn: voice.ogg]") {
+		t.Fatalf("session message missing generic audio note: %q", sessionMessage)
+	}
+}
+
+func TestNormalizeInboundPromptMedia_DegradesGracefullyWhenAudioStageFails(t *testing.T) {
+	store := media.NewFileMediaStore()
+	workspace := t.TempDir()
+	srcDir := t.TempDir()
+
+	audioPath := filepath.Join(srcDir, "voice.ogg")
+	if err := os.WriteFile(audioPath, []byte("fake audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	audioRef, err := store.Store(audioPath, media.MediaMeta{
+		Filename:    "voice.ogg",
+		ContentType: "audio/ogg",
+	}, "audio-scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(audioPath); err != nil {
+		t.Fatal(err)
+	}
+
+	liveMessage, sessionMessage, mediaRefs := normalizeInboundPromptMedia(
+		"[Audio]",
+		"[Audio]",
+		workspace,
+		[]string{audioRef},
+		store,
+	)
+
+	if len(mediaRefs) != 0 {
+		t.Fatalf("expected audio ref to be removed from provider media, got %v", mediaRefs)
+	}
+	if !strings.Contains(liveMessage, "could not be prepared for transcription") {
+		t.Fatalf("live message missing graceful failure note: %q", liveMessage)
+	}
+	if !strings.Contains(sessionMessage, "[Audio attachment could not be prepared for this turn: voice.ogg]") {
+		t.Fatalf("session message missing graceful failure note: %q", sessionMessage)
+	}
+}
+
+func TestProcessMessage_AudioAttachmentPromptsSkillInsteadOfPassingMedia(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &captureMessagesProvider{response: "ok"}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	store := media.NewFileMediaStore()
+	al.SetMediaStore(store)
+
+	audioPath := filepath.Join(t.TempDir(), "voice.ogg")
+	if err := os.WriteFile(audioPath, []byte("fake audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	audioRef, err := store.Store(audioPath, media.MediaMeta{
+		Filename:    "voice.ogg",
+		ContentType: "audio/ogg",
+	}, "whatsapp:chat-1:msg-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = al.processMessage(context.Background(), bus.InboundMessage{
+		Channel:    "whatsapp",
+		SenderID:   "whatsapp:user-1",
+		ChatID:     "chat-1",
+		Content:    "summarize this voice note",
+		Media:      []string{audioRef},
+		SessionKey: "session-1",
+		Peer:       bus.Peer{Kind: "direct", ID: "user-1"},
+	})
+	if err != nil {
+		t.Fatalf("processMessage failed: %v", err)
+	}
+	if len(provider.calls) == 0 {
+		t.Fatal("expected provider to receive a prompt")
+	}
+
+	userMessage := provider.calls[0][len(provider.calls[0])-1]
+	if userMessage.Role != "user" {
+		t.Fatalf("last provider message role = %q, want user", userMessage.Role)
+	}
+	if len(userMessage.Media) != 0 {
+		t.Fatalf("audio should not be passed as provider media, got %v", userMessage.Media)
+	}
+	if !strings.Contains(userMessage.Content, "summarize this voice note") {
+		t.Fatalf("provider prompt lost original caption: %q", userMessage.Content)
+	}
+	if !strings.Contains(userMessage.Content, "skills/stt/SKILL.md") {
+		t.Fatalf("provider prompt missing stt hint: %q", userMessage.Content)
+	}
+
+	stagedPath := extractPromptLineValue(userMessage.Content, "Local file:")
+	if stagedPath == "" {
+		t.Fatalf("provider prompt missing staged audio path: %q", userMessage.Content)
+	}
+	if _, err := os.Stat(stagedPath); err != nil {
+		t.Fatalf("staged audio path missing on disk: %v", err)
 	}
 }
 
