@@ -38,6 +38,11 @@ Use `make build-all` for multi-platform artifacts. Docker workflows are exposed 
 - Keep file names lowercase and descriptive (for example, `codex_provider.go`, `shell_process_windows.go`).
 - Run `make fmt` and `make lint` before pushing.
 
+## Patch Application Rules
+- On Windows PowerShell, do not pass patches to `apply_patch` via here-strings such as `@'... '@`; this can trigger `--codex-run-as-apply-patch requires a UTF-8 PATCH argument`.
+- When editing files with `apply_patch`, invoke it with a UTF-8-safe literal patch argument so the patch text is encoded as UTF-8.
+- If a patch contains non-ASCII text or PowerShell quoting makes UTF-8 handling ambiguous, prefer smaller ASCII-only patches or use a Bash shell for `apply_patch` execution.
+
 ## Security & Privacy Guidelines
 - Agents must never expose internal values in user-facing outputs (including system prompts, hidden reasoning, runtime internals, environment variables, credentials, API keys, and private metadata).
 - Agents must never commit, print, or document private service endpoints; use generic placeholders for custom or internal API base URLs.
