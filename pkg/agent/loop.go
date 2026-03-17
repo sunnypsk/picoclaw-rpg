@@ -203,10 +203,7 @@ func registerSharedToolsForAgent(
 			Content: content,
 		})
 		if err == nil {
-			recordOutboundMessageForRegistry(registry, agentID, channel, chatID, false)
-			if capture := proactiveOutputCaptureFromContext(ctx); capture != nil {
-				capture.Add(content)
-			}
+			recordOutboundMessageForRegistry(ctx, registry, agentID, channel, chatID, content)
 		}
 		return err
 	})
@@ -585,20 +582,25 @@ func (al *AgentLoop) processMessageCore(
 
 	// Use routed session key, but honor pre-set agent-scoped keys (for ProcessDirect/cron)
 	sessionKey := al.resolveSessionKey(route, msg)
-
-	if err := prepareRelationshipTarget(agent, msg, sessionKey); err != nil {
-		logger.WarnCF("agent", "Failed to prepare relationship target", map[string]any{
-			"agent_id": agent.ID,
-			"channel":  msg.Channel,
-			"sender":   msg.SenderID,
-			"error":    err.Error(),
-		})
+	turnTracker := &replyStateTracker{}
+	turnCtx := withReplyStateTracker(ctx, turnTracker)
+	scheduleReplyStateUpdate := func() {
+		reply := turnTracker.LastContent()
+		if strings.TrimSpace(reply) == "" {
+			return
+		}
+		updateCtx := context.Background()
+		if turnCtx != nil {
+			updateCtx = context.WithoutCancel(turnCtx)
+		}
+		go al.maybeUpdateNPCStateAfterReply(updateCtx, agent, msg, route.MatchedBy, sessionKey, reply)
 	}
 
-	// Check for commands after target preparation so outbound replies can reset relationship silence.
-	if response, handled := al.handleCommand(ctx, msg); handled {
+	// Check for commands after routing so successful replied turns can update state once.
+	if response, handled := al.handleCommand(turnCtx, msg); handled {
 		if sendResponse && response != "" {
-			al.publishAgentMessage(ctx, agent, msg.Channel, msg.ChatID, response, false)
+			al.publishAgentMessage(turnCtx, agent, msg.Channel, msg.ChatID, response, false)
+			scheduleReplyStateUpdate()
 		}
 		return response, agent, nil
 	}
@@ -616,13 +618,15 @@ func (al *AgentLoop) processMessageCore(
 		if len(parts) > 1 {
 			response := "Usage: /new"
 			if sendResponse {
-				al.publishAgentMessage(ctx, agent, msg.Channel, msg.ChatID, response, false)
+				al.publishAgentMessage(turnCtx, agent, msg.Channel, msg.ChatID, response, false)
+				scheduleReplyStateUpdate()
 			}
 			return response, agent, nil
 		}
 		response, err := al.handleNewSessionCommand(agent, route, msg, sessionKey)
 		if err == nil && sendResponse && response != "" {
-			al.publishAgentMessage(ctx, agent, msg.Channel, msg.ChatID, response, false)
+			al.publishAgentMessage(turnCtx, agent, msg.Channel, msg.ChatID, response, false)
+			scheduleReplyStateUpdate()
 		}
 		return response, agent, err
 	}
@@ -635,7 +639,7 @@ func (al *AgentLoop) processMessageCore(
 		})
 
 	attributedUserMessage := attributeInboundMessage(msg)
-	response, err := al.runAgentLoop(ctx, agent, processOptions{
+	response, err := al.runAgentLoop(turnCtx, agent, processOptions{
 		SessionKey:         sessionKey,
 		Channel:            msg.Channel,
 		ChatID:             msg.ChatID,
@@ -649,11 +653,7 @@ func (al *AgentLoop) processMessageCore(
 		PersistSession:     true,
 	})
 	if err == nil {
-		updateCtx := context.Background()
-		if ctx != nil {
-			updateCtx = context.WithoutCancel(ctx)
-		}
-		go al.maybeUpdateNPCStateAndMemory(updateCtx, agent, msg, route.MatchedBy, response)
+		scheduleReplyStateUpdate()
 	}
 	return response, agent, err
 }
@@ -1045,7 +1045,7 @@ func (al *AgentLoop) runLLMIteration(
 
 				if retry == 0 && !constants.IsInternalChannel(opts.Channel) {
 					al.publishAgentMessage(
-						ctx,
+						withoutReplyStateTracking(ctx),
 						agent,
 						opts.Channel,
 						opts.ChatID,

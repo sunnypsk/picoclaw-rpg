@@ -50,11 +50,27 @@ func recordRelationshipSessionKey(agent *AgentInstance, msg bus.InboundMessage, 
 	if relationshipKey == "" {
 		return nil
 	}
-	return updateRelationshipState(agent, relationshipKey, func(rel *NPCRelationship) {
+	if agent == nil || agent.StateStore == nil {
+		return nil
+	}
+	return agent.StateStore.UpdateState(func(state *NPCState) (bool, error) {
+		if state.Relationships == nil {
+			state.Relationships = make(map[string]NPCRelationship)
+		}
+		rel, ok := state.Relationships[relationshipKey]
+		if !ok {
+			rel = NPCRelationship{
+				Affinity:    NPCLevelMid,
+				Trust:       NPCLevelMid,
+				Familiarity: NPCLevelLow,
+			}
+		}
 		rel.LastChannel = normalizeRelationshipChannel(msg.Channel)
 		rel.LastChatID = strings.TrimSpace(msg.ChatID)
 		rel.LastPeerKind = normalizeRelationshipPeerKind(msg.Peer.Kind)
 		rel.LastSessionKey = strings.TrimSpace(sessionKey)
+		state.Relationships[relationshipKey] = rel
+		return true, nil
 	})
 }
 

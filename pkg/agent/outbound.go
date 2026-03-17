@@ -14,10 +14,17 @@ type proactiveContextKey string
 
 const proactiveOutputCaptureKey proactiveContextKey = "proactive_output_capture"
 const proactiveSessionKeyContextKey proactiveContextKey = "proactive_session_key"
+const replyStateTrackerContextKey proactiveContextKey = "reply_state_tracker"
+const replyStateTrackerDisabledKey proactiveContextKey = "reply_state_tracker_disabled"
 
 type proactiveOutputCapture struct {
 	mu       sync.Mutex
 	contents []string
+}
+
+type replyStateTracker struct {
+	mu          sync.Mutex
+	lastContent string
 }
 
 func withProactiveOutputCapture(ctx context.Context, capture *proactiveOutputCapture) context.Context {
@@ -50,6 +57,36 @@ func proactiveSessionKeyFromContext(ctx context.Context) string {
 	return strings.TrimSpace(sessionKey)
 }
 
+func withReplyStateTracker(ctx context.Context, tracker *replyStateTracker) context.Context {
+	if ctx == nil || tracker == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, replyStateTrackerContextKey, tracker)
+}
+
+func replyStateTrackerFromContext(ctx context.Context) *replyStateTracker {
+	if ctx == nil {
+		return nil
+	}
+	tracker, _ := ctx.Value(replyStateTrackerContextKey).(*replyStateTracker)
+	return tracker
+}
+
+func withoutReplyStateTracking(ctx context.Context) context.Context {
+	if ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, replyStateTrackerDisabledKey, true)
+}
+
+func replyStateTrackingDisabled(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	disabled, _ := ctx.Value(replyStateTrackerDisabledKey).(bool)
+	return disabled
+}
+
 func (c *proactiveOutputCapture) Add(content string) {
 	if c == nil || strings.TrimSpace(content) == "" {
 		return
@@ -70,6 +107,28 @@ func (c *proactiveOutputCapture) Messages() []string {
 	return out
 }
 
+func (t *replyStateTracker) Record(content string) {
+	if t == nil {
+		return
+	}
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.lastContent = trimmed
+}
+
+func (t *replyStateTracker) LastContent() string {
+	if t == nil {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastContent
+}
+
 func agentMessageAlreadySent(agent *AgentInstance) bool {
 	if agent == nil {
 		return false
@@ -86,9 +145,9 @@ func agentMessageAlreadySent(agent *AgentInstance) bool {
 }
 
 func recordOutboundMessageForRegistry(
+	ctx context.Context,
 	registry *AgentRegistry,
-	agentID, channel, chatID string,
-	proactive bool,
+	agentID, channel, chatID, content string,
 ) {
 	if registry == nil {
 		return
@@ -97,15 +156,7 @@ func recordOutboundMessageForRegistry(
 	if !ok {
 		return
 	}
-	if err := recordNPCOutboundMessage(agent, channel, chatID); err != nil {
-		logger.WarnCF("agent", "Failed to record outbound message state", map[string]any{
-			"agent_id":  agentID,
-			"channel":   channel,
-			"chat_id":   chatID,
-			"proactive": proactive,
-			"error":     err.Error(),
-		})
-	}
+	recordSuccessfulOutbound(ctx, agent, channel, chatID, content)
 }
 
 func (al *AgentLoop) publishAgentMessage(
@@ -113,12 +164,12 @@ func (al *AgentLoop) publishAgentMessage(
 	agent *AgentInstance,
 	channel, chatID, content string,
 	proactive bool,
-) {
+) bool {
 	if al == nil || al.bus == nil {
-		return
+		return false
 	}
 	if strings.TrimSpace(channel) == "" || strings.TrimSpace(chatID) == "" || content == "" {
-		return
+		return false
 	}
 	if err := al.bus.PublishOutbound(ctx, bus.OutboundMessage{
 		Channel: channel,
@@ -132,19 +183,39 @@ func (al *AgentLoop) publishAgentMessage(
 			"proactive": proactive,
 			"error":     err.Error(),
 		})
-		return
+		return false
 	}
-	if err := recordNPCOutboundMessage(agent, channel, chatID); err != nil {
-		logger.WarnCF("agent", "Failed to record outbound message state", map[string]any{
-			"agent_id":  agentIDOrUnknown(agent),
-			"channel":   channel,
-			"chat_id":   chatID,
-			"proactive": proactive,
-			"error":     err.Error(),
-		})
-	}
+	recordSuccessfulOutbound(ctx, agent, channel, chatID, content)
 	if proactive {
 		al.appendVisibleAssistantMessagesToSession(agent, proactiveSessionKeyFromContext(ctx), channel, chatID, []string{content})
+	}
+	return true
+}
+
+func recordSuccessfulOutbound(
+	ctx context.Context,
+	agent *AgentInstance,
+	channel, chatID, content string,
+) {
+	if capture := proactiveOutputCaptureFromContext(ctx); capture != nil {
+		capture.Add(content)
+		if err := recordNPCOutboundMessage(agent, channel, chatID); err != nil {
+			logger.WarnCF("agent", "Failed to record outbound message state", map[string]any{
+				"agent_id": agentIDOrUnknown(agent),
+				"channel":  channel,
+				"chat_id":  chatID,
+				"error":    err.Error(),
+			})
+		}
+		return
+	}
+
+	if replyStateTrackingDisabled(ctx) {
+		return
+	}
+
+	if tracker := replyStateTrackerFromContext(ctx); tracker != nil {
+		tracker.Record(content)
 	}
 }
 

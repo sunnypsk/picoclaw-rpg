@@ -540,9 +540,86 @@ func TestNPCStateStore_SaveOperations_LogStatus(t *testing.T) {
 	}
 }
 
+func TestAgentLoop_PostReplyStateUpdate_RequiresPublishedReply(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+
+	workspace := filepath.Join(tmpHome, "main-workspace")
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         workspace,
+				Model:             "mock-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &npcStateTestProvider{}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("default agent is nil")
+	}
+
+	msg := bus.InboundMessage{
+		Channel:  "telegram",
+		SenderID: "user-default",
+		ChatID:   "chat-default",
+		Content:  "hello there",
+		Peer:     bus.Peer{Kind: "direct", ID: "user-default"},
+	}
+
+	if _, err := al.processMessage(context.Background(), msg); err != nil {
+		t.Fatalf("processMessage() error: %v", err)
+	}
+
+	waitForCondition(t, 500*time.Millisecond, 20*time.Millisecond, func() (bool, string) {
+		state, err := agent.StateStore.LoadState()
+		if err != nil {
+			return false, fmt.Sprintf("LoadState() error: %v", err)
+		}
+		if state.TrackedTurns != 0 {
+			return false, fmt.Sprintf("TrackedTurns = %d, want 0 before any published reply", state.TrackedTurns)
+		}
+		if provider.stateUpdaterCallCount() != 0 {
+			return false, fmt.Sprintf("stateUpdaterCallCount = %d, want 0 before any published reply", provider.stateUpdaterCallCount())
+		}
+		return true, ""
+	})
+
+	if _, err := al.processMessageAndSend(context.Background(), msg); err != nil {
+		t.Fatalf("processMessageAndSend() error: %v", err)
+	}
+
+	waitForCondition(t, 6*time.Second, 40*time.Millisecond, func() (bool, string) {
+		state, err := agent.StateStore.LoadState()
+		if err != nil {
+			return false, fmt.Sprintf("LoadState() error: %v", err)
+		}
+		if state.TrackedTurns != 1 {
+			return false, fmt.Sprintf("TrackedTurns = %d, want 1 after published reply", state.TrackedTurns)
+		}
+		if state.Emotion.Name != "cheerful" {
+			return false, fmt.Sprintf("Emotion.Name = %q, want cheerful", state.Emotion.Name)
+		}
+		if provider.stateUpdaterCallCount() != 1 {
+			return false, fmt.Sprintf("stateUpdaterCallCount = %d, want 1", provider.stateUpdaterCallCount())
+		}
+		if provider.memoryUpdaterCallCount() != 0 {
+			return false, fmt.Sprintf("memoryUpdaterCallCount = %d, want 0", provider.memoryUpdaterCallCount())
+		}
+		return true, ""
+	})
+}
+
 type npcStateTestProvider struct {
 	updaterDelay       time.Duration
-	updaterCalls       atomic.Int32
+	stateUpdaterCalls  atomic.Int32
+	memoryUpdaterCalls atomic.Int32
 	updaterInFlight    atomic.Int32
 	updaterMaxInFlight atomic.Int32
 }
@@ -554,8 +631,13 @@ func (m *npcStateTestProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
-	if len(messages) > 0 && messages[0].Role == "system" && strings.Contains(messages[0].Content, npcUpdaterPromptTag) {
-		m.updaterCalls.Add(1)
+	if len(messages) > 0 && messages[0].Role == "system" &&
+		(strings.Contains(messages[0].Content, npcStateUpdaterPromptTag) || strings.Contains(messages[0].Content, npcUpdaterPromptTag)) {
+		m.stateUpdaterCalls.Add(1)
+		isMemoryUpdater := strings.Contains(messages[0].Content, npcUpdaterPromptTag)
+		if isMemoryUpdater {
+			m.memoryUpdaterCalls.Add(1)
+		}
 		inFlight := m.updaterInFlight.Add(1)
 		defer m.updaterInFlight.Add(-1)
 		for {
@@ -577,33 +659,39 @@ func (m *npcStateTestProvider) Chat(
 
 		sender := senderIDFromUpdaterInput(messages)
 		relationshipKey := "telegram:" + sender
-		update := npcStateUpdateResult{
-			State: NPCState{
-				Version:   1,
-				UpdatedAt: "2026-01-01T00:00:00Z",
-				Emotion: NPCEmotion{
-					Name:      "cheerful",
-					Intensity: NPCEmotionIntensityMid,
-					Reason:    "had a chat",
-				},
-				Location: NPCLocation{
-					Area:     "market",
-					Scene:    "main square",
-					Activity: "wandering",
-				},
-				Relationships: map[string]NPCRelationship{
-					relationshipKey: {
-						Affinity:    NPCLevelMid,
-						Trust:       NPCLevelMid,
-						Familiarity: NPCLevelLow,
-					},
-				},
-				Habits:       []string{"greets politely"},
-				RecentEvents: []NPCRecentEvent{{At: "2026-01-01T00:00:00Z", Type: "chat", Summary: "talked with " + sender}},
+		state := NPCState{
+			Version:   1,
+			UpdatedAt: "2026-01-01T00:00:00Z",
+			Emotion: NPCEmotion{
+				Name:      "cheerful",
+				Intensity: NPCEmotionIntensityMid,
+				Reason:    "had a chat",
 			},
-			MemoryNotes: []string{"prefers RPG style", "sender=" + sender},
+			Location: NPCLocation{
+				Area:     "market",
+				Scene:    "main square",
+				Activity: "wandering",
+			},
+			Relationships: map[string]NPCRelationship{
+				relationshipKey: {
+					Affinity:    NPCLevelMid,
+					Trust:       NPCLevelMid,
+					Familiarity: NPCLevelLow,
+				},
+			},
+			Habits:       []string{"greets politely"},
+			RecentEvents: []NPCRecentEvent{{At: "2026-01-01T00:00:00Z", Type: "chat", Summary: "talked with " + sender}},
 		}
-		data, _ := json.Marshal(update)
+		var data []byte
+		if isMemoryUpdater {
+			update := npcStateUpdateResult{
+				State:       state,
+				MemoryNotes: []string{"prefers RPG style", "sender=" + sender},
+			}
+			data, _ = json.Marshal(update)
+		} else {
+			data, _ = json.Marshal(state)
+		}
 		return &providers.LLMResponse{Content: string(data), ToolCalls: []providers.ToolCall{}}, nil
 	}
 
@@ -614,8 +702,12 @@ func (m *npcStateTestProvider) GetDefaultModel() string {
 	return "mock-model"
 }
 
-func (m *npcStateTestProvider) updaterCallCount() int {
-	return int(m.updaterCalls.Load())
+func (m *npcStateTestProvider) stateUpdaterCallCount() int {
+	return int(m.stateUpdaterCalls.Load())
+}
+
+func (m *npcStateTestProvider) memoryUpdaterCallCount() int {
+	return int(m.memoryUpdaterCalls.Load())
 }
 
 func (m *npcStateTestProvider) maxConcurrentUpdaters() int {
@@ -697,9 +789,9 @@ func TestAgentLoop_StrictAutoProvision_UpdatesStateAndMemory(t *testing.T) {
 			Peer:     bus.Peer{Kind: "direct", ID: "user42"},
 		}
 
-		response, err := al.processMessage(context.Background(), msg)
+		response, err := al.processMessageAndSend(context.Background(), msg)
 		if err != nil {
-			t.Fatalf("processMessage() error: %v", err)
+			t.Fatalf("processMessageAndSend() error: %v", err)
 		}
 		if response != "ok" {
 			t.Fatalf("response = %q, want %q", response, "ok")
@@ -719,7 +811,7 @@ func TestAgentLoop_StrictAutoProvision_UpdatesStateAndMemory(t *testing.T) {
 		t.Fatalf("expected auto-provisioned agent %q", route.AgentID)
 	}
 
-	waitForCondition(t, 4*time.Second, 40*time.Millisecond, func() (bool, string) {
+	waitForCondition(t, 6*time.Second, 40*time.Millisecond, func() (bool, string) {
 		state, err := agent.StateStore.LoadState()
 		if err != nil {
 			return false, fmt.Sprintf("LoadState() error: %v", err)
@@ -750,8 +842,11 @@ func TestAgentLoop_StrictAutoProvision_UpdatesStateAndMemory(t *testing.T) {
 		if !strings.Contains(string(memoryRaw), npcMemoryBeginMarker) {
 			return false, "memory file missing managed block"
 		}
-		if provider.updaterCallCount() != 1 {
-			return false, fmt.Sprintf("updaterCallCount = %d, want 1", provider.updaterCallCount())
+		if provider.stateUpdaterCallCount() != npcUpdaterEveryTurns {
+			return false, fmt.Sprintf("stateUpdaterCallCount = %d, want %d", provider.stateUpdaterCallCount(), npcUpdaterEveryTurns)
+		}
+		if provider.memoryUpdaterCallCount() != 1 {
+			return false, fmt.Sprintf("memoryUpdaterCallCount = %d, want 1", provider.memoryUpdaterCallCount())
 		}
 
 		return true, ""
@@ -792,8 +887,8 @@ func TestAgentLoop_StrictAutoProvision_ThrottlesStateUpdaterUntilCadence(t *test
 			Content:  fmt.Sprintf("ping %d", i+1),
 			Peer:     bus.Peer{Kind: "direct", ID: "user7"},
 		}
-		if _, err := al.processMessage(context.Background(), msg); err != nil {
-			t.Fatalf("processMessage() error: %v", err)
+		if _, err := al.processMessageAndSend(context.Background(), msg); err != nil {
+			t.Fatalf("processMessageAndSend() error: %v", err)
 		}
 	}
 
@@ -806,7 +901,7 @@ func TestAgentLoop_StrictAutoProvision_ThrottlesStateUpdaterUntilCadence(t *test
 		t.Fatalf("expected auto-provisioned agent %q", route.AgentID)
 	}
 
-	waitForCondition(t, 4*time.Second, 40*time.Millisecond, func() (bool, string) {
+	waitForCondition(t, 6*time.Second, 40*time.Millisecond, func() (bool, string) {
 		state, err := agent.StateStore.LoadState()
 		if err != nil {
 			return false, fmt.Sprintf("LoadState() error: %v", err)
@@ -814,8 +909,8 @@ func TestAgentLoop_StrictAutoProvision_ThrottlesStateUpdaterUntilCadence(t *test
 		if state.TrackedTurns != npcUpdaterEveryTurns-1 {
 			return false, fmt.Sprintf("TrackedTurns = %d, want %d", state.TrackedTurns, npcUpdaterEveryTurns-1)
 		}
-		if state.Emotion.Name != defaultNPCEmotionName {
-			return false, fmt.Sprintf("Emotion.Name = %q, want %q", state.Emotion.Name, defaultNPCEmotionName)
+		if state.Emotion.Name != "cheerful" {
+			return false, fmt.Sprintf("Emotion.Name = %q, want cheerful", state.Emotion.Name)
 		}
 		if _, ok := state.Relationships["telegram:user7"]; !ok {
 			return false, "relationship telegram:user7 not updated yet"
@@ -828,8 +923,11 @@ func TestAgentLoop_StrictAutoProvision_ThrottlesStateUpdaterUntilCadence(t *test
 		if len(notes) != 0 {
 			return false, fmt.Sprintf("memory notes length = %d, want 0 before cadence fires", len(notes))
 		}
-		if provider.updaterCallCount() != 0 {
-			return false, fmt.Sprintf("updaterCallCount = %d, want 0", provider.updaterCallCount())
+		if provider.stateUpdaterCallCount() != npcUpdaterEveryTurns-1 {
+			return false, fmt.Sprintf("stateUpdaterCallCount = %d, want %d", provider.stateUpdaterCallCount(), npcUpdaterEveryTurns-1)
+		}
+		if provider.memoryUpdaterCallCount() != 0 {
+			return false, fmt.Sprintf("memoryUpdaterCallCount = %d, want 0", provider.memoryUpdaterCallCount())
 		}
 		return true, ""
 	})
@@ -867,8 +965,8 @@ func TestAgentLoop_StrictAutoProvision_IsolatesStatePerPeer(t *testing.T) {
 			{Channel: "telegram", SenderID: "u2", ChatID: "group-chat", Content: fmt.Sprintf("hello %d", i+1), Peer: bus.Peer{Kind: "group", ID: "group-chat-2"}},
 		}
 		for _, msg := range messages {
-			if _, err := al.processMessage(context.Background(), msg); err != nil {
-				t.Fatalf("processMessage() error: %v", err)
+			if _, err := al.processMessageAndSend(context.Background(), msg); err != nil {
+				t.Fatalf("processMessageAndSend() error: %v", err)
 			}
 		}
 	}
@@ -888,7 +986,7 @@ func TestAgentLoop_StrictAutoProvision_IsolatesStatePerPeer(t *testing.T) {
 		t.Fatalf("missing agent for route2")
 	}
 
-	waitForCondition(t, 4*time.Second, 40*time.Millisecond, func() (bool, string) {
+	waitForCondition(t, 6*time.Second, 40*time.Millisecond, func() (bool, string) {
 		notes1, err := agent1.StateStore.LoadMemoryNotes()
 		if err != nil {
 			return false, fmt.Sprintf("LoadMemoryNotes(agent1) error: %v", err)
@@ -914,8 +1012,11 @@ func TestAgentLoop_StrictAutoProvision_IsolatesStatePerPeer(t *testing.T) {
 		if strings.Join(notes1, "|") == strings.Join(notes2, "|") {
 			return false, fmt.Sprintf("expected different per-agent memory notes, got same: %v", notes1)
 		}
-		if provider.updaterCallCount() != 2 {
-			return false, fmt.Sprintf("updaterCallCount = %d, want 2", provider.updaterCallCount())
+		if provider.stateUpdaterCallCount() != npcUpdaterEveryTurns*2 {
+			return false, fmt.Sprintf("stateUpdaterCallCount = %d, want %d", provider.stateUpdaterCallCount(), npcUpdaterEveryTurns*2)
+		}
+		if provider.memoryUpdaterCallCount() != 2 {
+			return false, fmt.Sprintf("memoryUpdaterCallCount = %d, want 2", provider.memoryUpdaterCallCount())
 		}
 		return true, ""
 	})
@@ -956,8 +1057,8 @@ func TestAgentLoop_StrictAutoProvision_SerializesUpdaterPerAgent(t *testing.T) {
 			Content:  fmt.Sprintf("msg %d", i+1),
 			Peer:     bus.Peer{Kind: "direct", ID: "user99"},
 		}
-		if _, err := al.processMessage(context.Background(), msg); err != nil {
-			t.Fatalf("processMessage() error: %v", err)
+		if _, err := al.processMessageAndSend(context.Background(), msg); err != nil {
+			t.Fatalf("processMessageAndSend() error: %v", err)
 		}
 	}
 
@@ -970,7 +1071,7 @@ func TestAgentLoop_StrictAutoProvision_SerializesUpdaterPerAgent(t *testing.T) {
 		t.Fatalf("expected auto-provisioned agent %q", route.AgentID)
 	}
 
-	waitForCondition(t, 6*time.Second, 40*time.Millisecond, func() (bool, string) {
+	waitForCondition(t, 8*time.Second, 40*time.Millisecond, func() (bool, string) {
 		state, err := agent.StateStore.LoadState()
 		if err != nil {
 			return false, fmt.Sprintf("LoadState() error: %v", err)
@@ -978,8 +1079,11 @@ func TestAgentLoop_StrictAutoProvision_SerializesUpdaterPerAgent(t *testing.T) {
 		if state.TrackedTurns != totalTurns {
 			return false, fmt.Sprintf("TrackedTurns = %d, want %d", state.TrackedTurns, totalTurns)
 		}
-		if provider.updaterCallCount() != 2 {
-			return false, fmt.Sprintf("updaterCallCount = %d, want 2", provider.updaterCallCount())
+		if provider.stateUpdaterCallCount() != totalTurns {
+			return false, fmt.Sprintf("stateUpdaterCallCount = %d, want %d", provider.stateUpdaterCallCount(), totalTurns)
+		}
+		if provider.memoryUpdaterCallCount() != totalTurns/npcUpdaterEveryTurns {
+			return false, fmt.Sprintf("memoryUpdaterCallCount = %d, want %d", provider.memoryUpdaterCallCount(), totalTurns/npcUpdaterEveryTurns)
 		}
 		if provider.maxConcurrentUpdaters() != 1 {
 			return false, fmt.Sprintf("maxConcurrentUpdaters = %d, want 1", provider.maxConcurrentUpdaters())

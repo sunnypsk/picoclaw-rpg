@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -23,11 +24,12 @@ const (
 	npcMemoryBeginMarker = "<!-- NPC_MEMORY_BEGIN -->"
 	npcMemoryEndMarker   = "<!-- NPC_MEMORY_END -->"
 
-	maxNPCRecentEvents   = 30
-	maxNPCMemoryNotes    = 50
-	npcUpdaterEveryTurns = 5
-	npcUpdaterTimeout    = 5 * time.Minute
-	npcUpdaterPromptTag  = "NPC_STATE_MEMORY_UPDATER_V1"
+	maxNPCRecentEvents       = 30
+	maxNPCMemoryNotes        = 50
+	npcUpdaterEveryTurns     = 5
+	npcUpdaterTimeout        = 5 * time.Minute
+	npcStateUpdaterPromptTag = "NPC_STATE_UPDATER_V2"
+	npcUpdaterPromptTag      = "NPC_STATE_MEMORY_UPDATER_V1"
 
 	npcLocationTimeLayout              = "2006-01-02 15:04"
 	npcHeartbeatIdleThreshold          = 2 * time.Hour
@@ -754,11 +756,12 @@ func upsertManagedMemoryBlock(existing string, notes []string) string {
 	return existing + "\n\n" + block
 }
 
-func (al *AgentLoop) maybeUpdateNPCStateAndMemory(
+func (al *AgentLoop) maybeUpdateNPCStateAfterReply(
 	ctx context.Context,
 	agent *AgentInstance,
 	msg bus.InboundMessage,
 	routeMatchedBy string,
+	sessionKey string,
 	assistantReply string,
 ) {
 	if al == nil || al.cfg == nil || agent == nil || agent.StateStore == nil {
@@ -767,11 +770,29 @@ func (al *AgentLoop) maybeUpdateNPCStateAndMemory(
 	if !shouldTrackRelationshipMessage(msg) {
 		return
 	}
+	if strings.TrimSpace(assistantReply) == "" {
+		return
+	}
 
-	autoCfg := al.cfg.Agents.AutoProvision
-	if !autoCfg.Enabled || !autoCfg.StrictOneToOne || routeMatchedBy != "auto-provision" {
-		if err := recordMinimalRelationshipTurn(agent, msg, assistantReply); err != nil {
-			logger.WarnCF("agent", "Failed to record minimal relationship turn",
+	unlock := lockNPCUpdater(agent)
+	defer unlock()
+
+	state, err := agent.StateStore.LoadState()
+	if err != nil {
+		logger.WarnCF("agent", "Failed to load state before post-reply update", map[string]any{
+			"agent_id": agent.ID,
+			"channel":  msg.Channel,
+			"sender":   msg.SenderID,
+			"error":    err.Error(),
+		})
+		return
+	}
+
+	previousState := normalizeNPCState(state)
+	trackedTurns := previousState.TrackedTurns + 1
+	if shouldUpdateNPCManagedMemory(al.cfg, routeMatchedBy, trackedTurns) {
+		if err := al.updateNPCStateAndMemory(ctx, agent, previousState, trackedTurns, msg, sessionKey, assistantReply); err != nil {
+			logger.WarnCF("agent", "Failed to update NPC state/memory after reply",
 				map[string]any{
 					"agent_id": agent.ID,
 					"channel":  msg.Channel,
@@ -782,11 +803,8 @@ func (al *AgentLoop) maybeUpdateNPCStateAndMemory(
 		return
 	}
 
-	unlock := lockNPCUpdater(agent)
-	defer unlock()
-
-	if err := al.updateNPCStateAndMemory(ctx, agent, msg, assistantReply); err != nil {
-		logger.WarnCF("agent", "Failed to update NPC state/memory",
+	if err := al.updateNPCStateOnly(ctx, agent, previousState, trackedTurns, msg, sessionKey, assistantReply); err != nil {
+		logger.WarnCF("agent", "Failed to update NPC state after reply",
 			map[string]any{
 				"agent_id": agent.ID,
 				"channel":  msg.Channel,
@@ -796,106 +814,103 @@ func (al *AgentLoop) maybeUpdateNPCStateAndMemory(
 	}
 }
 
+func shouldUpdateNPCManagedMemory(cfg *config.Config, routeMatchedBy string, trackedTurns int) bool {
+	if cfg == nil || trackedTurns <= 0 {
+		return false
+	}
+	autoCfg := cfg.Agents.AutoProvision
+	if !autoCfg.Enabled || !autoCfg.StrictOneToOne || routeMatchedBy != "auto-provision" {
+		return false
+	}
+	return trackedTurns%npcUpdaterEveryTurns == 0
+}
+
+func (al *AgentLoop) updateNPCStateOnly(
+	parentCtx context.Context,
+	agent *AgentInstance,
+	previousState NPCState,
+	trackedTurns int,
+	msg bus.InboundMessage,
+	sessionKey string,
+	assistantReply string,
+) error {
+	ctx, cancel := npcUpdaterContext(parentCtx)
+	defer cancel()
+
+	nextState, err := al.requestNPCStateOnlyUpdate(ctx, agent, previousState, msg, sessionKey, assistantReply)
+	if err != nil {
+		return err
+	}
+
+	return saveNPCReplyState(agent, nextState, trackedTurns, msg, sessionKey, time.Now())
+}
+
 func (al *AgentLoop) updateNPCStateAndMemory(
 	parentCtx context.Context,
 	agent *AgentInstance,
+	previousState NPCState,
+	trackedTurns int,
 	msg bus.InboundMessage,
+	sessionKey string,
 	assistantReply string,
 ) error {
-	state, err := agent.StateStore.LoadState()
-	if err != nil {
-		return fmt.Errorf("load state: %w", err)
-	}
-	previousState := normalizeNPCState(state)
-	previousState.TrackedTurns++
 	memoryNotes, err := agent.StateStore.LoadMemoryNotes()
 	if err != nil {
 		return fmt.Errorf("load memory notes: %w", err)
 	}
 
-	if previousState.TrackedTurns%npcUpdaterEveryTurns != 0 {
-		if err := recordMinimalRelationshipTurn(agent, msg, assistantReply); err != nil {
-			return fmt.Errorf("record minimal relationship turn: %w", err)
-		}
-
-		trackedTurns := previousState.TrackedTurns
-		if err := agent.StateStore.UpdateState(func(state *NPCState) (bool, error) {
-			state.TrackedTurns = max(state.TrackedTurns, previousState.TrackedTurns)
-			trackedTurns = state.TrackedTurns
-			return true, nil
-		}); err != nil {
-			return fmt.Errorf("save state after throttled relationship turn: %w", err)
-		}
-
-		logger.InfoCF("agent", "NPC state/memory updater skipped by cadence", map[string]any{
-			"agent_id":      agent.ID,
-			"channel":       msg.Channel,
-			"chat_id":       msg.ChatID,
-			"sender":        msg.SenderID,
-			"tracked_turns": trackedTurns,
-			"run_every":     npcUpdaterEveryTurns,
-			"status":        "skipped",
-		})
-		return nil
-	}
-
-	baseCtx := parentCtx
-	if baseCtx == nil {
-		baseCtx = context.Background()
-	}
-
-	ctx, cancel := context.WithTimeout(baseCtx, npcUpdaterTimeout)
+	ctx, cancel := npcUpdaterContext(parentCtx)
 	defer cancel()
 
-	fallbackState := previousState
-	applyMinimalTurnUpdate(&fallbackState, msg, assistantReply)
-	preserveActiveOutingDuringChat(previousState.Location, &fallbackState.Location, time.Now())
-	fallbackNotes := normalizeMemoryNotes(memoryNotes)
-
-	update, err := al.requestNPCStateUpdate(ctx, agent, fallbackState, fallbackNotes, msg, assistantReply)
+	update, err := al.requestNPCStateUpdate(ctx, agent, previousState, memoryNotes, msg, sessionKey, assistantReply)
 	if err != nil {
-		if saveErr := agent.StateStore.UpdateState(func(state *NPCState) (bool, error) {
-			*state = mergeNPCState(*state, fallbackState)
-			return true, nil
-		}); saveErr != nil {
-			return fmt.Errorf("save fallback state after update failure (%v): %w", err, saveErr)
-		}
-		if saveErr := agent.StateStore.SaveMemoryNotes(fallbackNotes); saveErr != nil {
-			return fmt.Errorf("save fallback memory after update failure (%v): %w", err, saveErr)
-		}
-		logger.InfoCF("agent", "NPC state/memory updater used fallback", map[string]any{
-			"agent_id":           agent.ID,
-			"channel":            msg.Channel,
-			"chat_id":            msg.ChatID,
-			"sender":             msg.SenderID,
-			"status":             "fallback",
-			"relationship_key":   buildRelationshipKey(msg.Channel, msg.SenderID),
-			"memory_notes_count": len(fallbackNotes),
-			"error":              err.Error(),
-		})
-		return nil
+		return err
 	}
 
-	nextState := normalizeNPCState(update.State)
-	nextState.TrackedTurns = previousState.TrackedTurns
-	ensureRelationshipPresent(&nextState, msg)
-	preserveActiveOutingDuringChat(previousState.Location, &nextState.Location, time.Now())
-	if err := agent.StateStore.UpdateState(func(state *NPCState) (bool, error) {
-		*state = mergeNPCState(*state, nextState)
-		return true, nil
-	}); err != nil {
+	if err := saveNPCReplyState(agent, update.State, trackedTurns, msg, sessionKey, time.Now()); err != nil {
 		return fmt.Errorf("save state: %w", err)
 	}
 
 	notesToSave := update.MemoryNotes
 	if len(notesToSave) == 0 {
-		notesToSave = fallbackNotes
+		notesToSave = normalizeMemoryNotes(memoryNotes)
 	}
 	if err := agent.StateStore.SaveMemoryNotes(notesToSave); err != nil {
 		return fmt.Errorf("save memory notes: %w", err)
 	}
 
 	return nil
+}
+
+func npcUpdaterContext(parentCtx context.Context) (context.Context, context.CancelFunc) {
+	baseCtx := parentCtx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	return context.WithTimeout(baseCtx, npcUpdaterTimeout)
+}
+
+func saveNPCReplyState(
+	agent *AgentInstance,
+	nextState NPCState,
+	trackedTurns int,
+	msg bus.InboundMessage,
+	sessionKey string,
+	replyAt time.Time,
+) error {
+	if agent == nil || agent.StateStore == nil {
+		return nil
+	}
+
+	nextState = normalizeNPCState(nextState)
+	return agent.StateStore.UpdateState(func(state *NPCState) (bool, error) {
+		merged := mergeNPCState(*state, nextState)
+		merged.TrackedTurns = max(state.TrackedTurns, trackedTurns)
+		applyReplyRelationshipMetadata(&merged, msg, sessionKey, replyAt)
+		preserveActiveOutingDuringChat(state.Location, &merged.Location, replyAt)
+		*state = merged
+		return true, nil
+	})
 }
 
 var npcUpdaterLocks sync.Map
@@ -941,22 +956,16 @@ func (al *AgentLoop) maybeApplyHeartbeatLocationPolicy(agent *AgentInstance) {
 	}
 }
 
-func (al *AgentLoop) requestNPCStateUpdate(
-	ctx context.Context,
-	agent *AgentInstance,
+func buildNPCStateUpdatePayload(
 	state NPCState,
 	memoryNotes []string,
 	msg bus.InboundMessage,
+	sessionKey string,
 	assistantReply string,
-) (*npcStateUpdateResult, error) {
-	if agent.Provider == nil {
-		return nil, fmt.Errorf("agent provider is nil")
-	}
-
+) ([]byte, string, error) {
 	relationshipKey := buildRelationshipKey(msg.Channel, msg.SenderID)
 	payload := map[string]any{
-		"previous_state":        state,
-		"existing_memory_notes": memoryNotes,
+		"previous_state": state,
 		"interaction": map[string]any{
 			"timestamp":        time.Now().UTC().Format(time.RFC3339),
 			"channel":          msg.Channel,
@@ -965,12 +974,119 @@ func (al *AgentLoop) requestNPCStateUpdate(
 			"peer_kind":        msg.Peer.Kind,
 			"peer_id":          msg.Peer.ID,
 			"relationship_key": relationshipKey,
+			"session_key":      strings.TrimSpace(sessionKey),
 			"user_message":     msg.Content,
 			"assistant_reply":  assistantReply,
 		},
 	}
+	if memoryNotes != nil {
+		payload["existing_memory_notes"] = memoryNotes
+	}
 
 	inputJSON, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil, "", err
+	}
+	return inputJSON, relationshipKey, nil
+}
+
+func (al *AgentLoop) requestNPCStateOnlyUpdate(
+	ctx context.Context,
+	agent *AgentInstance,
+	state NPCState,
+	msg bus.InboundMessage,
+	sessionKey string,
+	assistantReply string,
+) (NPCState, error) {
+	if agent == nil || agent.Provider == nil {
+		return NPCState{}, fmt.Errorf("agent provider is nil")
+	}
+
+	inputJSON, relationshipKey, err := buildNPCStateUpdatePayload(state, nil, msg, sessionKey, assistantReply)
+	if err != nil {
+		return NPCState{}, err
+	}
+
+	systemPrompt := fmt.Sprintf(`%s
+You update internal roleplay state for one dedicated NPC agent.
+Return JSON only, no markdown, no explanations.
+
+Output shape:
+{
+  "version": 1,
+  "updated_at": "RFC3339 timestamp",
+  "emotion": {"name": "string", "intensity": "low|mid|high", "reason": "string"},
+  "location": {"area": "string", "scene": "string", "activity": "string", "start_at": "local datetime text (e.g. 2026-03-05 22:00)", "end_at": "local datetime text (e.g. 2026-03-05 23:30)", "move_reason": "string"},
+  "relationships": {
+    "<channel:user_id>": {"affinity": "low|mid|high", "trust": "low|mid|high", "familiarity": "low|mid|high", "last_interaction_at": "RFC3339 timestamp", "last_channel": "string", "last_chat_id": "string", "last_peer_kind": "string", "last_session_key": "string", "last_user_message_at": "RFC3339 timestamp", "last_agent_message_at": "RFC3339 timestamp", "last_proactive_attempt_at": "RFC3339 timestamp", "last_proactive_success_at": "RFC3339 timestamp", "notes": "string"}
+  },
+  "habits": ["string"],
+  "recent_events": [{"at": "RFC3339", "type": "string", "summary": "string"}]
+}
+
+Rules:
+- Keep continuity from previous state unless interaction indicates change.
+- emotion.name must be one of: %s.
+- emotion.intensity must be one of: low, mid, high.
+- Intensity behavior guide: low=subtle cues and mostly neutral language; mid=clear but balanced emotional expression; high=strong and direct expression matching context.
+- Emotion transition rule: emotion.name may change only when previous_state.emotion.intensity is low.
+- If previous_state.emotion.intensity is mid or high, keep emotion.name the same as previous_state.emotion.name.
+- Example: previous_state angry/high cannot become calm in one update; lower intensity first.
+- location tracks off-chat activity and whereabouts; use start_at/end_at as local datetime text when available.
+- If previous_state.location indicates an active outing window (between start_at and end_at), keep the outing location/activity and add a multitasking cue for chatting remotely.
+- Preserve relationship contact/session/timestamp fields unless the current interaction updates them.
+- Ensure relationship key %q exists and is updated.
+- Return a valid JSON object only.`, npcStateUpdaterPromptTag, strings.Join(npcAllowedEmotionNames, ", "), relationshipKey)
+
+	response, err := agent.Provider.Chat(
+		ctx,
+		[]providers.Message{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: string(inputJSON)},
+		},
+		nil,
+		agent.Model,
+		map[string]any{
+			"max_tokens":       1200,
+			"temperature":      0.2,
+			"prompt_cache_key": agent.ID + ":npc-state-only",
+		},
+	)
+	if err != nil {
+		return NPCState{}, err
+	}
+
+	raw := extractJSONObjectFromContent(response.Content)
+	if strings.TrimSpace(raw) == "" {
+		return NPCState{}, fmt.Errorf("empty JSON state update response")
+	}
+
+	var nextState NPCState
+	if err := json.Unmarshal([]byte(raw), &nextState); err != nil {
+		var wrapped npcStateUpdateResult
+		if err2 := json.Unmarshal([]byte(raw), &wrapped); err2 != nil {
+			return NPCState{}, err
+		}
+		nextState = wrapped.State
+	}
+
+	return normalizeNPCState(nextState), nil
+}
+
+func (al *AgentLoop) requestNPCStateUpdate(
+	ctx context.Context,
+	agent *AgentInstance,
+	state NPCState,
+	memoryNotes []string,
+	msg bus.InboundMessage,
+	sessionKey string,
+	assistantReply string,
+) (*npcStateUpdateResult, error) {
+	if agent.Provider == nil {
+		return nil, fmt.Errorf("agent provider is nil")
+	}
+
+	inputJSON, relationshipKey, err := buildNPCStateUpdatePayload(state, memoryNotes, msg, sessionKey, assistantReply)
 	if err != nil {
 		return nil, err
 	}
@@ -1022,7 +1138,7 @@ Rules:
 		map[string]any{
 			"max_tokens":       1400,
 			"temperature":      0.2,
-			"prompt_cache_key": agent.ID + ":npc-state",
+			"prompt_cache_key": agent.ID + ":npc-state-memory",
 		},
 	)
 	if err != nil {
@@ -1080,6 +1196,47 @@ func ensureRelationshipPresent(state *NPCState, msg bus.InboundMessage) {
 	rel.LastPeerKind = normalizeRelationshipPeerKind(msg.Peer.Kind)
 	rel.LastUserMessageAt = now
 	rel.LastInteractionAt = now
+	state.Relationships[relationshipKey] = rel
+}
+
+func applyReplyRelationshipMetadata(
+	state *NPCState,
+	msg bus.InboundMessage,
+	sessionKey string,
+	replyAt time.Time,
+) {
+	if state == nil {
+		return
+	}
+	if !shouldTrackRelationshipMessage(msg) {
+		return
+	}
+	if state.Relationships == nil {
+		state.Relationships = make(map[string]NPCRelationship)
+	}
+	relationshipKey := buildRelationshipKey(msg.Channel, msg.SenderID)
+	if relationshipKey == "" {
+		return
+	}
+
+	timestamp := replyAt.UTC().Format(time.RFC3339)
+	rel, ok := state.Relationships[relationshipKey]
+	if !ok {
+		rel = NPCRelationship{
+			Affinity:    NPCLevelMid,
+			Trust:       NPCLevelMid,
+			Familiarity: NPCLevelLow,
+		}
+	} else {
+		rel.Familiarity = promoteNPCLevel(rel.Familiarity)
+	}
+	rel.LastChannel = normalizeRelationshipChannel(msg.Channel)
+	rel.LastChatID = strings.TrimSpace(msg.ChatID)
+	rel.LastPeerKind = normalizeRelationshipPeerKind(msg.Peer.Kind)
+	rel.LastSessionKey = strings.TrimSpace(sessionKey)
+	rel.LastUserMessageAt = timestamp
+	rel.LastAgentMessageAt = timestamp
+	rel.LastInteractionAt = timestamp
 	state.Relationships[relationshipKey] = rel
 }
 
