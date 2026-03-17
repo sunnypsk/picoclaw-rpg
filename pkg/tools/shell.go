@@ -76,9 +76,6 @@ var (
 		regexp.MustCompile(`\bsource\s+.*\.sh\b`),
 	}
 
-	// absolutePathPattern matches absolute file paths in commands (Unix and Windows).
-	absolutePathPattern = regexp.MustCompile(`[A-Za-z]:\\[^\\\"']+|/[^\s\"']+`)
-
 	// safePaths are kernel pseudo-devices that are always safe to reference in
 	// commands, regardless of workspace restriction. They contain no user data
 	// and cannot cause destructive writes.
@@ -336,15 +333,13 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 			return ""
 		}
 
-		matches := absolutePathPattern.FindAllString(cmd, -1)
-
-		for _, raw := range matches {
-			p, err := filepath.Abs(raw)
-			if err != nil {
+		for _, raw := range extractAbsoluteCommandPaths(cmd) {
+			if safePaths[raw] {
 				continue
 			}
 
-			if safePaths[p] {
+			p, err := filepath.Abs(raw)
+			if err != nil {
 				continue
 			}
 
@@ -360,6 +355,86 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	}
 
 	return ""
+}
+
+func extractAbsoluteCommandPaths(command string) []string {
+	paths := make([]string, 0, 4)
+	for i := 0; i < len(command); i++ {
+		if !isAbsoluteCommandPathStart(command, i) {
+			continue
+		}
+
+		quote := byte(0)
+		if i > 0 && (command[i-1] == '"' || command[i-1] == '\'') {
+			quote = command[i-1]
+		}
+
+		end := i
+		for end < len(command) {
+			if quote != 0 {
+				if command[end] == quote {
+					break
+				}
+			} else if isAbsoluteCommandPathTerminator(command[end]) {
+				break
+			}
+			end++
+		}
+
+		paths = append(paths, command[i:end])
+		i = end - 1
+	}
+	return paths
+}
+
+func isAbsoluteCommandPathStart(command string, i int) bool {
+	if i < 0 || i >= len(command) {
+		return false
+	}
+	if !isAbsoluteCommandPathBoundary(command, i-1) {
+		return false
+	}
+
+	if command[i] == '/' {
+		return true
+	}
+
+	return isWindowsAbsolutePath(command, i)
+}
+
+func isAbsoluteCommandPathBoundary(command string, i int) bool {
+	if i < 0 {
+		return true
+	}
+
+	switch command[i] {
+	case ' ', '\t', '\n', '\r', '"', '\'', '=', '<', '>', '(', ')', '[', ']', '{', '}', ',', ';', '|', '&':
+		return true
+	default:
+		return false
+	}
+}
+
+func isAbsoluteCommandPathTerminator(ch byte) bool {
+	switch ch {
+	case ' ', '\t', '\n', '\r', '"', '\'', '<', '>', '(', ')', '[', ']', '{', '}', ',', ';', '|', '&':
+		return true
+	default:
+		return false
+	}
+}
+
+func isWindowsAbsolutePath(command string, i int) bool {
+	if i+2 >= len(command) {
+		return false
+	}
+
+	ch := command[i]
+	if (ch < 'A' || ch > 'Z') && (ch < 'a' || ch > 'z') {
+		return false
+	}
+
+	return command[i+1] == ':' && (command[i+2] == '\\' || command[i+2] == '/')
 }
 
 func (t *ExecTool) SetTimeout(timeout time.Duration) {

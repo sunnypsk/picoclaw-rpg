@@ -312,6 +312,59 @@ func TestShellTool_RestrictToWorkspace(t *testing.T) {
 	}
 }
 
+func TestShellTool_RestrictToWorkspace_AllowsRelativePathsWithSlashes(t *testing.T) {
+	workspace := t.TempDir()
+	tool, err := NewExecTool(workspace, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	command := `python3 skills/stt/scripts/transcribe_audio.py .picoclaw/inbound_media/audio-122312499.mp3`
+	if guard := tool.guardCommand(command, workspace); guard != "" {
+		t.Fatalf("expected relative workspace paths to be allowed, got: %s", guard)
+	}
+}
+
+func TestShellTool_RestrictToWorkspace_AllowsQuotedRelativePathsWithSlashes(t *testing.T) {
+	workspace := t.TempDir()
+	tool, err := NewExecTool(workspace, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	command := `python3 "skills/stt/scripts/transcribe_audio.py" ".picoclaw/inbound_media/audio-122312499.mp3"`
+	if guard := tool.guardCommand(command, workspace); guard != "" {
+		t.Fatalf("expected quoted relative workspace paths to be allowed, got: %s", guard)
+	}
+}
+
+func TestShellTool_RestrictToWorkspace_BlocksAbsolutePathInNestedShellCommand(t *testing.T) {
+	workspace := t.TempDir()
+	tool, err := NewExecTool(workspace, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	guard := tool.guardCommand(`sh -c "cat /etc/passwd"`, workspace)
+	if !strings.Contains(guard, "path outside working dir") {
+		t.Fatalf("expected nested absolute path to be blocked, got: %s", guard)
+	}
+}
+
+func TestShellTool_RestrictToWorkspace_BlocksAbsolutePathArgumentOutsideWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	outsidePath := filepath.Join(t.TempDir(), "audio.mp3")
+	tool, err := NewExecTool(workspace, true)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	guard := tool.guardCommand(`python3 skills/stt/scripts/transcribe_audio.py "`+outsidePath+`"`, workspace)
+	if !strings.Contains(guard, "path outside working dir") {
+		t.Fatalf("expected absolute path outside workspace to be blocked, got: %s", guard)
+	}
+}
+
 // TestShellTool_DevNullAllowed verifies that /dev/null redirections are not blocked (issue #964).
 func TestShellTool_DevNullAllowed(t *testing.T) {
 	tmpDir := t.TempDir()
