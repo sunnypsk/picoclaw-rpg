@@ -1612,6 +1612,14 @@ func TestNormalizeInboundPromptMedia_DegradesGracefullyWhenAudioStageFails(t *te
 	workspace := t.TempDir()
 	srcDir := t.TempDir()
 
+	stagePath := filepath.Join(workspace, inboundAttachmentStageDir)
+	if err := os.MkdirAll(filepath.Dir(stagePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stagePath, []byte("block staging dir creation"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	audioPath := filepath.Join(srcDir, "voice.ogg")
 	if err := os.WriteFile(audioPath, []byte("fake audio"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1623,9 +1631,6 @@ func TestNormalizeInboundPromptMedia_DegradesGracefullyWhenAudioStageFails(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(audioPath); err != nil {
-		t.Fatal(err)
-	}
 
 	liveMessage, sessionMessage, mediaRefs := normalizeInboundPromptMedia(
 		"[Audio]",
@@ -1635,14 +1640,19 @@ func TestNormalizeInboundPromptMedia_DegradesGracefullyWhenAudioStageFails(t *te
 		store,
 	)
 
-	if len(mediaRefs) != 0 {
-		t.Fatalf("expected audio ref to be removed from provider media, got %v", mediaRefs)
+	if got, want := mediaRefs, []string{audioRef}; !slices.Equal(got, want) {
+		t.Fatalf("normalized media = %v, want %v", got, want)
 	}
 	if !strings.Contains(liveMessage, "could not be prepared for transcription") {
 		t.Fatalf("live message missing graceful failure note: %q", liveMessage)
 	}
 	if !strings.Contains(sessionMessage, "[Audio attachment could not be prepared for this turn: voice.ogg]") {
 		t.Fatalf("session message missing graceful failure note: %q", sessionMessage)
+	}
+
+	resolved := resolveMediaRefs([]providers.Message{{Role: "user", Media: mediaRefs}}, store, config.DefaultMaxMediaSize)
+	if got := resolved[0].Media; len(got) != 1 || !strings.HasPrefix(got[0], "data:audio/ogg;base64,") {
+		t.Fatalf("resolved media = %v, want single audio data URL", got)
 	}
 }
 

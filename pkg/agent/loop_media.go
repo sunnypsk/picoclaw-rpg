@@ -66,6 +66,7 @@ func normalizeInboundPromptMedia(
 					"kind":  mediaType,
 					"error": stageErr.Error(),
 				})
+				keptMedia = append(keptMedia, ref)
 				promptNotes = append(promptNotes, buildAttachmentPreparationFailureNote(meta, mediaType))
 				sessionNotes = append(sessionNotes, buildAttachmentSessionNote(meta, mediaType, false))
 				continue
