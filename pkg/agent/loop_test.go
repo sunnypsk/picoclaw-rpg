@@ -1780,6 +1780,9 @@ func TestNormalizeInboundPromptMedia_StagesFileAndVideoAttachments(t *testing.T)
 	if !strings.Contains(liveMessage, "[File attachment available]") {
 		t.Fatalf("live message missing file note: %q", liveMessage)
 	}
+	if !strings.Contains(liveMessage, "skills/office-parse/SKILL.md") {
+		t.Fatalf("live message missing office-parse hint: %q", liveMessage)
+	}
 	if !strings.Contains(liveMessage, "[Video attachment available]") {
 		t.Fatalf("live message missing video note: %q", liveMessage)
 	}
@@ -1799,6 +1802,40 @@ func TestNormalizeInboundPromptMedia_StagesFileAndVideoAttachments(t *testing.T)
 	localFileLines := strings.Count(liveMessage, "Local file:")
 	if localFileLines != 2 {
 		t.Fatalf("expected 2 staged attachment notes, got %d in %q", localFileLines, liveMessage)
+	}
+	assertStagedPathsInWorkspace(t, workspace, liveMessage)
+}
+
+func TestNormalizeInboundPromptMedia_StagesPDFWithPDFSkillHint(t *testing.T) {
+	store := media.NewFileMediaStore()
+	workspace := t.TempDir()
+	srcDir := t.TempDir()
+
+	pdfPath := filepath.Join(srcDir, "report.pdf")
+	if err := os.WriteFile(pdfPath, []byte("%PDF-1.4 fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pdfRef, err := store.Store(pdfPath, media.MediaMeta{
+		Filename:    "report.pdf",
+		ContentType: "application/pdf",
+	}, "pdf-scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	liveMessage, _, mediaRefs := normalizeInboundPromptMedia(
+		"what does this pdf say",
+		"what does this pdf say",
+		workspace,
+		[]string{pdfRef},
+		store,
+	)
+
+	if len(mediaRefs) != 0 {
+		t.Fatalf("expected pdf attachment to be removed from provider media, got %v", mediaRefs)
+	}
+	if !strings.Contains(liveMessage, "skills/pdf-parse/SKILL.md") {
+		t.Fatalf("live message missing pdf-parse hint: %q", liveMessage)
 	}
 	assertStagedPathsInWorkspace(t, workspace, liveMessage)
 }
@@ -1934,6 +1971,9 @@ func TestProcessMessage_FileAttachmentPromptsLocalFileInsteadOfPassingMedia(t *t
 	}
 	if !strings.Contains(userMessage.Content, "[File attachment available]") {
 		t.Fatalf("provider prompt missing file note: %q", userMessage.Content)
+	}
+	if !strings.Contains(userMessage.Content, "skills/office-parse/SKILL.md") {
+		t.Fatalf("provider prompt missing office-parse hint: %q", userMessage.Content)
 	}
 	if strings.Contains(userMessage.Content, "skills/stt/SKILL.md") {
 		t.Fatalf("provider prompt should not mention stt for generic files: %q", userMessage.Content)

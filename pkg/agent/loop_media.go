@@ -187,11 +187,17 @@ func buildAttachmentPromptNote(stagedPath string, meta media.MediaMeta, mediaTyp
 		)
 	}
 
+	instructions := "This file is available for this turn if the user's request depends on it. Use relevant tools or skills only when needed."
+	if skillHint := attachmentSkillHint(meta, mediaType); skillHint != "" {
+		instructions = skillHint
+	}
+
 	return fmt.Sprintf(
-		"[%s attachment available]\nLocal file: %s\nOriginal filename: %s\nThis file is available for this turn if the user's request depends on it. Use relevant tools or skills only when needed. Keep any caption or text in this message as the primary intent signal.",
+		"[%s attachment available]\nLocal file: %s\nOriginal filename: %s\n%s Keep any caption or text in this message as the primary intent signal.",
 		attachmentLabel(mediaType),
 		stagedPath,
 		filename,
+		instructions,
 	)
 }
 
@@ -236,6 +242,29 @@ func attachmentLabel(mediaType string) string {
 		return "Video"
 	default:
 		return "File"
+	}
+}
+
+func attachmentSkillHint(meta media.MediaMeta, mediaType string) string {
+	if mediaType != "file" {
+		return ""
+	}
+
+	ext := normalizedInboundExtension(strings.TrimSpace(meta.Filename))
+	if ext == "" {
+		ext = utils.PreferredExtensionForContentType(meta.ContentType)
+	}
+
+	switch ext {
+	case ".pdf":
+		return "If the user needs the document contents, you may read skills/pdf-parse/SKILL.md and use the pdf-parse skill to extract the text locally."
+	case ".txt", ".md", ".csv", ".tsv", ".docx", ".pptx", ".xlsx":
+		return "If the user needs the document contents, you may read skills/office-parse/SKILL.md and use the office-parse skill to extract the contents locally."
+	default:
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(meta.ContentType)), "text/") {
+			return "If the user needs the document contents, you may read skills/office-parse/SKILL.md and use the office-parse skill to extract the contents locally."
+		}
+		return ""
 	}
 }
 
