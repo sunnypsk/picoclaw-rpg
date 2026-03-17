@@ -565,9 +565,12 @@ func (c *WhatsAppNativeChannel) downloadIncomingMedia(
 		return "", err
 	}
 
-	ext := ".bin"
-	if exts, err := mime.ExtensionsByType(mimeType); err == nil && len(exts) > 0 {
-		ext = exts[0]
+	ext := utils.PreferredExtensionForContentType(mimeType)
+	if ext == "" {
+		ext = utils.PreferredExtensionForBytes(data)
+	}
+	if ext == "" {
+		ext = ".bin"
 	}
 
 	tmp, err := os.CreateTemp("", prefix+"-*"+ext)
@@ -595,6 +598,16 @@ func (c *WhatsAppNativeChannel) storeIncomingMedia(localPath, mimeType, kind, me
 	}
 
 	ext := filepath.Ext(localPath)
+	if ext == "" || strings.EqualFold(ext, ".bin") {
+		ext = utils.PreferredExtensionForContentType(mimeType)
+	}
+	if ext == "" || strings.EqualFold(ext, ".bin") {
+		if data, err := os.ReadFile(localPath); err == nil {
+			if detected := utils.PreferredExtensionForBytes(data); detected != "" {
+				ext = detected
+			}
+		}
+	}
 	if ext == "" {
 		ext = ".bin"
 	}

@@ -2,6 +2,7 @@ package utils
 
 import (
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/h2non/filetype"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
@@ -32,6 +34,53 @@ func IsAudioFile(filename, contentType string) bool {
 	}
 
 	return false
+}
+
+func PreferredExtensionForContentType(contentType string) string {
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	if ct == "" {
+		return ""
+	}
+
+	if parsed, _, err := mime.ParseMediaType(ct); err == nil {
+		ct = parsed
+	}
+
+	switch ct {
+	case "audio/mpeg", "audio/mp3":
+		return ".mp3"
+	case "audio/ogg", "application/ogg", "application/x-ogg":
+		return ".ogg"
+	case "audio/wav", "audio/x-wav", "audio/wave":
+		return ".wav"
+	case "audio/mp4", "audio/x-m4a", "audio/m4a":
+		return ".m4a"
+	case "audio/flac", "audio/x-flac":
+		return ".flac"
+	case "audio/aac", "audio/x-aac":
+		return ".aac"
+	case "audio/opus":
+		return ".opus"
+	}
+
+	exts, err := mime.ExtensionsByType(ct)
+	if err != nil || len(exts) == 0 {
+		return ""
+	}
+	return strings.ToLower(exts[0])
+}
+
+func PreferredExtensionForBytes(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+
+	kind, err := filetype.Match(data)
+	if err != nil || kind == filetype.Unknown {
+		return ""
+	}
+
+	return PreferredExtensionForContentType(kind.MIME.Value)
 }
 
 // SanitizeFilename removes potentially dangerous characters from a filename

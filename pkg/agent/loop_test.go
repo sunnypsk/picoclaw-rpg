@@ -1649,6 +1649,45 @@ func TestNormalizeInboundPromptMedia_UsesContentTypeExtensionForExtensionlessAud
 	assertStagedPathsInWorkspace(t, workspace, liveMessage)
 }
 
+func TestNormalizeInboundPromptMedia_IgnoresBinWhenContentTypeCanRecoverAudioExtension(t *testing.T) {
+	store := media.NewFileMediaStore()
+	workspace := t.TempDir()
+	srcDir := t.TempDir()
+
+	audioPath := filepath.Join(srcDir, "voice.bin")
+	if err := os.WriteFile(audioPath, []byte("fake opus"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	audioRef, err := store.Store(audioPath, media.MediaMeta{
+		Filename:    "audio-msg.bin",
+		ContentType: "audio/ogg; codecs=opus",
+	}, "audio-scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	liveMessage, _, mediaRefs := normalizeInboundPromptMedia(
+		"transcribe this",
+		"transcribe this",
+		workspace,
+		[]string{audioRef},
+		store,
+	)
+
+	if len(mediaRefs) != 0 {
+		t.Fatalf("expected staged audio ref to be removed from provider media, got %v", mediaRefs)
+	}
+
+	stagedPath := extractPromptLineValue(liveMessage, "Local file:")
+	if stagedPath == "" {
+		t.Fatalf("live message missing staged local file path: %q", liveMessage)
+	}
+	if got := strings.ToLower(filepath.Ext(stagedPath)); got != ".ogg" {
+		t.Fatalf("staged path extension = %q, want .ogg (path=%q)", got, stagedPath)
+	}
+	assertStagedPathsInWorkspace(t, workspace, liveMessage)
+}
+
 func TestNormalizeInboundPromptMedia_DegradesGracefullyWhenAudioStageFails(t *testing.T) {
 	store := media.NewFileMediaStore()
 	workspace := t.TempDir()

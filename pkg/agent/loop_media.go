@@ -11,7 +11,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"mime"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +20,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
 const inboundAttachmentStageDir = ".picoclaw/inbound_media"
@@ -142,50 +142,35 @@ func stageInboundAttachment(localPath string, meta media.MediaMeta, workspace, m
 }
 
 func inboundAttachmentExtension(localPath string, meta media.MediaMeta) string {
-	if ext := strings.ToLower(filepath.Ext(strings.TrimSpace(meta.Filename))); ext != "" {
+	if ext := normalizedInboundExtension(strings.TrimSpace(meta.Filename)); ext != "" {
 		return ext
 	}
-	if ext := strings.ToLower(filepath.Ext(strings.TrimSpace(localPath))); ext != "" {
+	if ext := normalizedInboundExtension(strings.TrimSpace(localPath)); ext != "" {
 		return ext
 	}
-	if ext := preferredExtensionForContentType(meta.ContentType); ext != "" {
+	if ext := utils.PreferredExtensionForContentType(meta.ContentType); ext != "" {
+		return ext
+	}
+	if ext := detectInboundAttachmentExtension(localPath); ext != "" {
 		return ext
 	}
 	return ".bin"
 }
 
-func preferredExtensionForContentType(contentType string) string {
-	ct := strings.ToLower(strings.TrimSpace(contentType))
-	if ct == "" {
+func normalizedInboundExtension(pathOrFilename string) string {
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(pathOrFilename)))
+	if ext == "" || ext == ".bin" {
 		return ""
 	}
+	return ext
+}
 
-	if parsed, _, err := mime.ParseMediaType(ct); err == nil {
-		ct = parsed
-	}
-
-	switch ct {
-	case "audio/mpeg", "audio/mp3":
-		return ".mp3"
-	case "audio/ogg", "application/ogg", "application/x-ogg":
-		return ".ogg"
-	case "audio/wav", "audio/x-wav", "audio/wave":
-		return ".wav"
-	case "audio/mp4", "audio/x-m4a", "audio/m4a":
-		return ".m4a"
-	case "audio/flac", "audio/x-flac":
-		return ".flac"
-	case "audio/aac", "audio/x-aac":
-		return ".aac"
-	case "audio/opus":
-		return ".opus"
-	}
-
-	exts, err := mime.ExtensionsByType(ct)
-	if err != nil || len(exts) == 0 {
+func detectInboundAttachmentExtension(localPath string) string {
+	data, err := os.ReadFile(localPath)
+	if err != nil {
 		return ""
 	}
-	return strings.ToLower(exts[0])
+	return utils.PreferredExtensionForBytes(data)
 }
 
 func buildAttachmentPromptNote(stagedPath string, meta media.MediaMeta, mediaType string) string {
