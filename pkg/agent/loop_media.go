@@ -22,7 +22,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
-const inboundAudioStageDir = ".picoclaw/inbound_audio"
+const inboundAttachmentStageDir = ".picoclaw/inbound_media"
 
 func normalizeInboundPromptMedia(
 	userMessage string,
@@ -54,23 +54,25 @@ func normalizeInboundPromptMedia(
 			continue
 		}
 
-		switch inferMediaType(meta.Filename, meta.ContentType) {
+		mediaType := inferMediaType(meta.Filename, meta.ContentType)
+		switch mediaType {
 		case "image":
 			keptMedia = append(keptMedia, ref)
-		case "audio":
-			stagedPath, stageErr := stageInboundAudioAttachment(localPath, meta, workspace)
+		case "audio", "video", "file":
+			stagedPath, stageErr := stageInboundAttachment(localPath, meta, workspace, mediaType)
 			if stageErr != nil {
-				logger.WarnCF("agent", "Failed to stage inbound audio attachment", map[string]any{
+				logger.WarnCF("agent", "Failed to stage inbound attachment", map[string]any{
 					"path":  localPath,
+					"kind":  mediaType,
 					"error": stageErr.Error(),
 				})
-				promptNotes = append(promptNotes, buildAudioPreparationFailureNote(meta))
-				sessionNotes = append(sessionNotes, buildAudioSessionNote(meta, false))
+				promptNotes = append(promptNotes, buildAttachmentPreparationFailureNote(meta, mediaType))
+				sessionNotes = append(sessionNotes, buildAttachmentSessionNote(meta, mediaType, false))
 				continue
 			}
 
-			promptNotes = append(promptNotes, buildAudioPromptNote(stagedPath, meta))
-			sessionNotes = append(sessionNotes, buildAudioSessionNote(meta, true))
+			promptNotes = append(promptNotes, buildAttachmentPromptNote(stagedPath, meta, mediaType))
+			sessionNotes = append(sessionNotes, buildAttachmentSessionNote(meta, mediaType, true))
 		default:
 			// Non-image attachments are not serialized into OpenAI-compatible prompts.
 		}
@@ -94,20 +96,20 @@ func appendPromptSections(base string, sections []string) string {
 	return strings.TrimSpace(base) + "\n\n" + joined
 }
 
-func stageInboundAudioAttachment(localPath string, meta media.MediaMeta, workspace string) (string, error) {
-	stageDir := filepath.Join(workspace, inboundAudioStageDir)
+func stageInboundAttachment(localPath string, meta media.MediaMeta, workspace, mediaType string) (string, error) {
+	stageDir := filepath.Join(workspace, inboundAttachmentStageDir)
 	if err := os.MkdirAll(stageDir, 0o755); err != nil {
-		return "", fmt.Errorf("create inbound audio staging dir: %w", err)
+		return "", fmt.Errorf("create inbound attachment staging dir: %w", err)
 	}
 
-	pattern := "audio-*"
-	if ext := inboundAudioExtension(localPath, meta); ext != "" {
+	pattern := mediaType + "-*"
+	if ext := inboundAttachmentExtension(localPath, meta); ext != "" {
 		pattern += ext
 	}
 
 	dst, err := os.CreateTemp(stageDir, pattern)
 	if err != nil {
-		return "", fmt.Errorf("create staged audio file: %w", err)
+		return "", fmt.Errorf("create staged attachment file: %w", err)
 	}
 
 	success := false
@@ -120,24 +122,24 @@ func stageInboundAudioAttachment(localPath string, meta media.MediaMeta, workspa
 	src, err := os.Open(localPath)
 	if err != nil {
 		_ = dst.Close()
-		return "", fmt.Errorf("open source audio file: %w", err)
+		return "", fmt.Errorf("open source attachment file: %w", err)
 	}
 	defer src.Close()
 
 	if _, err := io.Copy(dst, src); err != nil {
 		_ = dst.Close()
-		return "", fmt.Errorf("copy audio attachment: %w", err)
+		return "", fmt.Errorf("copy attachment: %w", err)
 	}
 
 	if err := dst.Close(); err != nil {
-		return "", fmt.Errorf("flush staged audio file: %w", err)
+		return "", fmt.Errorf("flush staged attachment file: %w", err)
 	}
 
 	success = true
 	return dst.Name(), nil
 }
 
-func inboundAudioExtension(localPath string, meta media.MediaMeta) string {
+func inboundAttachmentExtension(localPath string, meta media.MediaMeta) string {
 	if ext := strings.ToLower(filepath.Ext(strings.TrimSpace(meta.Filename))); ext != "" {
 		return ext
 	}
@@ -147,42 +149,70 @@ func inboundAudioExtension(localPath string, meta media.MediaMeta) string {
 	return ".bin"
 }
 
-func buildAudioPromptNote(stagedPath string, meta media.MediaMeta) string {
+func buildAttachmentPromptNote(stagedPath string, meta media.MediaMeta, mediaType string) string {
 	filename := strings.TrimSpace(meta.Filename)
 	if filename == "" {
 		filename = filepath.Base(stagedPath)
 	}
 
+	if mediaType == "audio" {
+		return fmt.Sprintf(
+			"[Audio attachment available]\nLocal file: %s\nOriginal filename: %s\nIf the user's request depends on the spoken content, you may read skills/stt/SKILL.md and use the stt skill to transcribe this file. Keep any caption or text in this message as the primary intent signal.",
+			stagedPath,
+			filename,
+		)
+	}
+
 	return fmt.Sprintf(
-		"[Audio attachment available]\nLocal file: %s\nOriginal filename: %s\nIf the user's request depends on the spoken content, you may read skills/stt/SKILL.md and use the stt skill to transcribe this file. Keep any caption or text in this message as the primary intent signal.",
+		"[%s attachment available]\nLocal file: %s\nOriginal filename: %s\nThis file is available for this turn if the user's request depends on it. Use relevant tools or skills only when needed. Keep any caption or text in this message as the primary intent signal.",
+		attachmentLabel(mediaType),
 		stagedPath,
 		filename,
 	)
 }
 
-func buildAudioPreparationFailureNote(meta media.MediaMeta) string {
+func buildAttachmentPreparationFailureNote(meta media.MediaMeta, mediaType string) string {
 	filename := strings.TrimSpace(meta.Filename)
 	if filename == "" {
-		filename = "audio attachment"
+		filename = mediaType + " attachment"
+	}
+
+	if mediaType == "audio" {
+		return fmt.Sprintf(
+			"[Audio attachment received]\nThe file %q could not be prepared for transcription in this turn. Continue using the available caption or text instead of failing the request.",
+			filename,
+		)
 	}
 
 	return fmt.Sprintf(
-		"[Audio attachment received]\nThe file %q could not be prepared for transcription in this turn. Continue using the available caption or text instead of failing the request.",
+		"[%s attachment received]\nThe file %q could not be prepared for this turn. Continue using the available caption or text instead of failing the request.",
+		attachmentLabel(mediaType),
 		filename,
 	)
 }
 
-func buildAudioSessionNote(meta media.MediaMeta, prepared bool) string {
+func buildAttachmentSessionNote(meta media.MediaMeta, mediaType string, prepared bool) string {
 	filename := strings.TrimSpace(meta.Filename)
 	if filename == "" {
-		filename = "audio attachment"
+		filename = mediaType + " attachment"
 	}
 
 	if prepared {
-		return fmt.Sprintf("[Audio attachment available for this turn: %s]", filename)
+		return fmt.Sprintf("[%s attachment available for this turn: %s]", attachmentLabel(mediaType), filename)
 	}
 
-	return fmt.Sprintf("[Audio attachment could not be prepared for this turn: %s]", filename)
+	return fmt.Sprintf("[%s attachment could not be prepared for this turn: %s]", attachmentLabel(mediaType), filename)
+}
+
+func attachmentLabel(mediaType string) string {
+	switch mediaType {
+	case "audio":
+		return "Audio"
+	case "video":
+		return "Video"
+	default:
+		return "File"
+	}
 }
 
 // resolveMediaRefs replaces media:// refs in message Media fields with base64 data URLs.
