@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 
 import argparse
 import base64
@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_MODEL = "google/gemini-3-flash-preview"
+DEFAULT_USER_AGENT = "picoclaw/1.0"
 ACCEPTED_FORMATS = {
     ".mp3": "mp3",
     ".wav": "wav",
@@ -164,6 +165,8 @@ def send_request(api_key: str, api_base: str, payload: dict[str, Any], timeout: 
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
+            # Avoid CPA gateway blocking Python-urllib's default browser signature.
+            "User-Agent": DEFAULT_USER_AGENT,
         },
         method="POST",
     )

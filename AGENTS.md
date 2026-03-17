@@ -28,6 +28,11 @@ Use `make build-all` for multi-platform artifacts. Docker workflows are exposed 
 - The single-image runtime now includes `python3` plus `gradio_client` for workspace skills such as `huggingface-spaces`.
 - `docker/docker-compose.yml` persists Picoclaw data at `./docker/data`, mounted to `/home/picoclaw/.picoclaw` in the container.
 
+### CPA Gateway Notes
+- Python helpers that call CPA via `urllib` can be blocked by some gateways with `HTTP 403` and body `error code: 1010`, even when the same `chat/completions` request works from Go or curl.
+- For Python CPA helpers, always set an explicit neutral `User-Agent` header such as `picoclaw/1.0` instead of relying on the default `Python-urllib` signature.
+- If the Go `generate_image` tool works but a Python CPA skill fails, compare the runtime environment and HTTP headers before changing the model or route.
+
 ## Coding Style & Naming Conventions
 - Use Go `1.25.x` (see `go.mod`).
 - Keep lines within 120 chars (configured in `.golangci.yaml`).
