@@ -458,7 +458,7 @@ func (i *Index) queryCandidatesLocked(
 	var hadSuccessfulCandidate bool
 	for _, matchQuery := range candidates {
 		sqlText := fmt.Sprintf(
-			`SELECT path, snippet(%[1]s, 1, '[', ']', ' … ', 24) AS snippet, bm25(%[1]s) AS rank
+			`SELECT path, snippet(%[1]s, 1, '[', ']', ' ... ', 24) AS snippet, bm25(%[1]s) AS rank
 			 FROM %[1]s
 			 WHERE %[1]s MATCH ?`,
 			table,

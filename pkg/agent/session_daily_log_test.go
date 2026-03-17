@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,38 @@ func (p *captureProvider) Chat(
 
 func (p *captureProvider) GetDefaultModel() string {
 	return "capture-model"
+}
+
+type scriptedCaptureProvider struct {
+	responses    []*providers.LLMResponse
+	errors       []error
+	lastMessages []providers.Message
+	allCalls     [][]providers.Message
+}
+
+func (p *scriptedCaptureProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	cloned := append([]providers.Message(nil), messages...)
+	p.lastMessages = cloned
+	p.allCalls = append(p.allCalls, cloned)
+
+	index := len(p.allCalls) - 1
+	if index < len(p.errors) && p.errors[index] != nil {
+		return nil, p.errors[index]
+	}
+	if index < len(p.responses) && p.responses[index] != nil {
+		return p.responses[index], nil
+	}
+	return &providers.LLMResponse{Content: "ok"}, nil
+}
+
+func (p *scriptedCaptureProvider) GetDefaultModel() string {
+	return "scripted-capture-model"
 }
 
 func dailyNotePath(workspace string) string {
@@ -196,7 +229,12 @@ func TestAutoRecallInjectsMemoryContextWhenEnabled(t *testing.T) {
 		t.Fatalf("write MEMORY.md: %v", err)
 	}
 
-	provider := &captureProvider{response: "ok"}
+	provider := &scriptedCaptureProvider{
+		responses: []*providers.LLMResponse{
+			{Content: `{"keywords":["timezone","preference"]}`},
+			{Content: "ok"},
+		},
+	}
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
@@ -225,15 +263,223 @@ func TestAutoRecallInjectsMemoryContextWhenEnabled(t *testing.T) {
 		t.Fatalf("process message failed: %v", err)
 	}
 
-	if len(provider.lastMessages) == 0 {
-		t.Fatal("provider did not receive messages")
+	if len(provider.allCalls) < 2 {
+		t.Fatalf("expected keyword extraction and main agent calls, got %d", len(provider.allCalls))
 	}
-	system := provider.lastMessages[0].Content
+	extractionCall := provider.allCalls[0]
+	if len(extractionCall) != 2 || extractionCall[0].Role != "system" || extractionCall[1].Role != "user" {
+		t.Fatalf("unexpected extraction call shape: %+v", extractionCall)
+	}
+	if !strings.Contains(extractionCall[0].Content, autoRecallKeywordExtractorPromptTag) {
+		t.Fatalf("keyword extractor prompt missing tag: %s", extractionCall[0].Content)
+	}
+
+	system := provider.allCalls[len(provider.allCalls)-1][0].Content
 	if !strings.Contains(system, "RELEVANT_MEMORY (keyword recall)") {
 		t.Fatalf("system prompt missing auto-recall block:\n%s", system)
 	}
 	if !strings.Contains(system, "Asia/Hong_Kong") {
 		t.Fatalf("system prompt missing recalled snippet:\n%s", system)
+	}
+}
+
+func TestAutoRecallInjectsMemoryContextFromLLMKeywords(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, "memory"), 0o755); err != nil {
+		t.Fatalf("create memory dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "MEMORY.md"), []byte("北海道 行程規劃,景點偏好"), 0o644); err != nil {
+		t.Fatalf("write MEMORY.md: %v", err)
+	}
+
+	provider := &scriptedCaptureProvider{
+		responses: []*providers.LLMResponse{
+			{Content: `{"keywords":["北海道","行程"]}`},
+			{Content: "ok"},
+		},
+	}
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+				MemorySearch: config.MemorySearchConfig{
+					AutoRecall: config.MemoryAutoRecallConfig{
+						Enabled:  true,
+						TopK:     2,
+						MaxChars: 800,
+					},
+				},
+			},
+		},
+	}
+
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	if _, err := al.processMessage(context.Background(), bus.InboundMessage{
+		Channel:  "test",
+		SenderID: "u1",
+		ChatID:   "chat1",
+		Content:  "飛鼠仔好關心你北海道嘅行程",
+	}); err != nil {
+		t.Fatalf("process message failed: %v", err)
+	}
+
+	system := provider.allCalls[len(provider.allCalls)-1][0].Content
+	if !strings.Contains(system, "RELEVANT_MEMORY (keyword recall)") {
+		t.Fatalf("system prompt missing auto-recall block:\n%s", system)
+	}
+	if !strings.Contains(system, "北海道") {
+		t.Fatalf("system prompt missing recalled snippet:\n%s", system)
+	}
+}
+
+func TestAutoRecallSkipsWhenKeywordExtractionReturnsInvalidJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, "memory"), 0o755); err != nil {
+		t.Fatalf("create memory dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "MEMORY.md"), []byte("user_timezone: Asia/Hong_Kong"), 0o644); err != nil {
+		t.Fatalf("write MEMORY.md: %v", err)
+	}
+
+	provider := &scriptedCaptureProvider{
+		responses: []*providers.LLMResponse{
+			{Content: `not json`},
+			{Content: "ok"},
+		},
+	}
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+				MemorySearch: config.MemorySearchConfig{
+					AutoRecall: config.MemoryAutoRecallConfig{
+						Enabled:  true,
+						TopK:     2,
+						MaxChars: 800,
+					},
+				},
+			},
+		},
+	}
+
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	if _, err := al.processMessage(context.Background(), bus.InboundMessage{
+		Channel:  "test",
+		SenderID: "u1",
+		ChatID:   "chat1",
+		Content:  "What is my timezone preference?",
+	}); err != nil {
+		t.Fatalf("process message failed: %v", err)
+	}
+
+	system := provider.allCalls[len(provider.allCalls)-1][0].Content
+	if strings.Contains(system, "RELEVANT_MEMORY (keyword recall)") {
+		t.Fatalf("system prompt should not include auto-recall block on invalid JSON:\n%s", system)
+	}
+}
+
+func TestAutoRecallSkipsWhenKeywordExtractionFails(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, "memory"), 0o755); err != nil {
+		t.Fatalf("create memory dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "MEMORY.md"), []byte("user_timezone: Asia/Hong_Kong"), 0o644); err != nil {
+		t.Fatalf("write MEMORY.md: %v", err)
+	}
+
+	provider := &scriptedCaptureProvider{
+		errors: []error{errors.New("provider unavailable")},
+		responses: []*providers.LLMResponse{
+			nil,
+			{Content: "ok"},
+		},
+	}
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+				MemorySearch: config.MemorySearchConfig{
+					AutoRecall: config.MemoryAutoRecallConfig{
+						Enabled:  true,
+						TopK:     2,
+						MaxChars: 800,
+					},
+				},
+			},
+		},
+	}
+
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	if _, err := al.processMessage(context.Background(), bus.InboundMessage{
+		Channel:  "test",
+		SenderID: "u1",
+		ChatID:   "chat1",
+		Content:  "What is my timezone preference?",
+	}); err != nil {
+		t.Fatalf("process message failed: %v", err)
+	}
+
+	system := provider.allCalls[len(provider.allCalls)-1][0].Content
+	if strings.Contains(system, "RELEVANT_MEMORY (keyword recall)") {
+		t.Fatalf("system prompt should not include auto-recall block on provider error:\n%s", system)
+	}
+}
+
+func TestAutoRecallSkipsWhenKeywordExtractionReturnsEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, "memory"), 0o755); err != nil {
+		t.Fatalf("create memory dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "MEMORY.md"), []byte("user_timezone: Asia/Hong_Kong"), 0o644); err != nil {
+		t.Fatalf("write MEMORY.md: %v", err)
+	}
+
+	provider := &scriptedCaptureProvider{
+		responses: []*providers.LLMResponse{
+			{Content: `{"keywords":[]}`},
+			{Content: "ok"},
+		},
+	}
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+				MemorySearch: config.MemorySearchConfig{
+					AutoRecall: config.MemoryAutoRecallConfig{
+						Enabled:  true,
+						TopK:     2,
+						MaxChars: 800,
+					},
+				},
+			},
+		},
+	}
+
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	if _, err := al.processMessage(context.Background(), bus.InboundMessage{
+		Channel:  "test",
+		SenderID: "u1",
+		ChatID:   "chat1",
+		Content:  "What is my timezone preference?",
+	}); err != nil {
+		t.Fatalf("process message failed: %v", err)
+	}
+
+	system := provider.allCalls[len(provider.allCalls)-1][0].Content
+	if strings.Contains(system, "RELEVANT_MEMORY (keyword recall)") {
+		t.Fatalf("system prompt should not include auto-recall block on empty keywords:\n%s", system)
 	}
 }
 
