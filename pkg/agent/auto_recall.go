@@ -100,6 +100,7 @@ func (al *AgentLoop) extractAutoRecallQuery(ctx context.Context, agent *AgentIns
 		}
 		if len(keywords) > 0 {
 			fields["keywords_count"] = len(keywords)
+			fields["keywords_preview"] = autoRecallPreviewForLog(strings.Join(keywords, " | "), 160)
 			fields["keyword_query_preview"] = autoRecallPreviewForLog(keywordQuery, 120)
 		}
 		if logErr != "" {
@@ -126,13 +127,27 @@ Return JSON only, no markdown, no explanations.
 Output shape:
 {"keywords":["string"]}
 
+Goal:
+- Extract short search terms that could help retrieve relevant memory, even when the user speaks casually, indirectly, or in a different language from the stored memory.
+
 Rules:
-- Return 1 to %d concise keywords or short phrases when the message contains recall-worthy details.
-- Prefer names, places, dates, plans, reminders, preferences, projects, products, travel destinations, and commitments.
+- Return 1 to %d concise keywords or short phrases when the message contains any retrievable subject.
+- Treat recall-style questions as retrievable even when they are short or conversational.
+- Prefer names, nicknames, identity clues, places, dates, plans, reminders, preferences, projects, products, travel destinations, commitments, failures, reasons, and prior-discussion topics.
 - Keep the user's original language when possible.
-- Exclude greetings, filler, sentiment-only phrasing, and conversational framing.
-- If nothing seems worth recalling, return {"keywords":[]}.
-- Return valid JSON object only.`, autoRecallKeywordExtractorPromptTag, autoRecallKeywordExtractionMaxResults)
+- Add likely English aliases or translations when they could help cross-language retrieval.
+- Mixed-language keywords are allowed.
+- Exclude greetings, filler, and pure sentiment with no retrievable subject.
+- Return {"keywords":[]} only when there is truly no retrievable subject.
+- Return valid JSON object only.
+
+Examples:
+- User: 記唔記得我個名
+  Output: {"keywords":["個名","名字","name","called"]}
+- User: 你講下今次失敗嘅原因
+  Output: {"keywords":["失敗","原因","failure","reason"]}
+- User: 飛鼠仔好關心你北海道嘅行程
+  Output: {"keywords":["北海道","行程","Hokkaido","trip itinerary"]}`, autoRecallKeywordExtractorPromptTag, autoRecallKeywordExtractionMaxResults)
 
 	response, err := agent.Provider.Chat(
 		extractCtx,

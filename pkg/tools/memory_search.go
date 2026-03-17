@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/memorysearch"
 )
 
@@ -85,6 +86,18 @@ func (t *MemorySearchTool) Execute(ctx context.Context, args map[string]any) *To
 		return ErrorResult(fmt.Sprintf("memory search failed: %v", err))
 	}
 
+	logFields := map[string]any{
+		"query_preview": previewForLog(query, 120),
+		"result_count":  len(results),
+		"path_prefix":   pathPrefix,
+	}
+	if len(results) > 0 {
+		logFields["top_result_path"] = results[0].Path
+		logFields["top_result_score"] = results[0].Score
+		logFields["top_result_snippet_preview"] = previewForLog(results[0].Snippet, 160)
+	}
+	logger.InfoCF("tool", "memory_search result preview", logFields)
+
 	payload, err := json.Marshal(map[string]any{
 		"query":   query,
 		"count":   len(results),
@@ -95,4 +108,20 @@ func (t *MemorySearchTool) Execute(ctx context.Context, args map[string]any) *To
 	}
 
 	return NewToolResult(string(payload))
+}
+
+func previewForLog(value string, maxRunes int) string {
+	trimmed := strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if maxRunes <= 0 {
+		return ""
+	}
+
+	runes := []rune(trimmed)
+	if len(runes) <= maxRunes {
+		return trimmed
+	}
+	if maxRunes <= 3 {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:maxRunes-3]) + "..."
 }

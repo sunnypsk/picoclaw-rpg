@@ -292,4 +292,10 @@ func TestIndex_SearchLogsStatus(t *testing.T) {
 	if !strings.Contains(logText, `"query_preview":"favorite editor"`) {
 		t.Fatalf("expected query preview in logs, got: %s", logText)
 	}
+	if !strings.Contains(logText, `"top_result_path":"MEMORY.md"`) {
+		t.Fatalf("expected top result path in logs, got: %s", logText)
+	}
+	if !strings.Contains(logText, `"top_result_snippet_preview"`) {
+		t.Fatalf("expected top result snippet preview in logs, got: %s", logText)
+	}
 }

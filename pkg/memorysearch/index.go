@@ -86,6 +86,9 @@ func (i *Index) Search(ctx context.Context, query string, limit int, pathPrefix 
 		fields["result_count"] = len(results)
 		if len(results) > 0 {
 			fields["status"] = "hit"
+			fields["top_result_path"] = results[0].Path
+			fields["top_result_score"] = results[0].Score
+			fields["top_result_snippet_preview"] = previewForLog(results[0].Snippet, 160)
 		}
 		logger.InfoCF("memory", "Memory search completed", fields)
 	}()

@@ -335,6 +335,60 @@ func TestAutoRecallInjectsMemoryContextFromLLMKeywords(t *testing.T) {
 	}
 }
 
+func TestAutoRecallInjectsMemoryContextFromMultilingualKeywords(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, "memory"), 0o755); err != nil {
+		t.Fatalf("create memory dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "MEMORY.md"), []byte("name: Sunny\ntrip destination: Hokkaido"), 0o644); err != nil {
+		t.Fatalf("write MEMORY.md: %v", err)
+	}
+
+	provider := &scriptedCaptureProvider{
+		responses: []*providers.LLMResponse{
+			{Content: `{"keywords":["\u5317\u6d77\u9053","\u884c\u7a0b","Hokkaido","trip itinerary"]}`},
+			{Content: "ok"},
+		},
+	}
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+				MemorySearch: config.MemorySearchConfig{
+					AutoRecall: config.MemoryAutoRecallConfig{
+						Enabled:  true,
+						TopK:     2,
+						MaxChars: 800,
+					},
+				},
+			},
+		},
+	}
+
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	if _, err := al.processMessage(context.Background(), bus.InboundMessage{
+		Channel:  "test",
+		SenderID: "u1",
+		ChatID:   "chat1",
+		Content:  "\u98db\u9f20\u4ed4\u597d\u95dc\u5fc3\u4f60\u5317\u6d77\u9053\u5605\u884c\u7a0b",
+	}); err != nil {
+		t.Fatalf("process message failed: %v", err)
+	}
+
+	extractionCall := provider.allCalls[0]
+	if !strings.Contains(extractionCall[0].Content, "Add likely English aliases or translations") {
+		t.Fatalf("keyword extractor prompt missing multilingual instruction: %s", extractionCall[0].Content)
+	}
+
+	system := provider.allCalls[len(provider.allCalls)-1][0].Content
+	if !strings.Contains(system, "Hokkaido") {
+		t.Fatalf("system prompt missing multilingual recalled snippet:\n%s", system)
+	}
+}
+
 func TestAutoRecallSkipsWhenKeywordExtractionReturnsInvalidJSON(t *testing.T) {
 	tmpDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(tmpDir, "memory"), 0o755); err != nil {
