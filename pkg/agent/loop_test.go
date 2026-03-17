@@ -1607,6 +1607,48 @@ func TestNormalizeInboundPromptMedia_StagesAudioAndKeepsImages(t *testing.T) {
 	}
 }
 
+func TestNormalizeInboundPromptMedia_UsesContentTypeExtensionForExtensionlessAudio(t *testing.T) {
+	store := media.NewFileMediaStore()
+	workspace := t.TempDir()
+	srcDir := t.TempDir()
+
+	audioPath := filepath.Join(srcDir, "voice-note")
+	if err := os.WriteFile(audioPath, []byte("fake mp3"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	audioRef, err := store.Store(audioPath, media.MediaMeta{
+		Filename:    "",
+		ContentType: "audio/mpeg",
+	}, "audio-scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	liveMessage, _, mediaRefs := normalizeInboundPromptMedia(
+		"transcribe this",
+		"transcribe this",
+		workspace,
+		[]string{audioRef},
+		store,
+	)
+
+	if len(mediaRefs) != 0 {
+		t.Fatalf("expected staged audio ref to be removed from provider media, got %v", mediaRefs)
+	}
+
+	stagedPath := extractPromptLineValue(liveMessage, "Local file:")
+	if stagedPath == "" {
+		t.Fatalf("live message missing staged local file path: %q", liveMessage)
+	}
+	if got := strings.ToLower(filepath.Ext(stagedPath)); got != ".mp3" {
+		t.Fatalf("staged path extension = %q, want .mp3 (path=%q)", got, stagedPath)
+	}
+	if !strings.Contains(liveMessage, "Original filename: audio-") {
+		t.Fatalf("live message should fall back to staged filename when original name is absent: %q", liveMessage)
+	}
+	assertStagedPathsInWorkspace(t, workspace, liveMessage)
+}
+
 func TestNormalizeInboundPromptMedia_DegradesGracefullyWhenAudioStageFails(t *testing.T) {
 	store := media.NewFileMediaStore()
 	workspace := t.TempDir()
