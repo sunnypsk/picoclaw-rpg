@@ -42,10 +42,14 @@ tmp_chat_probe_result.json
 __pycache__/
 *.pyc
 
+# Node
+node_modules/
+
 # Ralph workspace
 ralph/
 .ralph/
 tasks/
+workspace/generated-slides/
 
 # Editors
 .vscode/
