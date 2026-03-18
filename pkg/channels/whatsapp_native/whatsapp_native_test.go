@@ -43,6 +43,24 @@ func TestCollectIncomingMediaAttachmentsIncludesAudioDocumentAndVideo(t *testing
 	}
 }
 
+func TestWhatsAppMessageSubtypeMarksPTTAudioAsVoiceNote(t *testing.T) {
+	msg := &waE2E.Message{
+		AudioMessage: &waE2E.AudioMessage{
+			Mimetype: proto.String("audio/ogg"),
+			PTT:      proto.Bool(true),
+		},
+	}
+
+	if got := whatsAppMessageSubtype(msg); got != bus.MessageSubtypeVoiceNote {
+		t.Fatalf("voice note subtype = %q, want %q", got, bus.MessageSubtypeVoiceNote)
+	}
+
+	msg.AudioMessage.PTT = proto.Bool(false)
+	if got := whatsAppMessageSubtype(msg); got != "" {
+		t.Fatalf("generic audio subtype = %q, want empty", got)
+	}
+}
+
 func TestStoreIncomingMedia_ReplacesBinWithContentTypeExtension(t *testing.T) {
 	ch, err := NewWhatsAppNativeChannel(config.WhatsAppConfig{}, bus.NewMessageBus(), t.TempDir())
 	if err != nil {

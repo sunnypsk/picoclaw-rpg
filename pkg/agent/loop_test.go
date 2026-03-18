@@ -379,6 +379,20 @@ func (m *captureMessagesProvider) GetDefaultModel() string {
 	return "mock-capture-model"
 }
 
+type fakeVoiceNoteTranscriber struct {
+	transcript string
+	err        error
+	calls      []string
+}
+
+func (f *fakeVoiceNoteTranscriber) Transcribe(ctx context.Context, workspace, audioPath string) (string, error) {
+	f.calls = append(f.calls, workspace+"|"+audioPath)
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.transcript, nil
+}
+
 func extractPromptLineValue(content, prefix string) string {
 	for _, line := range strings.Split(content, "\n") {
 		if strings.HasPrefix(line, prefix) {
@@ -1908,6 +1922,269 @@ func TestProcessMessage_AudioAttachmentPromptsSkillInsteadOfPassingMedia(t *test
 	}
 	if _, err := os.Stat(stagedPath); err != nil {
 		t.Fatalf("staged audio path missing on disk: %v", err)
+	}
+}
+
+func TestProcessMessage_VoiceNoteUsesTranscriptAsUserMessage(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &captureMessagesProvider{response: "ok"}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	store := media.NewFileMediaStore()
+	al.SetMediaStore(store)
+
+	transcriber := &fakeVoiceNoteTranscriber{transcript: "hello from the voice note"}
+	al.setVoiceNoteTranscriber(transcriber)
+
+	audioPath := filepath.Join(t.TempDir(), "voice.ogg")
+	if err := os.WriteFile(audioPath, []byte("fake audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	audioRef, err := store.Store(audioPath, media.MediaMeta{
+		Filename:    "voice.ogg",
+		ContentType: "audio/ogg",
+	}, "telegram:chat-1:msg-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg := bus.InboundMessage{
+		Channel:  "telegram",
+		SenderID: "telegram:user-1",
+		Sender: bus.SenderInfo{
+			Platform:   "telegram",
+			PlatformID: "user-1",
+		},
+		ChatID:   "chat-1",
+		Content:  "[voice]",
+		Media:    []string{audioRef},
+		Peer:     bus.Peer{Kind: "direct", ID: "user-1"},
+		Metadata: map[string]string{bus.MetadataMessageSubtype: bus.MessageSubtypeVoiceNote},
+	}
+
+	_, err = al.processMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatalf("processMessage failed: %v", err)
+	}
+	if len(provider.calls) == 0 {
+		t.Fatal("expected provider to receive a prompt")
+	}
+
+	userMessage := provider.calls[0][len(provider.calls[0])-1]
+	if got := userMessage.Content; got != transcriber.transcript {
+		t.Fatalf("user message content = %q, want %q", got, transcriber.transcript)
+	}
+	if len(userMessage.Media) != 0 {
+		t.Fatalf("voice note audio should not be passed as provider media, got %v", userMessage.Media)
+	}
+	if strings.Contains(userMessage.Content, "skills/stt/SKILL.md") {
+		t.Fatalf("voice note prompt should not include stt skill hint after successful transcription: %q", userMessage.Content)
+	}
+	if len(transcriber.calls) != 1 {
+		t.Fatalf("transcriber call count = %d, want 1", len(transcriber.calls))
+	}
+
+	sessionKey := al.registry.ResolveRoute(routing.RouteInput{
+		Channel: "telegram",
+		Peer:    &routing.RoutePeer{Kind: "direct", ID: "user-1"},
+	}).SessionKey
+	history := al.registry.GetDefaultAgent().Sessions.GetHistory(sessionKey)
+	if len(history) < 2 {
+		t.Fatalf("history length = %d, want at least 2", len(history))
+	}
+	if got := history[0].Content; got != transcriber.transcript {
+		t.Fatalf("stored user history = %q, want %q", got, transcriber.transcript)
+	}
+}
+
+func TestProcessMessage_VoiceNoteKeepsCaptionAsContext(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &captureMessagesProvider{response: "ok"}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	store := media.NewFileMediaStore()
+	al.SetMediaStore(store)
+	al.setVoiceNoteTranscriber(&fakeVoiceNoteTranscriber{transcript: "spoken words"})
+
+	audioPath := filepath.Join(t.TempDir(), "voice.ogg")
+	if err := os.WriteFile(audioPath, []byte("fake audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	audioRef, err := store.Store(audioPath, media.MediaMeta{
+		Filename:    "voice.ogg",
+		ContentType: "audio/ogg",
+	}, "telegram:chat-1:msg-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = al.processMessage(context.Background(), bus.InboundMessage{
+		Channel:  "telegram",
+		SenderID: "telegram:user-1",
+		Sender: bus.SenderInfo{
+			Platform:   "telegram",
+			PlatformID: "user-1",
+		},
+		ChatID:   "chat-1",
+		Content:  "please keep this in mind\n[voice]",
+		Media:    []string{audioRef},
+		Peer:     bus.Peer{Kind: "direct", ID: "user-1"},
+		Metadata: map[string]string{bus.MetadataMessageSubtype: bus.MessageSubtypeVoiceNote},
+	})
+	if err != nil {
+		t.Fatalf("processMessage failed: %v", err)
+	}
+
+	userMessage := provider.calls[0][len(provider.calls[0])-1]
+	if !strings.HasPrefix(userMessage.Content, "spoken words") {
+		t.Fatalf("voice note transcript should lead the user message, got %q", userMessage.Content)
+	}
+	if !strings.Contains(userMessage.Content, "[Accompanying text from the same message]\nplease keep this in mind") {
+		t.Fatalf("voice note caption context missing from user message: %q", userMessage.Content)
+	}
+	if strings.Contains(userMessage.Content, "[voice]") {
+		t.Fatalf("voice placeholder should be removed after transcription: %q", userMessage.Content)
+	}
+}
+
+func TestProcessMessage_VoiceNoteFallsBackToAttachmentPromptOnTranscriptionFailure(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &captureMessagesProvider{response: "ok"}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	store := media.NewFileMediaStore()
+	al.SetMediaStore(store)
+	al.setVoiceNoteTranscriber(&fakeVoiceNoteTranscriber{err: errors.New("transcription failed")})
+
+	audioPath := filepath.Join(t.TempDir(), "voice.ogg")
+	if err := os.WriteFile(audioPath, []byte("fake audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	audioRef, err := store.Store(audioPath, media.MediaMeta{
+		Filename:    "voice.ogg",
+		ContentType: "audio/ogg",
+	}, "telegram:chat-1:msg-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = al.processMessage(context.Background(), bus.InboundMessage{
+		Channel:  "telegram",
+		SenderID: "telegram:user-1",
+		Sender: bus.SenderInfo{
+			Platform:   "telegram",
+			PlatformID: "user-1",
+		},
+		ChatID:   "chat-1",
+		Content:  "[voice]",
+		Media:    []string{audioRef},
+		Peer:     bus.Peer{Kind: "direct", ID: "user-1"},
+		Metadata: map[string]string{bus.MetadataMessageSubtype: bus.MessageSubtypeVoiceNote},
+	})
+	if err != nil {
+		t.Fatalf("processMessage failed: %v", err)
+	}
+
+	userMessage := provider.calls[0][len(provider.calls[0])-1]
+	if !strings.Contains(userMessage.Content, "skills/stt/SKILL.md") {
+		t.Fatalf("voice note fallback should use stt skill hint, got %q", userMessage.Content)
+	}
+	stagedPath := extractPromptLineValue(userMessage.Content, "Local file:")
+	if stagedPath == "" {
+		t.Fatalf("voice note fallback missing staged local file path: %q", userMessage.Content)
+	}
+}
+
+func TestProcessMessage_GroupVoiceNotePersistsAttributedTranscript(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &captureMessagesProvider{response: "ok"}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	store := media.NewFileMediaStore()
+	al.SetMediaStore(store)
+	al.setVoiceNoteTranscriber(&fakeVoiceNoteTranscriber{transcript: "hello group"})
+
+	audioPath := filepath.Join(t.TempDir(), "voice.ogg")
+	if err := os.WriteFile(audioPath, []byte("fake audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	audioRef, err := store.Store(audioPath, media.MediaMeta{
+		Filename:    "voice.ogg",
+		ContentType: "audio/ogg",
+	}, "telegram:group-1:msg-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = al.processMessage(context.Background(), bus.InboundMessage{
+		Channel:  "telegram",
+		SenderID: "telegram:user-1",
+		Sender: bus.SenderInfo{
+			Platform:    "telegram",
+			PlatformID:  "user-1",
+			DisplayName: "Alice",
+		},
+		ChatID:   "group-1",
+		Content:  "[voice]",
+		Media:    []string{audioRef},
+		Peer:     bus.Peer{Kind: "group", ID: "group-1"},
+		Metadata: map[string]string{bus.MetadataMessageSubtype: bus.MessageSubtypeVoiceNote},
+	})
+	if err != nil {
+		t.Fatalf("processMessage failed: %v", err)
+	}
+
+	userMessage := provider.calls[0][len(provider.calls[0])-1]
+	if got := userMessage.Content; got != "[From: Alice] hello group" {
+		t.Fatalf("group voice note content = %q, want %q", got, "[From: Alice] hello group")
 	}
 }
 

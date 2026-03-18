@@ -388,7 +388,11 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 		case evt.Message.GetVideoMessage() != nil:
 			content = "[Video]"
 		case evt.Message.GetAudioMessage() != nil:
-			content = "[Audio]"
+			if whatsAppMessageSubtype(evt.Message) == bus.MessageSubtypeVoiceNote {
+				content = "[voice]"
+			} else {
+				content = "[Audio]"
+			}
 		case evt.Message.GetDocumentMessage() != nil:
 			content = "[Document]"
 		}
@@ -412,6 +416,9 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 	} else {
 		metadata["peer_kind"] = "direct"
 		metadata["peer_id"] = senderID
+	}
+	if subtype := whatsAppMessageSubtype(evt.Message); subtype != "" {
+		metadata[bus.MetadataMessageSubtype] = subtype
 	}
 
 	peerKind := "direct"
@@ -437,6 +444,20 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 		map[string]any{"sender_id": senderID, "content_preview": utils.Truncate(content, 50)},
 	)
 	c.HandleMessage(c.runCtx, peer, messageID, senderID, chatID, content, mediaPaths, metadata, sender)
+}
+
+func whatsAppMessageSubtype(msg *waE2E.Message) string {
+	if msg == nil {
+		return ""
+	}
+	audio := msg.GetAudioMessage()
+	if audio == nil {
+		return ""
+	}
+	if audio.GetPTT() {
+		return bus.MessageSubtypeVoiceNote
+	}
+	return ""
 }
 
 func (c *WhatsAppNativeChannel) extractIncomingMedia(msg *waE2E.Message, chatID, messageID string) []string {

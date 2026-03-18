@@ -1,5 +1,11 @@
 package bus
 
+const (
+	MetadataMessageSubtype = "message_subtype"
+
+	MessageSubtypeVoiceNote = "voice_note"
+)
+
 // Peer identifies the routing peer for a message (direct, group, channel, etc.)
 type Peer struct {
 	Kind string `json:"kind"` // "direct" | "group" | "channel" | ""

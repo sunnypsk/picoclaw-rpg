@@ -34,19 +34,20 @@ import (
 )
 
 type AgentLoop struct {
-	bus            *bus.MessageBus
-	cfg            *config.Config
-	registry       *AgentRegistry
-	state          *state.Manager
-	running        atomic.Bool
-	summarizing    sync.Map
-	sessionRotates sync.Map
-	dailyLogDedupe sync.Map
-	globalTools    map[string]tools.Tool
-	globalToolsMu  sync.RWMutex
-	fallback       *providers.FallbackChain
-	channelManager *channels.Manager
-	mediaStore     media.MediaStore
+	bus                  *bus.MessageBus
+	cfg                  *config.Config
+	registry             *AgentRegistry
+	state                *state.Manager
+	running              atomic.Bool
+	summarizing          sync.Map
+	sessionRotates       sync.Map
+	dailyLogDedupe       sync.Map
+	globalTools          map[string]tools.Tool
+	globalToolsMu        sync.RWMutex
+	fallback             *providers.FallbackChain
+	channelManager       *channels.Manager
+	mediaStore           media.MediaStore
+	voiceNoteTranscriber voiceNoteTranscriber
 }
 
 // processOptions configures how a message is processed
@@ -123,13 +124,14 @@ func NewAgentLoop(
 	}
 
 	return &AgentLoop{
-		bus:         msgBus,
-		cfg:         cfg,
-		registry:    registry,
-		state:       stateManager,
-		summarizing: sync.Map{},
-		globalTools: make(map[string]tools.Tool),
-		fallback:    fallbackChain,
+		bus:                  msgBus,
+		cfg:                  cfg,
+		registry:             registry,
+		state:                stateManager,
+		summarizing:          sync.Map{},
+		globalTools:          make(map[string]tools.Tool),
+		fallback:             fallbackChain,
+		voiceNoteTranscriber: &sttSkillVoiceNoteTranscriber{},
 	}
 }
 
@@ -638,6 +640,7 @@ func (al *AgentLoop) processMessageCore(
 			"matched_by":  route.MatchedBy,
 		})
 
+	msg = al.prepareVoiceNoteMessage(turnCtx, agent, msg)
 	attributedUserMessage := attributeInboundMessage(msg)
 	response, err := al.runAgentLoop(turnCtx, agent, processOptions{
 		SessionKey:         sessionKey,
@@ -656,6 +659,14 @@ func (al *AgentLoop) processMessageCore(
 		scheduleReplyStateUpdate()
 	}
 	return response, agent, err
+}
+
+func (al *AgentLoop) setVoiceNoteTranscriber(transcriber voiceNoteTranscriber) {
+	if transcriber == nil {
+		al.voiceNoteTranscriber = &sttSkillVoiceNoteTranscriber{}
+		return
+	}
+	al.voiceNoteTranscriber = transcriber
 }
 
 func (al *AgentLoop) processSystemMessage(

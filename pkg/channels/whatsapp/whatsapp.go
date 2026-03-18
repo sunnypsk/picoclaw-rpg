@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -365,6 +366,9 @@ func (c *WhatsAppChannel) handleIncomingMessage(msg map[string]any) {
 	if mid, ok := msg["id"].(string); ok {
 		messageID = mid
 	}
+	if subtype := whatsAppBridgeMessageSubtype(msg); subtype != "" {
+		metadata[bus.MetadataMessageSubtype] = subtype
+	}
 	if userName, ok := msg["from_name"].(string); ok {
 		metadata["user_name"] = userName
 	}
@@ -395,4 +399,19 @@ func (c *WhatsAppChannel) handleIncomingMessage(msg map[string]any) {
 	}
 
 	c.HandleMessage(c.ctx, peer, messageID, senderID, chatID, content, mediaPaths, metadata, sender)
+}
+
+func whatsAppBridgeMessageSubtype(msg map[string]any) string {
+	if msg == nil {
+		return ""
+	}
+	subtype, ok := msg[bus.MetadataMessageSubtype].(string)
+	if !ok {
+		return ""
+	}
+	subtype = strings.TrimSpace(subtype)
+	if subtype == bus.MessageSubtypeVoiceNote {
+		return subtype
+	}
+	return ""
 }

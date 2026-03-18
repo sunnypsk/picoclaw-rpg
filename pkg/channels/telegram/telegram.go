@@ -556,6 +556,9 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 		"first_name": user.FirstName,
 		"is_group":   fmt.Sprintf("%t", message.Chat.Type != "private"),
 	}
+	if subtype := telegramMessageSubtype(message); subtype != "" {
+		metadata[bus.MetadataMessageSubtype] = subtype
+	}
 
 	c.HandleMessage(c.ctx,
 		peer,
@@ -568,6 +571,16 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 		sender,
 	)
 	return nil
+}
+
+func telegramMessageSubtype(message *telego.Message) string {
+	if message == nil {
+		return ""
+	}
+	if message.Voice != nil {
+		return bus.MessageSubtypeVoiceNote
+	}
+	return ""
 }
 
 func (c *TelegramChannel) downloadPhoto(ctx context.Context, fileID string) string {
