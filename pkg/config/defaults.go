@@ -381,6 +381,13 @@ func DefaultConfig() *Config {
 		Heartbeat: HeartbeatConfig{
 			Enabled:  true,
 			Interval: 30,
+			Location: HeartbeatLocationConfig{
+				Enabled:              true,
+				IdleThresholdMinutes: 60,
+				OutingProbability:    0.20,
+				MinDurationMinutes:   35,
+				MaxDurationMinutes:   75,
+			},
 			Proactive: HeartbeatProactiveConfig{
 				Enabled:                     false,
 				BaseToleranceMinutes:        240,

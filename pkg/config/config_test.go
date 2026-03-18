@@ -236,6 +236,21 @@ func TestDefaultConfig_HeartbeatEnabled(t *testing.T) {
 	if !cfg.Heartbeat.Enabled {
 		t.Error("Heartbeat should be enabled by default")
 	}
+	if !cfg.Heartbeat.Location.Enabled {
+		t.Error("Heartbeat location policy should be enabled by default")
+	}
+	if cfg.Heartbeat.Location.IdleThresholdMinutes != 60 {
+		t.Errorf("Heartbeat location idle threshold = %d, want 60", cfg.Heartbeat.Location.IdleThresholdMinutes)
+	}
+	if cfg.Heartbeat.Location.OutingProbability != 0.20 {
+		t.Errorf("Heartbeat location outing probability = %v, want 0.20", cfg.Heartbeat.Location.OutingProbability)
+	}
+	if cfg.Heartbeat.Location.MinDurationMinutes != 35 {
+		t.Errorf("Heartbeat location min duration = %d, want 35", cfg.Heartbeat.Location.MinDurationMinutes)
+	}
+	if cfg.Heartbeat.Location.MaxDurationMinutes != 75 {
+		t.Errorf("Heartbeat location max duration = %d, want 75", cfg.Heartbeat.Location.MaxDurationMinutes)
+	}
 	if cfg.Heartbeat.Proactive.Enabled {
 		t.Error("Heartbeat proactive mode should be disabled by default")
 	}

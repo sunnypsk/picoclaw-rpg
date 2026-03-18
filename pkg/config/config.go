@@ -470,7 +470,16 @@ type PicoConfig struct {
 type HeartbeatConfig struct {
 	Enabled   bool                     `json:"enabled"             env:"PICOCLAW_HEARTBEAT_ENABLED"`
 	Interval  int                      `json:"interval"            env:"PICOCLAW_HEARTBEAT_INTERVAL"` // minutes, min 5
+	Location  HeartbeatLocationConfig  `json:"location,omitempty"`
 	Proactive HeartbeatProactiveConfig `json:"proactive,omitempty"`
+}
+
+type HeartbeatLocationConfig struct {
+	Enabled              bool    `json:"enabled,omitempty"                env:"PICOCLAW_HEARTBEAT_LOCATION_ENABLED"`
+	IdleThresholdMinutes int     `json:"idle_threshold_minutes,omitempty" env:"PICOCLAW_HEARTBEAT_LOCATION_IDLE_THRESHOLD_MINUTES"`
+	OutingProbability    float64 `json:"outing_probability,omitempty"     env:"PICOCLAW_HEARTBEAT_LOCATION_OUTING_PROBABILITY"`
+	MinDurationMinutes   int     `json:"min_duration_minutes,omitempty"   env:"PICOCLAW_HEARTBEAT_LOCATION_MIN_DURATION_MINUTES"`
+	MaxDurationMinutes   int     `json:"max_duration_minutes,omitempty"   env:"PICOCLAW_HEARTBEAT_LOCATION_MAX_DURATION_MINUTES"`
 }
 
 type HeartbeatProactiveConfig struct {

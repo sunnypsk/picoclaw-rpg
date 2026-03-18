@@ -352,7 +352,7 @@ func TestApplyHeartbeatLocationPolicy_StartsOutingWhenIdle(t *testing.T) {
 		},
 	}
 
-	next, changed := applyHeartbeatLocationPolicy(state, now, 0.01, 1, 50)
+	next, changed := applyHeartbeatLocationPolicy(state, defaultHeartbeatLocationConfig(), now, 0.01, 1, 50)
 	if !changed {
 		t.Fatalf("expected heartbeat policy to start an outing")
 	}
@@ -367,6 +367,21 @@ func TestApplyHeartbeatLocationPolicy_StartsOutingWhenIdle(t *testing.T) {
 	}
 }
 
+func TestApplyHeartbeatLocationPolicy_NoOutingBeforeIdleThreshold(t *testing.T) {
+	now := time.Date(2026, 3, 5, 21, 0, 0, 0, time.Local)
+	state := defaultNPCState()
+	state.Relationships = map[string]NPCRelationship{
+		"telegram:user1": {
+			LastInteractionAt: now.Add(-20 * time.Minute).UTC().Format(time.RFC3339),
+		},
+	}
+
+	next, changed := applyHeartbeatLocationPolicy(state, defaultHeartbeatLocationConfig(), now, 0.01, 1, 50)
+	if changed {
+		t.Fatalf("expected no outing before idle threshold, got %+v", next.Location)
+	}
+}
+
 func TestApplyHeartbeatLocationPolicy_NoOutingWhenRollHigh(t *testing.T) {
 	now := time.Date(2026, 3, 5, 21, 0, 0, 0, time.Local)
 	state := defaultNPCState()
@@ -376,7 +391,7 @@ func TestApplyHeartbeatLocationPolicy_NoOutingWhenRollHigh(t *testing.T) {
 		},
 	}
 
-	next, changed := applyHeartbeatLocationPolicy(state, now, 0.9, 0, 45)
+	next, changed := applyHeartbeatLocationPolicy(state, defaultHeartbeatLocationConfig(), now, 0.9, 0, 45)
 	if changed {
 		t.Fatalf("expected no movement when random roll is high, got %+v", next.Location)
 	}
@@ -394,7 +409,7 @@ func TestApplyHeartbeatLocationPolicy_ReturnsToBaseAfterOutingEnds(t *testing.T)
 		MoveReason: npcHeartbeatMoveReason,
 	}
 
-	next, changed := applyHeartbeatLocationPolicy(state, now, 0.9, 0, 45)
+	next, changed := applyHeartbeatLocationPolicy(state, defaultHeartbeatLocationConfig(), now, 0.9, 0, 45)
 	if !changed {
 		t.Fatalf("expected heartbeat policy to return to base after outing end")
 	}
@@ -403,6 +418,29 @@ func TestApplyHeartbeatLocationPolicy_ReturnsToBaseAfterOutingEnds(t *testing.T)
 	}
 	if next.Location.StartAt != "" || next.Location.EndAt != "" {
 		t.Fatalf("expected outing times to be cleared after return, got start=%q end=%q", next.Location.StartAt, next.Location.EndAt)
+	}
+}
+
+func TestNormalizeHeartbeatLocationConfig_AppliesFallbacks(t *testing.T) {
+	cfg := normalizeHeartbeatLocationConfig(config.HeartbeatLocationConfig{
+		Enabled:              true,
+		IdleThresholdMinutes: 0,
+		OutingProbability:    2.5,
+		MinDurationMinutes:   -10,
+		MaxDurationMinutes:   5,
+	})
+
+	if cfg.IdleThresholdMinutes != npcHeartbeatDefaultIdleThresholdMinutes {
+		t.Fatalf("IdleThresholdMinutes = %d, want %d", cfg.IdleThresholdMinutes, npcHeartbeatDefaultIdleThresholdMinutes)
+	}
+	if cfg.OutingProbability != 1 {
+		t.Fatalf("OutingProbability = %v, want 1", cfg.OutingProbability)
+	}
+	if cfg.MinDurationMinutes != npcHeartbeatDefaultMinDurationMinutes {
+		t.Fatalf("MinDurationMinutes = %d, want %d", cfg.MinDurationMinutes, npcHeartbeatDefaultMinDurationMinutes)
+	}
+	if cfg.MaxDurationMinutes != cfg.MinDurationMinutes {
+		t.Fatalf("MaxDurationMinutes = %d, want %d", cfg.MaxDurationMinutes, cfg.MinDurationMinutes)
 	}
 }
 
@@ -445,6 +483,58 @@ func TestNormalizeNPCLevel(t *testing.T) {
 				t.Fatalf("normalizeNPCLevel(%q) = %q, want %q", tc.input, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestNPCStateUpdaterPrompts_IncludeRelationshipAndLocationGuidance(t *testing.T) {
+	tests := []struct {
+		name   string
+		prompt string
+	}{
+		{name: "state only", prompt: buildNPCStateOnlySystemPrompt("telegram:user1")},
+		{name: "state and memory", prompt: buildNPCStateAndMemorySystemPrompt("telegram:user1")},
+	}
+
+	required := []string{
+		"affinity = emotional warmth and liking toward the user.",
+		"trust = willingness to rely on the user, believe them, or be vulnerable with them.",
+		"familiarity = shared history, routine, and mutual knowing built over repeated interactions.",
+		"Change each of affinity, trust, and familiarity by at most one step per interaction.",
+		"Do not decrease affinity, trust, or familiarity because of silence, delayed replies, or neutral small talk alone.",
+		"Do not invent spontaneous location moves during replied-turn updates; heartbeat/autonomous policies handle unprompted outings.",
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, want := range required {
+				if !strings.Contains(tc.prompt, want) {
+					t.Fatalf("prompt missing required guidance %q", want)
+				}
+			}
+		})
+	}
+}
+
+func TestApplyReplyRelationshipMetadata_DoesNotPromoteFamiliarity(t *testing.T) {
+	state := defaultNPCState()
+	state.Relationships["telegram:user1"] = NPCRelationship{
+		Affinity:    NPCLevelMid,
+		Trust:       NPCLevelMid,
+		Familiarity: NPCLevelLow,
+	}
+
+	msg := bus.InboundMessage{
+		Channel:  "telegram",
+		SenderID: "user1",
+		ChatID:   "chat1",
+		Peer:     bus.Peer{Kind: "direct", ID: "user1"},
+	}
+
+	applyReplyRelationshipMetadata(&state, msg, "session-1", time.Date(2026, 3, 5, 12, 0, 0, 0, time.UTC))
+
+	rel := state.Relationships["telegram:user1"]
+	if rel.Familiarity != NPCLevelLow {
+		t.Fatalf("Familiarity = %q, want %q", rel.Familiarity, NPCLevelLow)
 	}
 }
 
@@ -605,6 +695,13 @@ func TestAgentLoop_PostReplyStateUpdate_RequiresPublishedReply(t *testing.T) {
 		}
 		if state.Emotion.Name != "cheerful" {
 			return false, fmt.Sprintf("Emotion.Name = %q, want cheerful", state.Emotion.Name)
+		}
+		rel, ok := state.Relationships["telegram:user-default"]
+		if !ok {
+			return false, "missing relationship for telegram:user-default"
+		}
+		if rel.Familiarity != NPCLevelLow {
+			return false, fmt.Sprintf("Familiarity = %q, want %q", rel.Familiarity, NPCLevelLow)
 		}
 		if provider.stateUpdaterCallCount() != 1 {
 			return false, fmt.Sprintf("stateUpdaterCallCount = %d, want 1", provider.stateUpdaterCallCount())

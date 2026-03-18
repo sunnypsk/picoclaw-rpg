@@ -31,14 +31,14 @@ const (
 	npcStateUpdaterPromptTag = "NPC_STATE_UPDATER_V2"
 	npcUpdaterPromptTag      = "NPC_STATE_MEMORY_UPDATER_V1"
 
-	npcLocationTimeLayout              = "2006-01-02 15:04"
-	npcHeartbeatIdleThreshold          = 2 * time.Hour
-	npcHeartbeatMoveProbability        = 0.08
-	npcHeartbeatMinDurationMinutes     = 35
-	npcHeartbeatDurationRangeMinutes   = 40
-	npcActivityRemoteChatSuffix        = " (multitasking, chatting remotely)"
-	npcHeartbeatMoveReason             = "idle heartbeat walk"
-	npcHeartbeatReturnMoveReasonPrefix = "finished "
+	npcLocationTimeLayout                   = "2006-01-02 15:04"
+	npcHeartbeatDefaultIdleThresholdMinutes = 60
+	npcHeartbeatDefaultMoveProbability      = 0.20
+	npcHeartbeatDefaultMinDurationMinutes   = 35
+	npcHeartbeatDefaultMaxDurationMinutes   = 75
+	npcActivityRemoteChatSuffix             = " (multitasking, chatting remotely)"
+	npcHeartbeatMoveReason                  = "idle heartbeat walk"
+	npcHeartbeatReturnMoveReasonPrefix      = "finished "
 
 	defaultNPCEmotionName = "calm"
 )
@@ -606,17 +606,6 @@ func normalizeNPCLevel(level NPCLevel, fallback NPCLevel) NPCLevel {
 	}
 }
 
-func promoteNPCLevel(level NPCLevel) NPCLevel {
-	switch normalizeNPCLevel(level, NPCLevelLow) {
-	case NPCLevelLow:
-		return NPCLevelMid
-	case NPCLevelMid:
-		return NPCLevelHigh
-	default:
-		return NPCLevelHigh
-	}
-}
-
 func intensityFromNumeric(value float64) NPCEmotionIntensity {
 	switch {
 	case value <= 33:
@@ -938,14 +927,22 @@ func (al *AgentLoop) maybeApplyHeartbeatLocationPolicy(agent *AgentInstance) {
 		return
 	}
 
+	locationCfg := defaultHeartbeatLocationConfig()
+	if al != nil && al.cfg != nil {
+		locationCfg = normalizeHeartbeatLocationConfig(al.cfg.Heartbeat.Location)
+	}
+
 	roll := rand.Float64()
 	outingIndex := 0
 	if len(npcHeartbeatOutings) > 0 {
 		outingIndex = rand.IntN(len(npcHeartbeatOutings))
 	}
-	durationMinutes := npcHeartbeatMinDurationMinutes + rand.IntN(npcHeartbeatDurationRangeMinutes+1)
+	durationMinutes := locationCfg.MinDurationMinutes
+	if locationCfg.MaxDurationMinutes > locationCfg.MinDurationMinutes {
+		durationMinutes += rand.IntN(locationCfg.MaxDurationMinutes - locationCfg.MinDurationMinutes + 1)
+	}
 
-	nextState, changed := applyHeartbeatLocationPolicy(state, time.Now(), roll, outingIndex, durationMinutes)
+	nextState, changed := applyHeartbeatLocationPolicy(state, locationCfg, time.Now(), roll, outingIndex, durationMinutes)
 	if !changed {
 		return
 	}
@@ -954,6 +951,43 @@ func (al *AgentLoop) maybeApplyHeartbeatLocationPolicy(agent *AgentInstance) {
 		logger.WarnCF("agent", "Failed to save heartbeat location policy update",
 			map[string]any{"agent_id": agent.ID, "error": err.Error()})
 	}
+}
+
+func defaultHeartbeatLocationConfig() config.HeartbeatLocationConfig {
+	return config.HeartbeatLocationConfig{
+		Enabled:              true,
+		IdleThresholdMinutes: npcHeartbeatDefaultIdleThresholdMinutes,
+		OutingProbability:    npcHeartbeatDefaultMoveProbability,
+		MinDurationMinutes:   npcHeartbeatDefaultMinDurationMinutes,
+		MaxDurationMinutes:   npcHeartbeatDefaultMaxDurationMinutes,
+	}
+}
+
+func normalizeHeartbeatLocationConfig(cfg config.HeartbeatLocationConfig) config.HeartbeatLocationConfig {
+	if cfg == (config.HeartbeatLocationConfig{}) {
+		return defaultHeartbeatLocationConfig()
+	}
+
+	if cfg.IdleThresholdMinutes <= 0 {
+		cfg.IdleThresholdMinutes = npcHeartbeatDefaultIdleThresholdMinutes
+	}
+	switch {
+	case cfg.OutingProbability < 0:
+		cfg.OutingProbability = 0
+	case cfg.OutingProbability > 1:
+		cfg.OutingProbability = 1
+	}
+	if cfg.MinDurationMinutes <= 0 {
+		cfg.MinDurationMinutes = npcHeartbeatDefaultMinDurationMinutes
+	}
+	if cfg.MaxDurationMinutes <= 0 {
+		cfg.MaxDurationMinutes = npcHeartbeatDefaultMaxDurationMinutes
+	}
+	if cfg.MaxDurationMinutes < cfg.MinDurationMinutes {
+		cfg.MaxDurationMinutes = cfg.MinDurationMinutes
+	}
+
+	return cfg
 }
 
 func buildNPCStateUpdatePayload(
@@ -990,24 +1024,32 @@ func buildNPCStateUpdatePayload(
 	return inputJSON, relationshipKey, nil
 }
 
-func (al *AgentLoop) requestNPCStateOnlyUpdate(
-	ctx context.Context,
-	agent *AgentInstance,
-	state NPCState,
-	msg bus.InboundMessage,
-	sessionKey string,
-	assistantReply string,
-) (NPCState, error) {
-	if agent == nil || agent.Provider == nil {
-		return NPCState{}, fmt.Errorf("agent provider is nil")
-	}
+func npcStateUpdateRules(relationshipKey string) string {
+	return fmt.Sprintf(`- Keep continuity from previous state unless interaction indicates change.
+- emotion.name must be one of: %s.
+- emotion.intensity must be one of: low, mid, high.
+- Intensity behavior guide: low=subtle cues and mostly neutral language; mid=clear but balanced emotional expression; high=strong and direct expression matching context.
+- Emotion transition rule: emotion.name may change only when previous_state.emotion.intensity is low.
+- If previous_state.emotion.intensity is mid or high, keep emotion.name the same as previous_state.emotion.name.
+- Example: previous_state angry/high cannot become calm in one update; lower intensity first.
+- location tracks off-chat activity and whereabouts; use start_at/end_at as local datetime text when available.
+- If previous_state.location indicates an active outing window (between start_at and end_at), keep the outing location/activity and add a multitasking cue for chatting remotely.
+- Do not invent spontaneous location moves during replied-turn updates; heartbeat/autonomous policies handle unprompted outings. Only change location when the interaction clearly implies movement or when continuing an active outing.
+- Preserve relationship contact/session/timestamp fields unless the current interaction updates them.
+- affinity = emotional warmth and liking toward the user.
+- trust = willingness to rely on the user, believe them, or be vulnerable with them.
+- familiarity = shared history, routine, and mutual knowing built over repeated interactions.
+- Update affinity, trust, and familiarity conservatively. Usually keep the previous level unless the interaction provides clear evidence for a change.
+- Change each of affinity, trust, and familiarity by at most one step per interaction.
+- Increase affinity after clear warmth, kindness, fun rapport, or support; decrease it after repeated coldness, insults, manipulation, or unwanted pressure.
+- Increase trust after reliability, honesty, discretion, respect, or supportive behavior; decrease it after deception, broken expectations, coercion, or disrespect.
+- Increase familiarity mainly through repeated interactions, callbacks, routines, or shared history, not from one emotional spike alone.
+- Do not decrease affinity, trust, or familiarity because of silence, delayed replies, or neutral small talk alone.
+- Ensure relationship key %q exists and is updated.`, strings.Join(npcAllowedEmotionNames, ", "), relationshipKey)
+}
 
-	inputJSON, relationshipKey, err := buildNPCStateUpdatePayload(state, nil, msg, sessionKey, assistantReply)
-	if err != nil {
-		return NPCState{}, err
-	}
-
-	systemPrompt := fmt.Sprintf(`%s
+func buildNPCStateOnlySystemPrompt(relationshipKey string) string {
+	return fmt.Sprintf(`%s
 You update internal roleplay state for one dedicated NPC agent.
 Return JSON only, no markdown, no explanations.
 
@@ -1025,18 +1067,56 @@ Output shape:
 }
 
 Rules:
-- Keep continuity from previous state unless interaction indicates change.
-- emotion.name must be one of: %s.
-- emotion.intensity must be one of: low, mid, high.
-- Intensity behavior guide: low=subtle cues and mostly neutral language; mid=clear but balanced emotional expression; high=strong and direct expression matching context.
-- Emotion transition rule: emotion.name may change only when previous_state.emotion.intensity is low.
-- If previous_state.emotion.intensity is mid or high, keep emotion.name the same as previous_state.emotion.name.
-- Example: previous_state angry/high cannot become calm in one update; lower intensity first.
-- location tracks off-chat activity and whereabouts; use start_at/end_at as local datetime text when available.
-- If previous_state.location indicates an active outing window (between start_at and end_at), keep the outing location/activity and add a multitasking cue for chatting remotely.
-- Preserve relationship contact/session/timestamp fields unless the current interaction updates them.
-- Ensure relationship key %q exists and is updated.
-- Return a valid JSON object only.`, npcStateUpdaterPromptTag, strings.Join(npcAllowedEmotionNames, ", "), relationshipKey)
+%s
+- Return a valid JSON object only.`, npcStateUpdaterPromptTag, npcStateUpdateRules(relationshipKey))
+}
+
+func buildNPCStateAndMemorySystemPrompt(relationshipKey string) string {
+	return fmt.Sprintf(`%s
+You update internal roleplay state and long-term memory notes for one dedicated NPC agent.
+Return JSON only, no markdown, no explanations.
+
+Output shape:
+{
+  "state": {
+    "version": 1,
+    "updated_at": "RFC3339 timestamp",
+    "emotion": {"name": "string", "intensity": "low|mid|high", "reason": "string"},
+    "location": {"area": "string", "scene": "string", "activity": "string", "start_at": "local datetime text (e.g. 2026-03-05 22:00)", "end_at": "local datetime text (e.g. 2026-03-05 23:30)", "move_reason": "string"},
+    "relationships": {
+      "<channel:user_id>": {"affinity": "low|mid|high", "trust": "low|mid|high", "familiarity": "low|mid|high", "last_interaction_at": "RFC3339 timestamp", "last_channel": "string", "last_chat_id": "string", "last_peer_kind": "string", "last_session_key": "string", "last_user_message_at": "RFC3339 timestamp", "last_agent_message_at": "RFC3339 timestamp", "last_proactive_attempt_at": "RFC3339 timestamp", "last_proactive_success_at": "RFC3339 timestamp", "notes": "string"}
+    },
+    "habits": ["string"],
+    "recent_events": [{"at": "RFC3339", "type": "string", "summary": "string"}]
+  },
+  "memory_notes": ["string"]
+}
+
+Rules:
+%s
+- Keep memory_notes concise, deduplicated, and <= %d.
+- Merge/edit existing notes when possible instead of blind append.
+- Return valid JSON object only.`, npcUpdaterPromptTag, npcStateUpdateRules(relationshipKey), maxNPCMemoryNotes)
+}
+
+func (al *AgentLoop) requestNPCStateOnlyUpdate(
+	ctx context.Context,
+	agent *AgentInstance,
+	state NPCState,
+	msg bus.InboundMessage,
+	sessionKey string,
+	assistantReply string,
+) (NPCState, error) {
+	if agent == nil || agent.Provider == nil {
+		return NPCState{}, fmt.Errorf("agent provider is nil")
+	}
+
+	inputJSON, relationshipKey, err := buildNPCStateUpdatePayload(state, nil, msg, sessionKey, assistantReply)
+	if err != nil {
+		return NPCState{}, err
+	}
+
+	systemPrompt := buildNPCStateOnlySystemPrompt(relationshipKey)
 
 	response, err := agent.Provider.Chat(
 		ctx,
@@ -1091,41 +1171,7 @@ func (al *AgentLoop) requestNPCStateUpdate(
 		return nil, err
 	}
 
-	systemPrompt := fmt.Sprintf(`%s
-You update internal roleplay state and long-term memory notes for one dedicated NPC agent.
-Return JSON only, no markdown, no explanations.
-
-Output shape:
-{
-  "state": {
-    "version": 1,
-    "updated_at": "RFC3339 timestamp",
-    "emotion": {"name": "string", "intensity": "low|mid|high", "reason": "string"},
-    "location": {"area": "string", "scene": "string", "activity": "string", "start_at": "local datetime text (e.g. 2026-03-05 22:00)", "end_at": "local datetime text (e.g. 2026-03-05 23:30)", "move_reason": "string"},
-    "relationships": {
-      "<channel:user_id>": {"affinity": "low|mid|high", "trust": "low|mid|high", "familiarity": "low|mid|high", "last_interaction_at": "RFC3339 timestamp", "last_channel": "string", "last_chat_id": "string", "last_peer_kind": "string", "last_session_key": "string", "last_user_message_at": "RFC3339 timestamp", "last_agent_message_at": "RFC3339 timestamp", "last_proactive_attempt_at": "RFC3339 timestamp", "last_proactive_success_at": "RFC3339 timestamp", "notes": "string"}
-    },
-    "habits": ["string"],
-    "recent_events": [{"at": "RFC3339", "type": "string", "summary": "string"}]
-  },
-  "memory_notes": ["string"]
-}
-
-Rules:
-- Keep continuity from previous state unless interaction indicates change.
-- emotion.name must be one of: %s.
-- emotion.intensity must be one of: low, mid, high.
-- Intensity behavior guide: low=subtle cues and mostly neutral language; mid=clear but balanced emotional expression; high=strong and direct expression matching context.
-- Emotion transition rule: emotion.name may change only when previous_state.emotion.intensity is low.
-- If previous_state.emotion.intensity is mid or high, keep emotion.name the same as previous_state.emotion.name.
-- Example: previous_state angry/high cannot become calm in one update; lower intensity first.
-- location tracks off-chat activity and whereabouts; use start_at/end_at as local datetime text when available.
-- If previous_state.location indicates an active outing window (between start_at and end_at), keep the outing location/activity and add a multitasking cue for chatting remotely.
-- Preserve relationship contact/session/timestamp fields unless the current interaction updates them.
-- Ensure relationship key %q exists and is updated.
-- Keep memory_notes concise, deduplicated, and <= %d.
-- Merge/edit existing notes when possible instead of blind append.
-- Return valid JSON object only.`, npcUpdaterPromptTag, strings.Join(npcAllowedEmotionNames, ", "), relationshipKey, maxNPCMemoryNotes)
+	systemPrompt := buildNPCStateAndMemorySystemPrompt(relationshipKey)
 
 	response, err := agent.Provider.Chat(
 		ctx,
@@ -1188,8 +1234,6 @@ func ensureRelationshipPresent(state *NPCState, msg bus.InboundMessage) {
 			Trust:       NPCLevelMid,
 			Familiarity: NPCLevelLow,
 		}
-	} else {
-		rel.Familiarity = promoteNPCLevel(rel.Familiarity)
 	}
 	rel.LastChannel = normalizeRelationshipChannel(msg.Channel)
 	rel.LastChatID = strings.TrimSpace(msg.ChatID)
@@ -1227,8 +1271,6 @@ func applyReplyRelationshipMetadata(
 			Trust:       NPCLevelMid,
 			Familiarity: NPCLevelLow,
 		}
-	} else {
-		rel.Familiarity = promoteNPCLevel(rel.Familiarity)
 	}
 	rel.LastChannel = normalizeRelationshipChannel(msg.Channel)
 	rel.LastChatID = strings.TrimSpace(msg.ChatID)
@@ -1484,12 +1526,14 @@ func appendLocationEvent(state *NPCState, at time.Time, summary string) {
 
 func applyHeartbeatLocationPolicy(
 	state NPCState,
+	locationCfg config.HeartbeatLocationConfig,
 	now time.Time,
 	roll float64,
 	outingIndex int,
 	durationMinutes int,
 ) (NPCState, bool) {
 	next := normalizeNPCState(state)
+	locationCfg = normalizeHeartbeatLocationConfig(locationCfg)
 	nowLocal := now.In(time.Local)
 
 	if endAt, hasEnd := parseLocationLocalTime(next.Location.EndAt); hasEnd && !nowLocal.Before(endAt) {
@@ -1513,15 +1557,19 @@ func applyHeartbeatLocationPolicy(
 	if isActiveOutingWindow(next.Location, nowLocal) {
 		return next, false
 	}
+	if !locationCfg.Enabled {
+		return next, false
+	}
 
 	lastInteraction, ok := latestInteractionAt(next)
 	if !ok {
 		return next, false
 	}
-	if now.UTC().Sub(lastInteraction) < npcHeartbeatIdleThreshold {
+	idleThreshold := time.Duration(locationCfg.IdleThresholdMinutes) * time.Minute
+	if now.UTC().Sub(lastInteraction) < idleThreshold {
 		return next, false
 	}
-	if roll >= npcHeartbeatMoveProbability {
+	if roll >= locationCfg.OutingProbability {
 		return next, false
 	}
 	if len(npcHeartbeatOutings) == 0 {
@@ -1531,8 +1579,8 @@ func applyHeartbeatLocationPolicy(
 	if outingIndex < 0 || outingIndex >= len(npcHeartbeatOutings) {
 		outingIndex = 0
 	}
-	minDuration := npcHeartbeatMinDurationMinutes
-	maxDuration := npcHeartbeatMinDurationMinutes + npcHeartbeatDurationRangeMinutes
+	minDuration := locationCfg.MinDurationMinutes
+	maxDuration := locationCfg.MaxDurationMinutes
 	if durationMinutes < minDuration || durationMinutes > maxDuration {
 		durationMinutes = minDuration
 	}

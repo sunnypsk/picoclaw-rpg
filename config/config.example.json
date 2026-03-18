@@ -349,6 +349,13 @@
   "heartbeat": {
     "enabled": true,
     "interval": 30,
+    "location": {
+      "enabled": true,
+      "idle_threshold_minutes": 60,
+      "outing_probability": 0.2,
+      "min_duration_minutes": 35,
+      "max_duration_minutes": 75
+    },
     "proactive": {
       "enabled": false,
       "base_tolerance_minutes": 240,
