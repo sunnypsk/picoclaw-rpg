@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const SCRIPT_DIR = path.dirname(SCRIPT_PATH);
 const SKILL_DIR = path.resolve(SCRIPT_DIR, "..");
 const WORKSPACE_ROOT = path.resolve(SKILL_DIR, "..", "..");
 const REPO_ROOT = path.resolve(WORKSPACE_ROOT, "..");
@@ -214,7 +216,9 @@ const TEXT_ROLES = {
   }
 };
 
-main().catch(handleFatalError);
+if (process.argv[1] && path.resolve(process.argv[1]) === SCRIPT_PATH) {
+  main().catch(handleFatalError);
+}
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -592,8 +596,31 @@ function ensurePptxExtension(filePath) {
 }
 
 function isWithinDirectory(candidatePath, rootPath) {
-  const relative = path.relative(rootPath, candidatePath);
+  const canonicalCandidatePath = resolvePathThroughRealParents(candidatePath);
+  const canonicalRootPath = fsSync.realpathSync.native(path.resolve(rootPath));
+  const relative = path.relative(canonicalRootPath, canonicalCandidatePath);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function resolvePathThroughRealParents(candidatePath) {
+  const resolvedCandidatePath = path.resolve(candidatePath);
+  const missingSegments = [];
+  let currentPath = resolvedCandidatePath;
+
+  for (;;) {
+    if (fsSync.existsSync(currentPath)) {
+      const realPath = fsSync.realpathSync.native(currentPath);
+      return missingSegments.length === 0 ? realPath : path.join(realPath, ...missingSegments.reverse());
+    }
+
+    const parentPath = path.dirname(currentPath);
+    if (parentPath === currentPath) {
+      throw new Error(`output path does not have an existing parent: ${candidatePath}`);
+    }
+
+    missingSegments.push(path.basename(currentPath));
+    currentPath = parentPath;
+  }
 }
 
 function buildDefaultStem(value) {
@@ -748,7 +775,7 @@ function buildDensityWarnings(spec) {
     }
 
     if (slide.type === "closing") {
-      const effectiveSubtitle = slide.subtitle || spec.subtitle;
+      const effectiveSubtitle = getClosingSlideSubtitle(slide);
       if (slide.title.length > 80) {
         warnings.push(`${prefix}: closing title is very long and may overflow`);
       }
@@ -1114,7 +1141,7 @@ function renderImageSlide(slide, slideSpec, deckSpec, metrics) {
 function renderClosingSlide(slide, slideSpec, deckSpec, metrics) {
   const blockWidth = metrics.width > 11 ? 8.9 : 7.4;
   const blockX = (metrics.width - blockWidth) / 2;
-  const subtitle = slideSpec.subtitle || deckSpec.subtitle || "";
+  const subtitle = getClosingSlideSubtitle(slideSpec);
 
   addFittedText(slide, slideSpec.title, {
     x: blockX,
@@ -1137,6 +1164,10 @@ function renderClosingSlide(slide, slideSpec, deckSpec, metrics) {
     color: PALETTE.muted,
     align: "center"
   });
+}
+
+function getClosingSlideSubtitle(slideSpec) {
+  return slideSpec.subtitle || "";
 }
 
 function addSlideTitle(slide, title, metrics, lang, margin) {
@@ -1237,3 +1268,11 @@ function handleFatalError(error) {
   process.stderr.write(`${JSON.stringify(result, null, 2)}\n`);
   process.exit(1);
 }
+
+export const __test__ = {
+  REPO_ROOT,
+  WORKSPACE_ROOT,
+  buildDensityWarnings,
+  renderClosingSlide,
+  resolveSafeOutputPath
+};
