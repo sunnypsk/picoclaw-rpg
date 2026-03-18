@@ -14,7 +14,7 @@ import (
 
 const (
 	autoRecallKeywordExtractorPromptTag   = "AUTO_RECALL_KEYWORD_EXTRACTOR_V1"
-	autoRecallKeywordExtractionTimeout    = 15 * time.Second
+	autoRecallKeywordExtractionTimeout    = 1 * time.Minute
 	autoRecallKeywordExtractionMaxTokens  = 128
 	autoRecallKeywordExtractionMaxResults = 8
 )
