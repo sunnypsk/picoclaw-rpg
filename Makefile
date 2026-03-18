@@ -205,9 +205,9 @@ check: deps fmt vet test
 run: build
 	@$(BUILD_DIR)/$(BINARY_NAME) $(ARGS)
 
-## docker-build: Build Docker image (minimal Alpine-based)
+## docker-build: Build standard Docker image (Python + Node runtime)
 docker-build:
-	@echo "Building minimal Docker image (Alpine-based)..."
+	@echo "Building standard Docker image (Python + Node runtime)..."
 	docker compose -f docker/docker-compose.yml build picoclaw-agent picoclaw-gateway
 
 ## docker-build-full: Build Docker image with full MCP support (Node.js 24)
@@ -221,7 +221,7 @@ docker-test:
 	@chmod +x scripts/test-docker-mcp.sh
 	@./scripts/test-docker-mcp.sh
 
-## docker-run: Run picoclaw gateway in Docker (Alpine-based)
+## docker-run: Run picoclaw gateway in Docker (standard runtime)
 docker-run:
 	docker compose -f docker/docker-compose.yml --profile gateway up
 
@@ -229,7 +229,7 @@ docker-run:
 docker-run-full:
 	docker compose -f docker/docker-compose.full.yml --profile gateway up
 
-## docker-run-agent: Run picoclaw agent in Docker (interactive, Alpine-based)
+## docker-run-agent: Run picoclaw agent in Docker (interactive, standard runtime)
 docker-run-agent:
 	docker compose -f docker/docker-compose.yml run --rm picoclaw-agent
 
@@ -258,7 +258,7 @@ help:
 	@echo "  make install            # Install to ~/.local/bin"
 	@echo "  make uninstall          # Remove from /usr/local/bin"
 	@echo "  make install-skills     # Install skills to workspace"
-	@echo "  make docker-build       # Build minimal Docker image"
+	@echo "  make docker-build       # Build standard Docker image"
 	@echo "  make docker-test        # Test MCP tools in Docker"
 	@echo ""
 	@echo "Environment Variables:"

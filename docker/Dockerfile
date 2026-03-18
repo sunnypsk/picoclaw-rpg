@@ -16,14 +16,14 @@ COPY . .
 RUN make build
 
 # ============================================================
-# Stage 2: Minimal runtime image
+# Stage 2: Standard runtime image
 # ============================================================
 FROM alpine:3.23
 
 ENV VIRTUAL_ENV=/opt/picoclaw-python
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
-RUN apk add --no-cache ca-certificates tzdata curl python3 py3-pip && \
+RUN apk add --no-cache ca-certificates tzdata curl nodejs npm python3 py3-pip && \
     python3 -m venv "${VIRTUAL_ENV}" && \
     "${VIRTUAL_ENV}/bin/pip" install --no-cache-dir \
       gradio_client==2.2.0 \

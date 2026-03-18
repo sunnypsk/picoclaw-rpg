@@ -70,6 +70,15 @@ func shouldSkipGeneratedPath(relPath string, isDir bool) bool {
 	if isDir && filepath.Base(relPath) == "__pycache__" {
 		return true
 	}
+	if isDir && filepath.Base(relPath) == "node_modules" {
+		return true
+	}
+	if strings.Contains(relPath, "/node_modules/") || strings.HasPrefix(relPath, "node_modules/") {
+		return true
+	}
+	if relPath == "generated-slides" || strings.HasPrefix(relPath, "generated-slides/") {
+		return true
+	}
 	return strings.HasSuffix(relPath, ".pyc")
 }
 

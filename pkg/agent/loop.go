@@ -47,6 +47,7 @@ type AgentLoop struct {
 	fallback             *providers.FallbackChain
 	channelManager       *channels.Manager
 	mediaStore           media.MediaStore
+	retrySleep           func(time.Duration)
 	voiceNoteTranscriber voiceNoteTranscriber
 }
 
@@ -131,6 +132,7 @@ func NewAgentLoop(
 		summarizing:          sync.Map{},
 		globalTools:          make(map[string]tools.Tool),
 		fallback:             fallbackChain,
+		retrySleep:           time.Sleep,
 		voiceNoteTranscriber: &sttSkillVoiceNoteTranscriber{},
 	}
 }
@@ -669,6 +671,27 @@ func (al *AgentLoop) setVoiceNoteTranscriber(transcriber voiceNoteTranscriber) {
 	al.voiceNoteTranscriber = transcriber
 }
 
+func (al *AgentLoop) setRetrySleep(sleep func(time.Duration)) {
+	if sleep == nil {
+		al.retrySleep = time.Sleep
+		return
+	}
+	al.retrySleep = sleep
+}
+
+func classifyTimeoutRetryError(err error) *providers.FailoverError {
+	if err == nil {
+		return nil
+	}
+
+	classified := providers.ClassifyError(err, "", "")
+	if classified != nil && classified.Reason == providers.FailoverTimeout {
+		return classified
+	}
+
+	return nil
+}
+
 func (al *AgentLoop) processSystemMessage(
 	ctx context.Context,
 	msg bus.InboundMessage,
@@ -1005,7 +1028,7 @@ func (al *AgentLoop) runLLMIteration(
 			})
 		}
 
-		// Retry loop for context/token errors
+		// Retry loop for timeout and context/token errors.
 		maxRetries := 2
 		for retry := 0; retry <= maxRetries; retry++ {
 			response, err = callLLM()
@@ -1016,11 +1039,8 @@ func (al *AgentLoop) runLLMIteration(
 			errMsg := strings.ToLower(err.Error())
 
 			// Check if this is a network/HTTP timeout — not a context window error.
-			isTimeoutError := errors.Is(err, context.DeadlineExceeded) ||
-				strings.Contains(errMsg, "deadline exceeded") ||
-				strings.Contains(errMsg, "client.timeout") ||
-				strings.Contains(errMsg, "timed out") ||
-				strings.Contains(errMsg, "timeout exceeded")
+			timeoutErr := classifyTimeoutRetryError(err)
+			isTimeoutError := timeoutErr != nil
 
 			// Detect real context window / token limit errors, excluding network timeouts.
 			isContextError := !isTimeoutError && (strings.Contains(errMsg, "context_length_exceeded") ||
@@ -1036,11 +1056,13 @@ func (al *AgentLoop) runLLMIteration(
 			if isTimeoutError && retry < maxRetries {
 				backoff := time.Duration(retry+1) * 5 * time.Second
 				logger.WarnCF("agent", "Timeout error, retrying after backoff", map[string]any{
-					"error":   err.Error(),
-					"retry":   retry,
-					"backoff": backoff.String(),
+					"error":             err.Error(),
+					"retry":             retry,
+					"backoff":           backoff.String(),
+					"classified_reason": timeoutErr.Reason,
+					"status_code":       timeoutErr.Status,
 				})
-				time.Sleep(backoff)
+				al.retrySleep(backoff)
 				continue
 			}
 

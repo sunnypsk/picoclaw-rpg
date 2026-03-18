@@ -21,17 +21,13 @@ Do not use this skill to edit an existing `.pptx` file. This skill generates new
 ## Runtime
 
 - This skill requires Node.js 18+ and `npm`.
-- Prefer the repo's full Docker runtime because the default image does not include Node.js:
-
-```bash
-docker compose -f docker/docker-compose.full.yml run --rm picoclaw-agent sh
-```
-
-- On a host machine, only use this skill when `node` and `npm` are already available.
+- In Docker images built from this repo's standard runtime, `node` and `npm` should already be available.
+- On older deployments or host machines, verify availability with `node -v` and `npm -v` or quote the exact command error before saying the environment is missing them.
 
 ## Setup
 
-Install the bundled dependency before first use:
+Install the bundled dependency in the current workspace before first use, or whenever
+`workspace/skills/generate-slides/node_modules/pptxgenjs` is missing:
 
 ```bash
 npm ci --prefix workspace/skills/generate-slides
@@ -52,9 +48,16 @@ npm ci --prefix .\workspace\skills\generate-slides
    Prefer one idea per slide.
    Use short bullets instead of dense paragraphs.
    Use local image paths only.
-3. Include optional fields when they help:
+3. Verify the runtime with `node -v` and `npm -v` when the environment is uncertain.
+4. If `workspace/skills/generate-slides/node_modules/pptxgenjs` is missing, run:
+
+```bash
+npm ci --prefix workspace/skills/generate-slides
+```
+
+5. Include optional fields when they help:
    `lang`, `notes`, `sources`, and for image slides `image_fit`.
-4. Run the helper.
+6. Run the helper.
 
 Default output:
 - If `--output` is omitted, the helper writes to
@@ -96,4 +99,5 @@ node workspace/skills/generate-slides/scripts/generate_slides.mjs \
 
 - The built-in theme is intentionally opinionated and remains the default.
 - Save the generated deck locally; this skill does not return the file through chat channels.
-- If `node` is unavailable, explain that this skill must run in the full Docker image or another Node-capable runtime.
+- If `node` is unavailable, explain that this skill must run in a Node-capable runtime.
+- Do not blame an LLM/API/timeout failure on missing `node` unless a runtime check or command failure has confirmed that separately.

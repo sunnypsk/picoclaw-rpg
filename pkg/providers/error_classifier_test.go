@@ -139,6 +139,8 @@ func TestClassifyError_TimeoutPatterns(t *testing.T) {
 		"connection timed out",
 		"deadline exceeded",
 		"context deadline exceeded",
+		"stream error: stream disconnected before completion: stream closed before response.completed",
+		"codex API call: stream ended without completed response",
 	}
 
 	for _, msg := range patterns {

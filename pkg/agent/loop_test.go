@@ -1254,6 +1254,75 @@ func (m *failFirstMockProvider) GetDefaultModel() string {
 	return "mock-fail-model"
 }
 
+func TestAgentLoop_TimeoutRetry(t *testing.T) {
+	tests := []struct {
+		name     string
+		failErr  error
+		response string
+	}{
+		{
+			name: "http 408",
+			failErr: errors.New(
+				"API request failed:\n  Status: 408\n  Body:   {\"error\":{\"message\":\"stream error: stream disconnected before completion: stream closed before response.completed\"}}",
+			),
+			response: "Recovered after timeout",
+		},
+		{
+			name:     "stream ended without completed response",
+			failErr:  errors.New("codex API call: stream ended without completed response"),
+			response: "Recovered after stream reconnect",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir, err := os.MkdirTemp("", "agent-test-*")
+			if err != nil {
+				t.Fatalf("Failed to create temp dir: %v", err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			cfg := &config.Config{
+				Agents: config.AgentsConfig{
+					Defaults: config.AgentDefaults{
+						Workspace:         tmpDir,
+						Model:             "test-model",
+						MaxTokens:         4096,
+						MaxToolIterations: 10,
+					},
+				},
+			}
+
+			provider := &failFirstMockProvider{
+				failures:    1,
+				failError:   tt.failErr,
+				successResp: tt.response,
+			}
+			al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+			al.setRetrySleep(func(time.Duration) {})
+
+			response, err := al.ProcessDirectWithChannel(
+				context.Background(),
+				"Trigger message",
+				"test-session-timeout",
+				"test",
+				"test-chat",
+			)
+			if err != nil {
+				t.Fatalf("Expected success after timeout retry, got error: %v", err)
+			}
+
+			if response != tt.response {
+				t.Fatalf("response = %q, want %q", response, tt.response)
+			}
+
+			if provider.currentCall != 2 {
+				t.Fatalf("Expected 2 calls (1 fail + 1 success), got %d", provider.currentCall)
+			}
+		})
+	}
+}
+
 // TestAgentLoop_ContextExhaustionRetry verify that the agent retries on context errors
 func TestAgentLoop_ContextExhaustionRetry(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")

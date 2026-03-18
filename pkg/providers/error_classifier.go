@@ -48,6 +48,9 @@ var (
 		substr("timed out"),
 		substr("deadline exceeded"),
 		substr("context deadline exceeded"),
+		substr("stream disconnected before completion"),
+		substr("stream closed before response.completed"),
+		substr("stream ended without completed response"),
 	}
 
 	billingPatterns = []errorPattern{

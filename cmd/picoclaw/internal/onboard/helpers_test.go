@@ -97,7 +97,7 @@ func workspaceFixtureSnapshot(t *testing.T, root string) []string {
 			return err
 		}
 		relPath = filepath.ToSlash(relPath)
-		if strings.Contains(relPath, "__pycache__/") || strings.HasSuffix(relPath, ".pyc") {
+		if shouldSkipWorkspaceFixturePath(relPath) {
 			return nil
 		}
 
@@ -110,4 +110,40 @@ func workspaceFixtureSnapshot(t *testing.T, root string) []string {
 
 	slices.Sort(files)
 	return files
+}
+
+func shouldSkipWorkspaceFixturePath(relPath string) bool {
+	return strings.Contains(relPath, "__pycache__/") ||
+		strings.HasSuffix(relPath, ".pyc") ||
+		strings.Contains(relPath, "/node_modules/") ||
+		strings.HasPrefix(relPath, "node_modules/") ||
+		relPath == "generated-slides" ||
+		strings.HasPrefix(relPath, "generated-slides/")
+}
+
+func TestCopyEmbeddedWorkspaceTemplates_IncludesGenerateSlidesWithoutRuntimeArtifacts(t *testing.T) {
+	targetDir := t.TempDir()
+
+	if err := CopyEmbeddedWorkspaceTemplates(targetDir); err != nil {
+		t.Fatalf("CopyEmbeddedWorkspaceTemplates() error = %v", err)
+	}
+
+	requiredFiles := []string{
+		filepath.Join(targetDir, "skills", "generate-slides", "SKILL.md"),
+		filepath.Join(targetDir, "skills", "generate-slides", "package.json"),
+		filepath.Join(targetDir, "skills", "generate-slides", "scripts", "generate_slides.mjs"),
+	}
+
+	for _, path := range requiredFiles {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected %s to exist: %v", path, err)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(targetDir, "skills", "generate-slides", "node_modules")); !os.IsNotExist(err) {
+		t.Fatalf("expected generate-slides node_modules to be excluded, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, "generated-slides")); !os.IsNotExist(err) {
+		t.Fatalf("expected generated-slides artifacts to be excluded, got err=%v", err)
+	}
 }
