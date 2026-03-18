@@ -371,6 +371,9 @@ func TestDefaultConfig_WebTools(t *testing.T) {
 	if !cfg.Tools.Web.HideIntermediateResults {
 		t.Error("HideIntermediateResults should be true by default")
 	}
+	if !cfg.Tools.Exec.EffectiveHideIntermediateResults() {
+		t.Error("Exec hide_intermediate_results should be true by default")
+	}
 }
 
 func TestSaveConfig_FilePermissions(t *testing.T) {
@@ -503,6 +506,22 @@ func TestLoadConfig_WebToolsProxy(t *testing.T) {
 	}
 	if cfg.Tools.Web.Proxy != "http://127.0.0.1:7890" {
 		t.Fatalf("Tools.Web.Proxy = %q, want %q", cfg.Tools.Web.Proxy, "http://127.0.0.1:7890")
+	}
+}
+
+func TestLoadConfig_ExecHideIntermediateResultsCanBeDisabled(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"tools":{"exec":{"hide_intermediate_results":false}}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if cfg.Tools.Exec.EffectiveHideIntermediateResults() {
+		t.Fatal("exec hide_intermediate_results should be false when disabled in config file")
 	}
 }
 

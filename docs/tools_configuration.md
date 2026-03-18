@@ -79,11 +79,13 @@ The exec tool is used to execute shell commands.
 
 | Config                 | Type  | Default | Description                                |
 | ---------------------- | ----- | ------- | ------------------------------------------ |
+| `hide_intermediate_results` | bool | true | Hide raw shell output from direct user messages by default |
 | `enable_deny_patterns` | bool  | true    | Enable default dangerous command blocking  |
 | `custom_deny_patterns` | array | []      | Custom deny patterns (regular expressions) |
 
 ### Functionality
 
+- **`hide_intermediate_results`**: When `true`, raw stdout/stderr stays available to the model but is not sent directly to the user unless the tool call explicitly opts in
 - **`enable_deny_patterns`**: Set to `false` to completely disable the default dangerous command blocking patterns
 - **`custom_deny_patterns`**: Add custom deny regex patterns; commands matching these will be blocked
 
@@ -110,6 +112,7 @@ By default, PicoClaw blocks the following dangerous commands:
 {
   "tools": {
     "exec": {
+      "hide_intermediate_results": true,
       "enable_deny_patterns": true,
       "custom_deny_patterns": ["\\brm\\s+-r\\b", "\\bkillall\\s+python"]
     }
@@ -246,6 +249,7 @@ All configuration options can be overridden via environment variables with the f
 For example:
 
 - `PICOCLAW_TOOLS_WEB_BRAVE_ENABLED=true`
+- `PICOCLAW_TOOLS_EXEC_HIDE_INTERMEDIATE_RESULTS=true`
 - `PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS=false`
 - `PICOCLAW_TOOLS_CRON_EXEC_TIMEOUT_MINUTES=10`
 - `PICOCLAW_TOOLS_MCP_ENABLED=true`

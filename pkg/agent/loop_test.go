@@ -327,6 +327,47 @@ func (m *simpleMockProvider) GetDefaultModel() string {
 	return "mock-model"
 }
 
+type execToolCallProvider struct {
+	showOutput bool
+	calls      int
+}
+
+func (p *execToolCallProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	if p.calls == 0 {
+		p.calls++
+		args := map[string]any{"command": "echo 'hello from exec'"}
+		if p.showOutput {
+			args["show_output"] = true
+		}
+		return &providers.LLMResponse{
+			ToolCalls: []providers.ToolCall{
+				{
+					ID:        "call_exec_1",
+					Name:      "exec",
+					Arguments: args,
+				},
+			},
+			FinishReason: "tool_calls",
+		}, nil
+	}
+
+	return &providers.LLMResponse{
+		Content:      "Final answer",
+		ToolCalls:    []providers.ToolCall{},
+		FinishReason: "stop",
+	}, nil
+}
+
+func (p *execToolCallProvider) GetDefaultModel() string {
+	return "mock-model"
+}
+
 type captureOptsProvider struct {
 	response string
 	lastOpts map[string]any
@@ -886,6 +927,20 @@ func (h testHelper) executeAndGetResponse(tb testing.TB, ctx context.Context, ms
 
 const responseTimeout = 3 * time.Second
 
+func drainOutboundMessages(msgBus *bus.MessageBus, wait time.Duration) []bus.OutboundMessage {
+	var msgs []bus.OutboundMessage
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), wait)
+		msg, ok := msgBus.SubscribeOutbound(ctx)
+		cancel()
+		if !ok {
+			break
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs
+}
+
 // TestToolResult_SilentToolDoesNotSendUserMessage verifies silent tools don't trigger outbound
 func TestToolResult_SilentToolDoesNotSendUserMessage(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
@@ -967,6 +1022,89 @@ func TestToolResult_UserFacingToolDoesSendMessage(t *testing.T) {
 	// User-facing tool should include the output in final response
 	if response != "Command output: hello world" {
 		t.Errorf("Expected 'Command output: hello world', got: %s", response)
+	}
+}
+
+func TestProcessMessageAndSend_HiddenExecOutputOnlyPublishesFinalAnswer(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &execToolCallProvider{}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	response, err := al.processMessageAndSend(context.Background(), bus.InboundMessage{
+		Channel:    "test",
+		SenderID:   "user1",
+		ChatID:     "chat1",
+		Content:    "check the weather",
+		SessionKey: "test-session",
+	})
+	if err != nil {
+		t.Fatalf("processMessageAndSend failed: %v", err)
+	}
+	if response != "Final answer" {
+		t.Fatalf("response = %q, want %q", response, "Final answer")
+	}
+
+	outbound := drainOutboundMessages(msgBus, 50*time.Millisecond)
+	if len(outbound) != 1 {
+		t.Fatalf("expected 1 outbound message, got %d: %+v", len(outbound), outbound)
+	}
+	if outbound[0].Content != "Final answer" {
+		t.Fatalf("expected final answer only, got %+v", outbound[0])
+	}
+}
+
+func TestProcessMessageAndSend_ExplicitExecOutputPublishesToolResultAndFinalAnswer(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &execToolCallProvider{showOutput: true}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	response, err := al.processMessageAndSend(context.Background(), bus.InboundMessage{
+		Channel:    "test",
+		SenderID:   "user1",
+		ChatID:     "chat1",
+		Content:    "show me the exact command output",
+		SessionKey: "test-session",
+	})
+	if err != nil {
+		t.Fatalf("processMessageAndSend failed: %v", err)
+	}
+	if response != "Final answer" {
+		t.Fatalf("response = %q, want %q", response, "Final answer")
+	}
+
+	outbound := drainOutboundMessages(msgBus, 50*time.Millisecond)
+	if len(outbound) != 2 {
+		t.Fatalf("expected 2 outbound messages, got %d: %+v", len(outbound), outbound)
+	}
+	if !strings.Contains(outbound[0].Content, "hello from exec") {
+		t.Fatalf("expected first outbound message to be exec output, got %+v", outbound[0])
+	}
+	if outbound[1].Content != "Final answer" {
+		t.Fatalf("expected second outbound message to be final answer, got %+v", outbound[1])
 	}
 }
 

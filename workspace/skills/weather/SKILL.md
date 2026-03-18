@@ -9,6 +9,12 @@ metadata: {"nanobot":{"emoji":"🌤️","requires":{"bins":["curl"]}}}
 
 Two free services, no API keys needed.
 
+Prefer user-facing text formats when possible.
+
+- For direct weather questions, prefer `wttr.in` compact or forecast text output and answer in natural language.
+- Treat raw API JSON as intermediate data for your reasoning, not as user-facing output.
+- Use Open-Meteo JSON only when you need structured fields that `wttr.in` text does not provide.
+
 ## wttr.in (primary)
 
 Quick one-liner:

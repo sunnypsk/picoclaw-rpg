@@ -30,14 +30,33 @@ func TestShellTool_Success(t *testing.T) {
 		t.Errorf("Expected success, got IsError=true: %s", result.ForLLM)
 	}
 
-	// ForUser should contain command output
-	if !strings.Contains(result.ForUser, "hello world") {
-		t.Errorf("Expected ForUser to contain 'hello world', got: %s", result.ForUser)
+	// ForUser should be hidden by default
+	if result.ForUser != "" {
+		t.Errorf("Expected ForUser to be hidden by default, got: %s", result.ForUser)
 	}
 
 	// ForLLM should contain full output
 	if !strings.Contains(result.ForLLM, "hello world") {
 		t.Errorf("Expected ForLLM to contain 'hello world', got: %s", result.ForLLM)
+	}
+}
+
+func TestShellTool_ShowOutputExplicitly(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	if err != nil {
+		t.Errorf("unable to configure exec tool: %s", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"command":     "echo 'hello world'",
+		"show_output": true,
+	})
+
+	if result.IsError {
+		t.Errorf("Expected success, got IsError=true: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForUser, "hello world") {
+		t.Errorf("Expected ForUser to contain 'hello world', got: %s", result.ForUser)
 	}
 }
 
@@ -60,13 +79,13 @@ func TestShellTool_Failure(t *testing.T) {
 		t.Errorf("Expected error for failed command, got IsError=false")
 	}
 
-	// ForUser should contain error information
-	if result.ForUser == "" {
-		t.Errorf("Expected ForUser to contain error info, got empty string")
+	// ForUser should be hidden by default even on failure
+	if result.ForUser != "" {
+		t.Errorf("Expected ForUser to be hidden by default, got: %s", result.ForUser)
 	}
 
 	// ForLLM should contain exit code or error
-	if !strings.Contains(result.ForLLM, "Exit code") && result.ForUser == "" {
+	if !strings.Contains(result.ForLLM, "Exit code") {
 		t.Errorf("Expected ForLLM to contain exit code or error, got: %s", result.ForLLM)
 	}
 }
@@ -92,9 +111,11 @@ func TestShellTool_Timeout(t *testing.T) {
 		t.Errorf("Expected error for timeout, got IsError=false")
 	}
 
-	// Should mention timeout
-	if !strings.Contains(result.ForLLM, "timed out") && !strings.Contains(result.ForUser, "timed out") {
-		t.Errorf("Expected timeout message, got ForLLM: %s, ForUser: %s", result.ForLLM, result.ForUser)
+	if result.ForUser != "" {
+		t.Errorf("Expected timeout ForUser to be hidden by default, got: %s", result.ForUser)
+	}
+	if !strings.Contains(result.ForLLM, "timed out") {
+		t.Errorf("Expected timeout message in ForLLM, got: %s", result.ForLLM)
 	}
 }
 
@@ -122,8 +143,8 @@ func TestShellTool_WorkingDir(t *testing.T) {
 		t.Errorf("Expected success in custom working dir, got error: %s", result.ForLLM)
 	}
 
-	if !strings.Contains(result.ForUser, "test content") {
-		t.Errorf("Expected output from custom dir, got: %s", result.ForUser)
+	if result.ForUser != "" {
+		t.Errorf("Expected working-dir output to be hidden by default, got: %s", result.ForUser)
 	}
 }
 
@@ -146,8 +167,11 @@ func TestShellTool_DangerousCommand(t *testing.T) {
 		t.Errorf("Expected dangerous command to be blocked (IsError=true)")
 	}
 
-	if !strings.Contains(result.ForLLM, "blocked") && !strings.Contains(result.ForUser, "blocked") {
-		t.Errorf("Expected 'blocked' message, got ForLLM: %s, ForUser: %s", result.ForLLM, result.ForUser)
+	if result.ForUser != "" {
+		t.Errorf("Expected blocked command to keep ForUser empty, got: %s", result.ForUser)
+	}
+	if !strings.Contains(result.ForLLM, "blocked") {
+		t.Errorf("Expected 'blocked' message, got ForLLM: %s", result.ForLLM)
 	}
 }
 
@@ -303,11 +327,13 @@ func TestShellTool_RestrictToWorkspace(t *testing.T) {
 		t.Errorf("Expected path traversal to be blocked with restrictToWorkspace=true")
 	}
 
-	if !strings.Contains(result.ForLLM, "blocked") && !strings.Contains(result.ForUser, "blocked") {
+	if result.ForUser != "" {
+		t.Errorf("Expected path traversal block to keep ForUser empty, got: %s", result.ForUser)
+	}
+	if !strings.Contains(result.ForLLM, "blocked") {
 		t.Errorf(
-			"Expected 'blocked' message for path traversal, got ForLLM: %s, ForUser: %s",
+			"Expected 'blocked' message for path traversal, got ForLLM: %s",
 			result.ForLLM,
-			result.ForUser,
 		)
 	}
 }
@@ -474,6 +500,32 @@ func TestShellTool_CustomAllowPatterns(t *testing.T) {
 	})
 	if !result.IsError {
 		t.Errorf("'git push upstream main' should still be blocked by deny pattern")
+	}
+}
+
+func TestNewExecToolWithConfig_HideIntermediateResultsCanBeDisabled(t *testing.T) {
+	falseValue := false
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			Exec: config.ExecConfig{
+				HideIntermediateResults: &falseValue,
+			},
+		},
+	}
+
+	tool, err := NewExecToolWithConfig("", false, cfg)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"command": "echo 'hello world'",
+	})
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForUser, "hello world") {
+		t.Fatalf("expected ForUser to contain output when hide_intermediate_results=false, got: %q", result.ForUser)
 	}
 }
 

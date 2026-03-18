@@ -22,6 +22,7 @@ type ExecTool struct {
 	denyPatterns        []*regexp.Regexp
 	allowPatterns       []*regexp.Regexp
 	customAllowPatterns []*regexp.Regexp
+	hideIntermediate    bool
 	restrictToWorkspace bool
 }
 
@@ -97,10 +98,12 @@ func NewExecTool(workingDir string, restrict bool) (*ExecTool, error) {
 func NewExecToolWithConfig(workingDir string, restrict bool, config *config.Config) (*ExecTool, error) {
 	denyPatterns := make([]*regexp.Regexp, 0)
 	customAllowPatterns := make([]*regexp.Regexp, 0)
+	hideIntermediate := true
 
 	if config != nil {
 		execConfig := config.Tools.Exec
 		enableDenyPatterns := execConfig.EnableDenyPatterns
+		hideIntermediate = execConfig.EffectiveHideIntermediateResults()
 		if enableDenyPatterns {
 			denyPatterns = append(denyPatterns, defaultDenyPatterns...)
 			if len(execConfig.CustomDenyPatterns) > 0 {
@@ -139,6 +142,7 @@ func NewExecToolWithConfig(workingDir string, restrict bool, config *config.Conf
 		denyPatterns:        denyPatterns,
 		allowPatterns:       nil,
 		customAllowPatterns: customAllowPatterns,
+		hideIntermediate:    hideIntermediate,
 		restrictToWorkspace: restrict,
 	}, nil
 }
@@ -148,7 +152,7 @@ func (t *ExecTool) Name() string {
 }
 
 func (t *ExecTool) Description() string {
-	return "Execute a shell command and return its output. Use with caution."
+	return "Execute a shell command. Raw command output is hidden from the user by default; set show_output=true only when the user explicitly asked to see exact command output."
 }
 
 func (t *ExecTool) Parameters() map[string]any {
@@ -163,6 +167,10 @@ func (t *ExecTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Optional working directory for the command",
 			},
+			"show_output": map[string]any{
+				"type":        "boolean",
+				"description": "Set true only when the user explicitly asked to see raw command output.",
+			},
 		},
 		"required": []string{"command"},
 	}
@@ -173,6 +181,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	if !ok {
 		return ErrorResult("command is required")
 	}
+	showOutput, _ := args["show_output"].(bool)
 
 	cwd := t.workingDir
 	if wd, ok := args["working_dir"].(string); ok && wd != "" {
@@ -258,7 +267,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 			msg := fmt.Sprintf("Command timed out after %v", t.timeout)
 			return &ToolResult{
 				ForLLM:  msg,
-				ForUser: msg,
+				ForUser: t.userOutput(msg, showOutput),
 				IsError: true,
 			}
 		}
@@ -277,16 +286,23 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	if err != nil {
 		return &ToolResult{
 			ForLLM:  output,
-			ForUser: output,
+			ForUser: t.userOutput(output, showOutput),
 			IsError: true,
 		}
 	}
 
 	return &ToolResult{
 		ForLLM:  output,
-		ForUser: output,
+		ForUser: t.userOutput(output, showOutput),
 		IsError: false,
 	}
+}
+
+func (t *ExecTool) userOutput(output string, showOutput bool) string {
+	if showOutput || !t.hideIntermediate {
+		return output
+	}
+	return ""
 }
 
 func (t *ExecTool) guardCommand(command, cwd string) string {
@@ -443,6 +459,10 @@ func (t *ExecTool) SetTimeout(timeout time.Duration) {
 
 func (t *ExecTool) SetRestrictToWorkspace(restrict bool) {
 	t.restrictToWorkspace = restrict
+}
+
+func (t *ExecTool) SetHideIntermediateResults(hide bool) {
+	t.hideIntermediate = hide
 }
 
 func (t *ExecTool) SetAllowPatterns(patterns []string) error {

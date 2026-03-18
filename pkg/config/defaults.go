@@ -10,6 +10,10 @@ import (
 	"path/filepath"
 )
 
+func boolPtr(v bool) *bool {
+	return &v
+}
+
 // DefaultConfig returns the default configuration for PicoClaw.
 func DefaultConfig() *Config {
 	// Determine the base path for the workspace.
@@ -357,8 +361,9 @@ func DefaultConfig() *Config {
 				ExecTimeoutMinutes: 5,
 			},
 			Exec: ExecConfig{
-				EnableDenyPatterns: true,
-				TimeoutSeconds:     60,
+				EnableDenyPatterns:      true,
+				HideIntermediateResults: boolPtr(true),
+				TimeoutSeconds:          60,
 			},
 			Skills: SkillsToolsConfig{
 				Registries: SkillsRegistriesConfig{

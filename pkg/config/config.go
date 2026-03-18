@@ -653,10 +653,20 @@ type CronToolsConfig struct {
 }
 
 type ExecConfig struct {
-	EnableDenyPatterns  bool     `json:"enable_deny_patterns"  env:"PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS"`
-	CustomDenyPatterns  []string `json:"custom_deny_patterns"  env:"PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"`
-	CustomAllowPatterns []string `json:"custom_allow_patterns" env:"PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS"`
-	TimeoutSeconds      int      `json:"timeout_seconds"       env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"` // 0 means use default (60s)
+	EnableDenyPatterns      bool     `json:"enable_deny_patterns"     env:"PICOCLAW_TOOLS_EXEC_ENABLE_DENY_PATTERNS"`
+	CustomDenyPatterns      []string `json:"custom_deny_patterns"     env:"PICOCLAW_TOOLS_EXEC_CUSTOM_DENY_PATTERNS"`
+	CustomAllowPatterns     []string `json:"custom_allow_patterns"    env:"PICOCLAW_TOOLS_EXEC_CUSTOM_ALLOW_PATTERNS"`
+	HideIntermediateResults *bool    `json:"hide_intermediate_results,omitempty" env:"PICOCLAW_TOOLS_EXEC_HIDE_INTERMEDIATE_RESULTS"`
+	TimeoutSeconds          int      `json:"timeout_seconds"          env:"PICOCLAW_TOOLS_EXEC_TIMEOUT_SECONDS"` // 0 means use default (60s)
+}
+
+// EffectiveHideIntermediateResults returns whether exec output should be hidden
+// from direct user messages by default.
+func (c ExecConfig) EffectiveHideIntermediateResults() bool {
+	if c.HideIntermediateResults == nil {
+		return true
+	}
+	return *c.HideIntermediateResults
 }
 
 type MediaCleanupConfig struct {

@@ -331,6 +331,7 @@
       }
     },
     "exec": {
+      "hide_intermediate_results": true,
       "enable_deny_patterns": false,
       "custom_deny_patterns": []
     },
