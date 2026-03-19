@@ -43,7 +43,7 @@ type OutboundMessage struct {
 
 // MediaPart describes a single media attachment to send.
 type MediaPart struct {
-	Type        string `json:"type"`                   // "image" | "audio" | "video" | "file"
+	Type        string `json:"type"`                   // "image" | "audio" | "video" | "file" | "sticker"
 	Ref         string `json:"ref"`                    // media store ref, e.g. "media://abc123"
 	Caption     string `json:"caption,omitempty"`      // optional caption text
 	Filename    string `json:"filename,omitempty"`     // original filename hint

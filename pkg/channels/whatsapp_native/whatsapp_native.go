@@ -776,7 +776,7 @@ func resolveWhatsAppMediaPart(part bus.MediaPart, localPath string, meta media.M
 
 	mediaType := strings.ToLower(strings.TrimSpace(part.Type))
 	switch mediaType {
-	case "image", "audio", "video", "file":
+	case "image", "audio", "video", "file", "sticker":
 	default:
 		mediaType = utils.InferMediaType(filename, part.ContentType)
 		if mediaType == "file" && strings.TrimSpace(meta.ContentType) != "" {
@@ -810,6 +810,8 @@ func normalizeWhatsAppContentType(mediaType, contentType, filename string) strin
 	switch mediaType {
 	case "image":
 		return "image/png"
+	case "sticker":
+		return "image/webp"
 	case "audio":
 		return "audio/ogg"
 	case "video":
@@ -859,6 +861,18 @@ func buildWhatsAppMediaMessage(part resolvedWhatsAppMediaPart, uploadResp whatsm
 			FileLength:    &uploadResp.FileLength,
 		}
 		return whatsmeow.MediaDocument, &waE2E.Message{DocumentMessage: documentMsg}
+	case "sticker":
+		stickerMsg := &waE2E.StickerMessage{
+			Mimetype:      proto.String(part.contentType),
+			URL:           &uploadResp.URL,
+			DirectPath:    &uploadResp.DirectPath,
+			MediaKey:      uploadResp.MediaKey,
+			FileEncSHA256: uploadResp.FileEncSHA256,
+			FileSHA256:    uploadResp.FileSHA256,
+			FileLength:    &uploadResp.FileLength,
+			IsAnimated:    proto.Bool(false),
+		}
+		return whatsmeow.MediaImage, &waE2E.Message{StickerMessage: stickerMsg}
 	default:
 		imageMsg := &waE2E.ImageMessage{
 			Caption:       proto.String(part.caption),
