@@ -74,6 +74,13 @@ type incomingMediaAttachment struct {
 	logLabel string
 }
 
+type resolvedWhatsAppMediaPart struct {
+	mediaType   string
+	contentType string
+	filename    string
+	caption     string
+}
+
 // NewWhatsAppNativeChannel creates a WhatsApp channel that uses whatsmeow for connection.
 // storePath is the directory for the SQLite session store (e.g. workspace/whatsapp).
 func NewWhatsAppNativeChannel(
@@ -665,7 +672,7 @@ func (c *WhatsAppNativeChannel) Send(ctx context.Context, msg bus.OutboundMessag
 	client := c.client
 	c.mu.Unlock()
 
-	if client == nil || !client.IsConnected() {
+	if client == nil || !c.isConnected(client) {
 		return fmt.Errorf("whatsapp connection not established: %w", channels.ErrTemporary)
 	}
 
@@ -710,7 +717,7 @@ func (c *WhatsAppNativeChannel) SendMedia(ctx context.Context, msg bus.OutboundM
 	client := c.client
 	c.mu.Unlock()
 
-	if client == nil || !client.IsConnected() {
+	if client == nil || !c.isConnected(client) {
 		return fmt.Errorf("whatsapp connection not established: %w", channels.ErrTemporary)
 	}
 	if client.Store.ID == nil {
@@ -723,7 +730,7 @@ func (c *WhatsAppNativeChannel) SendMedia(ctx context.Context, msg bus.OutboundM
 	}
 
 	for _, part := range msg.Parts {
-		localPath, _, err := store.ResolveWithMeta(part.Ref)
+		localPath, meta, err := store.ResolveWithMeta(part.Ref)
 		if err != nil {
 			logger.ErrorCF("whatsapp", "Failed to resolve media ref", map[string]any{
 				"ref":   part.Ref,
@@ -732,6 +739,7 @@ func (c *WhatsAppNativeChannel) SendMedia(ctx context.Context, msg bus.OutboundM
 			continue
 		}
 
+		resolvedPart := resolveWhatsAppMediaPart(part, localPath, meta)
 		data, err := os.ReadFile(localPath)
 		if err != nil {
 			logger.ErrorCF("whatsapp", "Failed to read media file", map[string]any{
@@ -741,32 +749,13 @@ func (c *WhatsAppNativeChannel) SendMedia(ctx context.Context, msg bus.OutboundM
 			continue
 		}
 
-		contentType := part.ContentType
-		if contentType == "" {
-			contentType = mime.TypeByExtension(strings.ToLower(filepath.Ext(localPath)))
-		}
-		if contentType == "" {
-			contentType = "image/png"
-		}
-
-		uploadResp, err := client.Upload(ctx, data, whatsmeow.MediaImage)
+		uploadType, _ := buildWhatsAppMediaMessage(resolvedPart, whatsmeow.UploadResponse{})
+		uploadResp, err := client.Upload(ctx, data, uploadType)
 		if err != nil {
 			return fmt.Errorf("whatsapp upload media: %w", channels.ErrTemporary)
 		}
 
-		imageMsg := &waE2E.ImageMessage{
-			Caption:       proto.String(part.Caption),
-			Mimetype:      proto.String(contentType),
-			URL:           &uploadResp.URL,
-			DirectPath:    &uploadResp.DirectPath,
-			MediaKey:      uploadResp.MediaKey,
-			FileEncSHA256: uploadResp.FileEncSHA256,
-			FileSHA256:    uploadResp.FileSHA256,
-			FileLength:    &uploadResp.FileLength,
-		}
-		waMsg := &waE2E.Message{
-			ImageMessage: imageMsg,
-		}
+		_, waMsg := buildWhatsAppMediaMessage(resolvedPart, uploadResp)
 
 		if _, err = client.SendMessage(ctx, to, waMsg); err != nil {
 			return fmt.Errorf("whatsapp send media: %w", channels.ErrTemporary)
@@ -774,6 +763,115 @@ func (c *WhatsAppNativeChannel) SendMedia(ctx context.Context, msg bus.OutboundM
 	}
 
 	return nil
+}
+
+func resolveWhatsAppMediaPart(part bus.MediaPart, localPath string, meta media.MediaMeta) resolvedWhatsAppMediaPart {
+	filename := strings.TrimSpace(part.Filename)
+	if filename == "" {
+		filename = strings.TrimSpace(meta.Filename)
+	}
+	if filename == "" {
+		filename = filepath.Base(localPath)
+	}
+
+	mediaType := strings.ToLower(strings.TrimSpace(part.Type))
+	switch mediaType {
+	case "image", "audio", "video", "file":
+	default:
+		mediaType = utils.InferMediaType(filename, part.ContentType)
+		if mediaType == "file" && strings.TrimSpace(meta.ContentType) != "" {
+			mediaType = utils.InferMediaType(filename, meta.ContentType)
+		}
+	}
+
+	contentType := strings.TrimSpace(part.ContentType)
+	if contentType == "" {
+		contentType = strings.TrimSpace(meta.ContentType)
+	}
+	contentType = normalizeWhatsAppContentType(mediaType, contentType, filename)
+
+	return resolvedWhatsAppMediaPart{
+		mediaType:   mediaType,
+		contentType: contentType,
+		filename:    filename,
+		caption:     strings.TrimSpace(part.Caption),
+	}
+}
+
+func normalizeWhatsAppContentType(mediaType, contentType, filename string) string {
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		contentType = mime.TypeByExtension(strings.ToLower(filepath.Ext(filename)))
+	}
+	if contentType != "" && !(contentType == "application/octet-stream" && mediaType != "file") {
+		return contentType
+	}
+
+	switch mediaType {
+	case "image":
+		return "image/png"
+	case "audio":
+		return "audio/ogg"
+	case "video":
+		return "video/mp4"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+func buildWhatsAppMediaMessage(part resolvedWhatsAppMediaPart, uploadResp whatsmeow.UploadResponse) (whatsmeow.MediaType, *waE2E.Message) {
+	switch part.mediaType {
+	case "audio":
+		audioMsg := &waE2E.AudioMessage{
+			Mimetype:      proto.String(part.contentType),
+			PTT:           proto.Bool(false),
+			URL:           &uploadResp.URL,
+			DirectPath:    &uploadResp.DirectPath,
+			MediaKey:      uploadResp.MediaKey,
+			FileEncSHA256: uploadResp.FileEncSHA256,
+			FileSHA256:    uploadResp.FileSHA256,
+			FileLength:    &uploadResp.FileLength,
+		}
+		return whatsmeow.MediaAudio, &waE2E.Message{AudioMessage: audioMsg}
+	case "video":
+		videoMsg := &waE2E.VideoMessage{
+			Caption:       proto.String(part.caption),
+			Mimetype:      proto.String(part.contentType),
+			URL:           &uploadResp.URL,
+			DirectPath:    &uploadResp.DirectPath,
+			MediaKey:      uploadResp.MediaKey,
+			FileEncSHA256: uploadResp.FileEncSHA256,
+			FileSHA256:    uploadResp.FileSHA256,
+			FileLength:    &uploadResp.FileLength,
+		}
+		return whatsmeow.MediaVideo, &waE2E.Message{VideoMessage: videoMsg}
+	case "file":
+		documentMsg := &waE2E.DocumentMessage{
+			Caption:       proto.String(part.caption),
+			FileName:      proto.String(part.filename),
+			Title:         proto.String(part.filename),
+			Mimetype:      proto.String(part.contentType),
+			URL:           &uploadResp.URL,
+			DirectPath:    &uploadResp.DirectPath,
+			MediaKey:      uploadResp.MediaKey,
+			FileEncSHA256: uploadResp.FileEncSHA256,
+			FileSHA256:    uploadResp.FileSHA256,
+			FileLength:    &uploadResp.FileLength,
+		}
+		return whatsmeow.MediaDocument, &waE2E.Message{DocumentMessage: documentMsg}
+	default:
+		imageMsg := &waE2E.ImageMessage{
+			Caption:       proto.String(part.caption),
+			Mimetype:      proto.String(part.contentType),
+			URL:           &uploadResp.URL,
+			DirectPath:    &uploadResp.DirectPath,
+			MediaKey:      uploadResp.MediaKey,
+			FileEncSHA256: uploadResp.FileEncSHA256,
+			FileSHA256:    uploadResp.FileSHA256,
+			FileLength:    &uploadResp.FileLength,
+		}
+		return whatsmeow.MediaImage, &waE2E.Message{ImageMessage: imageMsg}
+	}
 }
 
 // SendReaction implements channels.ReactionSender for native WhatsApp.
@@ -871,7 +969,7 @@ func (c *WhatsAppNativeChannel) sendChatPresence(ctx context.Context, chatID str
 	client := c.client
 	c.mu.Unlock()
 
-	if client == nil || !client.IsConnected() {
+	if client == nil || !c.isConnected(client) {
 		return fmt.Errorf("whatsapp connection not established: %w", channels.ErrTemporary)
 	}
 

@@ -38,3 +38,25 @@ func TestPreferredExtensionForBytes(t *testing.T) {
 		t.Fatalf("PreferredExtensionForBytes(unknown) = %q, want empty", got)
 	}
 }
+
+func TestInferMediaType(t *testing.T) {
+	tests := []struct {
+		name        string
+		filename    string
+		contentType string
+		want        string
+	}{
+		{name: "image by content type", filename: "x.bin", contentType: "image/png", want: "image"},
+		{name: "audio by content type", filename: "x.bin", contentType: "audio/ogg; codecs=opus", want: "audio"},
+		{name: "video by extension", filename: "clip.mp4", want: "video"},
+		{name: "file fallback", filename: "report.pdf", want: "file"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := InferMediaType(tc.filename, tc.contentType); got != tc.want {
+				t.Fatalf("InferMediaType(%q, %q) = %q, want %q", tc.filename, tc.contentType, got, tc.want)
+			}
+		})
+	}
+}

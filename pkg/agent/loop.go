@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -215,6 +214,18 @@ func registerSharedToolsForAgent(
 	})
 	agent.Tools.Register(messageTool)
 	if cfg.Channels.WhatsApp.Enabled && cfg.Channels.WhatsApp.UseNative {
+		sendFileTool := tools.NewSendFileTool(agent.Workspace, cfg.Agents.Defaults.RestrictToWorkspace)
+		sendFileTool.SetMediaStore(store)
+		sendFileTool.SetSupportChecker(func(channel string) bool {
+			return channel == "whatsapp_native"
+		})
+		sendFileTool.SetSendCallback(func(ctx context.Context, msg bus.OutboundMediaMessage) error {
+			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer pubCancel()
+			return msgBus.PublishOutboundMedia(pubCtx, msg)
+		})
+		agent.Tools.Register(sendFileTool)
+
 		reactTool := tools.NewReactTool()
 		reactTool.SetSupportChecker(func(channel string) bool {
 			return channel == "whatsapp_native"
@@ -425,36 +436,6 @@ func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 			}
 		}
 	}
-}
-
-// inferMediaType determines the media type ("image", "audio", "video", "file")
-// from a filename and MIME content type.
-func inferMediaType(filename, contentType string) string {
-	ct := strings.ToLower(contentType)
-	fn := strings.ToLower(filename)
-
-	if strings.HasPrefix(ct, "image/") {
-		return "image"
-	}
-	if strings.HasPrefix(ct, "audio/") || ct == "application/ogg" {
-		return "audio"
-	}
-	if strings.HasPrefix(ct, "video/") {
-		return "video"
-	}
-
-	// Fallback: infer from extension
-	ext := filepath.Ext(fn)
-	switch ext {
-	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg":
-		return "image"
-	case ".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".wma", ".opus":
-		return "audio"
-	case ".mp4", ".avi", ".mov", ".webm", ".mkv":
-		return "video"
-	}
-
-	return "file"
 }
 
 // RecordLastChannel records the last active channel for this workspace.
@@ -1273,7 +1254,7 @@ func (al *AgentLoop) runLLMIteration(
 						if _, meta, err := al.mediaStore.ResolveWithMeta(ref); err == nil {
 							part.Filename = meta.Filename
 							part.ContentType = meta.ContentType
-							part.Type = inferMediaType(meta.Filename, meta.ContentType)
+							part.Type = utils.InferMediaType(meta.Filename, meta.ContentType)
 						}
 					}
 					parts = append(parts, part)

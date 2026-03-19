@@ -55,7 +55,7 @@ func normalizeInboundPromptMedia(
 			continue
 		}
 
-		mediaType := inferMediaType(meta.Filename, meta.ContentType)
+		mediaType := utils.InferMediaType(meta.Filename, meta.ContentType)
 		switch mediaType {
 		case "image":
 			keptMedia = append(keptMedia, ref)

@@ -13,6 +13,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
 const voiceNoteTranscriptionTimeout = 2 * time.Minute
@@ -126,13 +127,13 @@ func (al *AgentLoop) findFirstAudioMedia(mediaRefs []string) (int, string, bool)
 				})
 				continue
 			}
-			if inferMediaType(meta.Filename, meta.ContentType) == "audio" {
+			if utils.InferMediaType(meta.Filename, meta.ContentType) == "audio" {
 				return i, localPath, true
 			}
 			continue
 		}
 
-		if inferMediaType(ref, "") == "audio" {
+		if utils.InferMediaType(ref, "") == "audio" {
 			return i, ref, true
 		}
 	}

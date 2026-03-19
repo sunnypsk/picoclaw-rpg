@@ -36,6 +36,34 @@ func IsAudioFile(filename, contentType string) bool {
 	return false
 }
 
+// InferMediaType determines the logical media kind from a filename and MIME content type.
+// It returns one of "image", "audio", "video", or "file".
+func InferMediaType(filename, contentType string) string {
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	fn := strings.ToLower(strings.TrimSpace(filename))
+
+	if strings.HasPrefix(ct, "image/") {
+		return "image"
+	}
+	if strings.HasPrefix(ct, "audio/") || ct == "application/ogg" {
+		return "audio"
+	}
+	if strings.HasPrefix(ct, "video/") {
+		return "video"
+	}
+
+	switch filepath.Ext(fn) {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg":
+		return "image"
+	case ".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".wma", ".opus":
+		return "audio"
+	case ".mp4", ".avi", ".mov", ".webm", ".mkv":
+		return "video"
+	default:
+		return "file"
+	}
+}
+
 func PreferredExtensionForContentType(contentType string) string {
 	ct := strings.ToLower(strings.TrimSpace(contentType))
 	if ct == "" {

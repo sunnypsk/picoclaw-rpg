@@ -199,6 +199,9 @@ func TestToolRegistry_RegistersReactToolForWhatsAppNative(t *testing.T) {
 	if _, ok := agent.Tools.Get("react"); !ok {
 		t.Fatal("expected react tool to be registered for WhatsApp native")
 	}
+	if _, ok := agent.Tools.Get("send_file"); !ok {
+		t.Fatal("expected send_file tool to be registered for WhatsApp native")
+	}
 }
 
 // TestToolContext_Updates verifies tool context helpers work correctly.
