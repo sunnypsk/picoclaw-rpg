@@ -39,7 +39,7 @@ func (t *SendFileTool) Name() string {
 }
 
 func (t *SendFileTool) Description() string {
-	return "Send one local workspace file to the current chat as native media."
+	return "Send one local workspace file to the current chat as native media, or as a WhatsApp sticker."
 }
 
 func (t *SendFileTool) Parameters() map[string]any {
@@ -53,6 +53,10 @@ func (t *SendFileTool) Parameters() map[string]any {
 			"caption": map[string]any{
 				"type":        "string",
 				"description": "Optional caption to include when the channel supports it.",
+			},
+			"as_sticker": map[string]any{
+				"type":        "boolean",
+				"description": "When true, send the file as a WhatsApp sticker in native mode. Requires WebP and forbids captions.",
 			},
 		},
 		"required": []string{"path"},
@@ -77,11 +81,16 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("path is required")
 	}
 	caption, _ := args["caption"].(string)
+	caption = strings.TrimSpace(caption)
+	asSticker, _ := args["as_sticker"].(bool)
 
 	channel := ToolChannel(ctx)
 	chatID := ToolChatID(ctx)
 	if channel == "" || chatID == "" {
 		return ErrorResult("No target channel/chat specified")
+	}
+	if asSticker && channel != "whatsapp_native" {
+		return ErrorResult(`sending stickers is only supported on channel "whatsapp_native"`)
 	}
 	if t.supportChecker != nil && !t.supportChecker(channel) {
 		return ErrorResult(fmt.Sprintf("file sending is not supported on channel %q", channel))
@@ -112,6 +121,15 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult(err.Error())
 	}
 	partType := utils.InferMediaType(filename, contentType)
+	if asSticker {
+		if caption != "" {
+			return ErrorResult("stickers do not support captions")
+		}
+		if !isWhatsAppStickerContentType(contentType) {
+			return ErrorResult("stickers must be WebP files with content type image/webp")
+		}
+		partType = "sticker"
+	}
 	scope := fmt.Sprintf("tool:send_file:%s:%s:%s", channel, chatID, uuid.NewString())
 	ref, err := t.mediaStore.Store(localPath, media.MediaMeta{
 		Filename:    filename,
@@ -129,7 +147,7 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		Parts: []bus.MediaPart{{
 			Type:        partType,
 			Ref:         ref,
-			Caption:     strings.TrimSpace(caption),
+			Caption:     caption,
 			Filename:    filename,
 			ContentType: contentType,
 		}},
@@ -142,7 +160,11 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		}).WithError(err)
 	}
 
-	return SilentResult(fmt.Sprintf("File sent to %s:%s: %s", channel, chatID, filename))
+	resultKind := "File"
+	if asSticker {
+		resultKind = "Sticker"
+	}
+	return SilentResult(fmt.Sprintf("%s sent to %s:%s: %s", resultKind, channel, chatID, filename))
 }
 
 func detectLocalContentType(path string) (string, error) {
@@ -172,4 +194,17 @@ func detectLocalContentType(path string) (string, error) {
 		return contentType, nil
 	}
 	return "application/octet-stream", nil
+}
+
+func isWhatsAppStickerContentType(contentType string) bool {
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		return false
+	}
+
+	if parsed, _, err := mime.ParseMediaType(contentType); err == nil {
+		contentType = parsed
+	}
+
+	return strings.EqualFold(contentType, "image/webp")
 }

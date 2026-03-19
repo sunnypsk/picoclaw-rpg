@@ -206,6 +206,49 @@ func TestBuildWhatsAppMediaMessage_Document(t *testing.T) {
 	}
 }
 
+func TestResolveWhatsAppMediaPart_StickerUsesWebP(t *testing.T) {
+	part := bus.MediaPart{Type: "sticker"}
+	meta := media.MediaMeta{
+		Filename: "sticker.webp",
+	}
+
+	resolved := resolveWhatsAppMediaPart(part, filepath.Join(t.TempDir(), "ignored.bin"), meta)
+	if resolved.mediaType != "sticker" {
+		t.Fatalf("mediaType = %q, want sticker", resolved.mediaType)
+	}
+	if resolved.contentType != "image/webp" {
+		t.Fatalf("contentType = %q, want image/webp", resolved.contentType)
+	}
+}
+
+func TestBuildWhatsAppMediaMessage_Sticker(t *testing.T) {
+	uploadResp := whatsmeow.UploadResponse{
+		URL:        "https://example.com/sticker",
+		DirectPath: "/sticker",
+		MediaKey:   []byte("media-key"),
+		FileLength: 111,
+	}
+	part := resolvedWhatsAppMediaPart{
+		mediaType:   "sticker",
+		contentType: "image/webp",
+	}
+
+	uploadType, waMsg := buildWhatsAppMediaMessage(part, uploadResp)
+	if uploadType != whatsmeow.MediaImage {
+		t.Fatalf("uploadType = %v, want MediaImage", uploadType)
+	}
+	sticker := waMsg.GetStickerMessage()
+	if sticker == nil {
+		t.Fatal("expected sticker message")
+	}
+	if sticker.GetMimetype() != "image/webp" {
+		t.Fatalf("mimetype = %q, want image/webp", sticker.GetMimetype())
+	}
+	if sticker.GetIsAnimated() {
+		t.Fatal("expected static sticker to have IsAnimated=false")
+	}
+}
+
 func TestBuildWhatsAppReactionMessage_DirectChatOmitsParticipant(t *testing.T) {
 	client := &whatsmeow.Client{Store: &store.Device{}}
 	msg := bus.OutboundReactionMessage{

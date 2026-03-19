@@ -77,6 +77,51 @@ func TestSendFileTool_Execute_Success(t *testing.T) {
 	}
 }
 
+func TestSendFileTool_Execute_StickerSuccess(t *testing.T) {
+	workspace := t.TempDir()
+	filePath := filepath.Join(workspace, "sticker.webp")
+	if err := os.WriteFile(filePath, []byte("RIFFfakeWEBP"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewSendFileTool(workspace, true)
+	store := media.NewFileMediaStore()
+	tool.SetMediaStore(store)
+	tool.SetSupportChecker(func(channel string) bool { return channel == "whatsapp_native" })
+
+	var sent bus.OutboundMediaMessage
+	tool.SetSendCallback(func(ctx context.Context, msg bus.OutboundMediaMessage) error {
+		sent = msg
+		return nil
+	})
+
+	ctx := WithToolContext(context.Background(), "whatsapp_native", "123456789@s.whatsapp.net")
+	result := tool.Execute(ctx, map[string]any{
+		"path":       "sticker.webp",
+		"as_sticker": true,
+	})
+
+	if result.IsError {
+		t.Fatalf("Execute() returned error: %s", result.ForLLM)
+	}
+	if !result.Silent {
+		t.Fatal("expected silent result")
+	}
+	if len(sent.Parts) != 1 {
+		t.Fatalf("expected one outbound part, got %d", len(sent.Parts))
+	}
+	part := sent.Parts[0]
+	if part.Type != "sticker" {
+		t.Fatalf("part.Type = %q, want sticker", part.Type)
+	}
+	if part.Caption != "" {
+		t.Fatalf("part.Caption = %q, want empty", part.Caption)
+	}
+	if part.ContentType != "image/webp" {
+		t.Fatalf("part.ContentType = %q, want image/webp", part.ContentType)
+	}
+}
+
 func TestSendFileTool_Execute_RejectsPathOutsideWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "secret.pdf")
@@ -133,6 +178,55 @@ func TestSendFileTool_Execute_RejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestSendFileTool_Execute_RejectsStickerCaption(t *testing.T) {
+	workspace := t.TempDir()
+	filePath := filepath.Join(workspace, "sticker.webp")
+	if err := os.WriteFile(filePath, []byte("RIFFfakeWEBP"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewSendFileTool(workspace, true)
+	tool.SetMediaStore(media.NewFileMediaStore())
+	tool.SetSupportChecker(func(channel string) bool { return channel == "whatsapp_native" })
+	tool.SetSendCallback(func(ctx context.Context, msg bus.OutboundMediaMessage) error { return nil })
+
+	result := tool.Execute(WithToolContext(context.Background(), "whatsapp_native", "chat-1"), map[string]any{
+		"path":       "sticker.webp",
+		"as_sticker": true,
+		"caption":    "hello",
+	})
+	if !result.IsError {
+		t.Fatal("expected sticker caption to be rejected")
+	}
+	if result.ForLLM != "stickers do not support captions" {
+		t.Fatalf("unexpected error: %q", result.ForLLM)
+	}
+}
+
+func TestSendFileTool_Execute_RejectsStickerNonWebP(t *testing.T) {
+	workspace := t.TempDir()
+	filePath := filepath.Join(workspace, "sticker.png")
+	if err := os.WriteFile(filePath, []byte("not-a-real-png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewSendFileTool(workspace, true)
+	tool.SetMediaStore(media.NewFileMediaStore())
+	tool.SetSupportChecker(func(channel string) bool { return channel == "whatsapp_native" })
+	tool.SetSendCallback(func(ctx context.Context, msg bus.OutboundMediaMessage) error { return nil })
+
+	result := tool.Execute(WithToolContext(context.Background(), "whatsapp_native", "chat-1"), map[string]any{
+		"path":       "sticker.png",
+		"as_sticker": true,
+	})
+	if !result.IsError {
+		t.Fatal("expected non-WebP sticker to be rejected")
+	}
+	if result.ForLLM != "stickers must be WebP files with content type image/webp" {
+		t.Fatalf("unexpected error: %q", result.ForLLM)
+	}
+}
+
 func TestSendFileTool_Execute_UnsupportedChannel(t *testing.T) {
 	workspace := t.TempDir()
 	filePath := filepath.Join(workspace, "report.pdf")
@@ -151,6 +245,30 @@ func TestSendFileTool_Execute_UnsupportedChannel(t *testing.T) {
 		t.Fatal("expected unsupported channel error")
 	}
 	if result.ForLLM != `file sending is not supported on channel "telegram"` {
+		t.Fatalf("unexpected error: %q", result.ForLLM)
+	}
+}
+
+func TestSendFileTool_Execute_StickerUnsupportedChannel(t *testing.T) {
+	workspace := t.TempDir()
+	filePath := filepath.Join(workspace, "sticker.webp")
+	if err := os.WriteFile(filePath, []byte("RIFFfakeWEBP"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewSendFileTool(workspace, true)
+	tool.SetMediaStore(media.NewFileMediaStore())
+	tool.SetSupportChecker(func(channel string) bool { return true })
+	tool.SetSendCallback(func(ctx context.Context, msg bus.OutboundMediaMessage) error { return nil })
+
+	result := tool.Execute(WithToolContext(context.Background(), "telegram", "chat-1"), map[string]any{
+		"path":       "sticker.webp",
+		"as_sticker": true,
+	})
+	if !result.IsError {
+		t.Fatal("expected sticker send to reject non-native channel")
+	}
+	if result.ForLLM != `sending stickers is only supported on channel "whatsapp_native"` {
 		t.Fatalf("unexpected error: %q", result.ForLLM)
 	}
 }
