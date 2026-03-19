@@ -514,6 +514,34 @@ func (al *AgentLoop) ProcessHeartbeat(
 	return response, nil
 }
 
+func (al *AgentLoop) resolveAgentForRoute(route routing.ResolvedRoute) *AgentInstance {
+	if al == nil || al.registry == nil {
+		return nil
+	}
+
+	var agent *AgentInstance
+	if route.MatchedBy == "auto-provision" {
+		created := false
+		agent, created = al.registry.GetOrCreateAgent(route.AgentID)
+		if created {
+			registerSharedToolsForAgent(al.cfg, al.bus, al.registry, al.registry.provider, al.mediaStore, route.AgentID)
+		}
+		al.registerGlobalToolsForAgent(agent)
+	} else {
+		var ok bool
+		agent, ok = al.registry.GetAgent(route.AgentID)
+		if !ok {
+			agent = al.registry.GetDefaultAgent()
+		}
+	}
+
+	if agent == nil {
+		agent = al.registry.GetDefaultAgent()
+	}
+
+	return agent
+}
+
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, error) {
 	response, _, err := al.processMessageCore(ctx, msg, false)
 	return response, err
@@ -563,25 +591,7 @@ func (al *AgentLoop) processMessageCore(
 		TeamID:     msg.Metadata["team_id"],
 	})
 
-	var agent *AgentInstance
-	if route.MatchedBy == "auto-provision" {
-		created := false
-		agent, created = al.registry.GetOrCreateAgent(route.AgentID)
-		if created {
-			registerSharedToolsForAgent(al.cfg, al.bus, al.registry, al.registry.provider, al.mediaStore, route.AgentID)
-		}
-		al.registerGlobalToolsForAgent(agent)
-	} else {
-		var ok bool
-		agent, ok = al.registry.GetAgent(route.AgentID)
-		if !ok {
-			agent = al.registry.GetDefaultAgent()
-		}
-	}
-
-	if agent == nil {
-		agent = al.registry.GetDefaultAgent()
-	}
+	agent := al.resolveAgentForRoute(route)
 	if agent == nil {
 		return "", nil, fmt.Errorf("no agent available for route (agent_id=%s)", route.AgentID)
 	}
@@ -694,6 +704,35 @@ func classifyTimeoutRetryError(err error) *providers.FailoverError {
 	}
 
 	return nil
+}
+
+func (al *AgentLoop) buildPromptMessages(
+	ctx context.Context,
+	agent *AgentInstance,
+	history []providers.Message,
+	summary string,
+	opts processOptions,
+) []providers.Message {
+	messages := agent.ContextBuilder.BuildMessages(
+		history,
+		summary,
+		opts.UserMessage,
+		opts.Media,
+		opts.Channel,
+		opts.ChatID,
+	)
+
+	autoRecallQuery := opts.UserMessage
+	if strings.TrimSpace(opts.AutoRecallQuery) != "" {
+		autoRecallQuery = opts.AutoRecallQuery
+	}
+	messages = injectAutoRecallHints(messages, al.buildAutoRecallHints(ctx, agent, autoRecallQuery))
+
+	maxMediaSize := config.DefaultMaxMediaSize
+	if al != nil && al.cfg != nil {
+		maxMediaSize = al.cfg.Agents.Defaults.GetMaxMediaSize()
+	}
+	return resolveMediaRefs(messages, al.mediaStore, maxMediaSize)
 }
 
 func (al *AgentLoop) processSystemMessage(
@@ -816,27 +855,14 @@ func (al *AgentLoop) runAgentLoop(
 		opts.Media,
 		al.mediaStore,
 	)
-	messages := agent.ContextBuilder.BuildMessages(
-		history,
-		summary,
-		liveUserMessage,
-		promptMedia,
-		opts.Channel,
-		opts.ChatID,
-	)
-	autoRecallQuery := opts.UserMessage
-	if strings.TrimSpace(opts.AutoRecallQuery) != "" {
-		autoRecallQuery = opts.AutoRecallQuery
-	}
-	messages = injectAutoRecallHints(messages, al.buildAutoRecallHints(ctx, agent, autoRecallQuery))
-
-	// Resolve media:// refs to base64 data URLs (streaming)
-	maxMediaSize := al.cfg.Agents.Defaults.GetMaxMediaSize()
-	messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize)
+	opts.UserMessage = liveUserMessage
+	opts.SessionUserMessage = sessionUserMessage
+	opts.Media = promptMedia
+	messages := al.buildPromptMessages(ctx, agent, history, summary, opts)
 
 	// 2. Save user message to session
 	if opts.PersistSession {
-		agent.Sessions.AddMessage(opts.SessionKey, "user", sessionUserMessage)
+		agent.Sessions.AddMessage(opts.SessionKey, "user", opts.SessionUserMessage)
 	}
 
 	// 3. Run LLM iteration loop
@@ -1091,7 +1117,13 @@ func (al *AgentLoop) runLLMIteration(
 					)
 				}
 
-				if !opts.PersistSession || (strings.TrimSpace(opts.ContextSessionKey) != "" && opts.ContextSessionKey != opts.SessionKey) {
+				contextSessionKey := strings.TrimSpace(opts.ContextSessionKey)
+				compressionSessionKey := strings.TrimSpace(opts.SessionKey)
+				if contextSessionKey != "" {
+					compressionSessionKey = contextSessionKey
+				}
+
+				if compressionSessionKey == "" || (!opts.PersistSession && contextSessionKey == "") {
 					logger.WarnCF("agent", "Context window retry skipped for ephemeral/session-split run", map[string]any{
 						"agent_id":    agent.ID,
 						"session_key": opts.SessionKey,
@@ -1099,13 +1131,15 @@ func (al *AgentLoop) runLLMIteration(
 					break
 				}
 
-				al.forceCompression(agent, opts.SessionKey, opts.Channel, opts.ChatID)
-				newHistory := agent.Sessions.GetHistory(opts.SessionKey)
-				newSummary := agent.Sessions.GetSummary(opts.SessionKey)
-				messages = agent.ContextBuilder.BuildMessages(
-					newHistory, newSummary, "",
-					nil, opts.Channel, opts.ChatID,
-				)
+				al.forceCompression(agent, compressionSessionKey, opts.Channel, opts.ChatID)
+				newHistory := agent.Sessions.GetHistory(compressionSessionKey)
+				newSummary := agent.Sessions.GetSummary(compressionSessionKey)
+				retryOpts := opts
+				if opts.PersistSession && compressionSessionKey == strings.TrimSpace(opts.SessionKey) {
+					retryOpts.UserMessage = ""
+					retryOpts.Media = nil
+				}
+				messages = al.buildPromptMessages(ctx, agent, newHistory, newSummary, retryOpts)
 				continue
 			}
 			break

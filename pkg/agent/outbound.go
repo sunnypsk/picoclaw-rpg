@@ -213,6 +213,10 @@ func recordSuccessfulOutbound(
 	agent *AgentInstance,
 	channel, chatID, content string,
 ) {
+	if replyStateTrackingDisabled(ctx) {
+		return
+	}
+
 	if capture := mirroredOutboundCaptureFromContext(ctx); capture != nil {
 		capture.Add(content)
 		if err := recordNPCOutboundMessage(agent, channel, chatID); err != nil {
@@ -223,10 +227,6 @@ func recordSuccessfulOutbound(
 				"error":    err.Error(),
 			})
 		}
-		return
-	}
-
-	if replyStateTrackingDisabled(ctx) {
 		return
 	}
 
