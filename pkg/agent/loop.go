@@ -104,6 +104,13 @@ func bestSenderLabel(msg bus.InboundMessage) string {
 	return strings.TrimSpace(msg.SenderID)
 }
 
+func toolSenderID(msg bus.InboundMessage) string {
+	if platformID := strings.TrimSpace(msg.Sender.PlatformID); platformID != "" {
+		return platformID
+	}
+	return strings.TrimSpace(msg.SenderID)
+}
+
 func NewAgentLoop(
 	cfg *config.Config,
 	msgBus *bus.MessageBus,
@@ -644,7 +651,7 @@ func (al *AgentLoop) processMessageCore(
 		Channel:            msg.Channel,
 		ChatID:             msg.ChatID,
 		MessageID:          msg.MessageID,
-		SenderID:           msg.SenderID,
+		SenderID:           toolSenderID(msg),
 		UserMessage:        attributedUserMessage,
 		SessionUserMessage: attributedUserMessage,
 		AutoRecallQuery:    msg.Content,

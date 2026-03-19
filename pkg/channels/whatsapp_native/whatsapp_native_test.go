@@ -248,6 +248,30 @@ func TestBuildWhatsAppReactionMessage_DirectChatOmitsParticipant(t *testing.T) {
 	}
 }
 
+func TestBuildWhatsAppReactionMessage_AcceptsCanonicalLIDSenderID(t *testing.T) {
+	client := &whatsmeow.Client{Store: &store.Device{}}
+	msg := bus.OutboundReactionMessage{
+		ChatID:         "130184887930990@lid",
+		MessageID:      "3EB04F67AAC3BC8A2D38D7",
+		TargetSenderID: "whatsapp:130184887930990:59@lid",
+		Emoji:          "👍",
+	}
+
+	to, waMsg, err := buildWhatsAppReactionMessage(client, msg)
+	if err != nil {
+		t.Fatalf("buildWhatsAppReactionMessage() error = %v", err)
+	}
+	if to.String() != msg.ChatID {
+		t.Fatalf("reaction chat = %q, want %q", to.String(), msg.ChatID)
+	}
+	if waMsg.GetReactionMessage() == nil {
+		t.Fatal("expected reaction message")
+	}
+	if waMsg.GetReactionMessage().GetKey() == nil {
+		t.Fatal("expected reaction key")
+	}
+}
+
 func TestBuildWhatsAppReactionMessage_GroupChatSetsParticipant(t *testing.T) {
 	client := &whatsmeow.Client{Store: &store.Device{}}
 	msg := bus.OutboundReactionMessage{

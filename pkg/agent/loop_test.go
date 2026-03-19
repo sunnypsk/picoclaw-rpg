@@ -783,6 +783,46 @@ func TestBestSenderLabel(t *testing.T) {
 	}
 }
 
+func TestToolSenderID(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  bus.InboundMessage
+		want string
+	}{
+		{
+			name: "platform id preferred",
+			msg: bus.InboundMessage{
+				SenderID: "whatsapp:130184887930990:59@lid",
+				Sender: bus.SenderInfo{
+					Platform:   "whatsapp",
+					PlatformID: "130184887930990:59@lid",
+				},
+			},
+			want: "130184887930990:59@lid",
+		},
+		{
+			name: "sender id fallback",
+			msg: bus.InboundMessage{
+				SenderID: "whatsapp:42",
+			},
+			want: "whatsapp:42",
+		},
+		{
+			name: "empty when missing",
+			msg:  bus.InboundMessage{},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := toolSenderID(tt.msg); got != tt.want {
+				t.Fatalf("toolSenderID() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestProcessMessage_GroupMessagePersistsAttributedHistory(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {

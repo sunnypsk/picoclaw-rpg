@@ -1024,6 +1024,7 @@ func buildWhatsAppReactionMessage(
 
 // parseJID converts a chat ID (phone number or JID string) to types.JID.
 func parseJID(s string) (types.JID, error) {
+	s = normalizeWhatsAppJID(s)
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return types.JID{}, fmt.Errorf("empty chat id")
@@ -1032,4 +1033,12 @@ func parseJID(s string) (types.JID, error) {
 		return types.ParseJID(s)
 	}
 	return types.NewJID(s, types.DefaultUserServer), nil
+}
+
+func normalizeWhatsAppJID(s string) string {
+	s = strings.TrimSpace(s)
+	if platform, id, ok := identity.ParseCanonicalID(s); ok && strings.EqualFold(platform, "whatsapp") {
+		return strings.TrimSpace(id)
+	}
+	return s
 }
