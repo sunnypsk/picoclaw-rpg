@@ -56,7 +56,7 @@ npm ci --prefix workspace/skills/generate-slides
 ```
 
 5. Include optional fields when they help:
-   `lang`, `notes`, `sources`, and for image slides `image_fit`.
+   `theme`, `variant`, `lang`, `notes`, `sources`, and for image slides `image_fit`.
 6. Run the helper.
 
 Default output:
@@ -82,6 +82,13 @@ node workspace/skills/generate-slides/scripts/generate_slides.mjs \
   `title`, `section`, `bullets`, `image`, `closing`
 - Set a top-level `title`.
 - Use `layout: "wide"` unless the user explicitly wants a standard 4:3 deck.
+- Choose a top-level `theme` explicitly unless the user asks for the legacy default look.
+- Map theme choice to deck intent:
+  `classic` for formal updates and status decks,
+  `editorial` for product narratives and showcases,
+  `contrast` for keynotes, workshops, and high-emphasis decks.
+- Vary slide `variant` values across the deck when it improves pacing instead of reusing one layout everywhere.
+- Keep `classic` plus default variants when the user wants continuity with the existing house style.
 - Use `image_fit: "cover"` by default for image slides.
 - Use `image_fit: "contain"` for screenshots, charts, or UI mockups when cropping would hurt readability.
 - Use `lang` for non-English decks, especially CJK content.
@@ -97,7 +104,8 @@ node workspace/skills/generate-slides/scripts/generate_slides.mjs \
 
 ## Notes
 
-- The built-in theme is intentionally opinionated and remains the default.
+- The generator now supports multiple built-in themes and per-slide layout variants.
+- Omitted `theme` and `variant` fields fall back to the legacy `classic` look.
 - Save the generated deck locally; this skill does not return the file through chat channels.
 - If `node` is unavailable, explain that this skill must run in a Node-capable runtime.
 - Do not blame an LLM/API/timeout failure on missing `node` unless a runtime check or command failure has confirmed that separately.

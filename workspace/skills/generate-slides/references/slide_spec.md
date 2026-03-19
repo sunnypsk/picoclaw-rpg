@@ -11,6 +11,7 @@ Use this reference when building the JSON input for
   "subtitle": "Q2 2026",
   "filename": "quarterly-product-update",
   "layout": "wide",
+  "theme": "editorial",
   "lang": "en-US",
   "author": "Picoclaw",
   "company": "Example Co",
@@ -34,6 +35,7 @@ Use this reference when building the JSON input for
 - `subtitle`: optional string
 - `filename`: optional output filename stem; `.pptx` is added automatically
 - `layout`: optional `"wide"` or `"standard"`; defaults to `"wide"`
+- `theme`: optional `"classic"`, `"editorial"`, or `"contrast"`; defaults to `"classic"`
 - `lang`: optional language tag such as `"en-US"` or `"zh-TW"`; applied to slide text
 - `author`, `company`, `subject`: optional metadata strings
 - `notes`: optional deck-level speaker notes
@@ -47,12 +49,14 @@ Deck-level `notes` and `sources` are merged into every slide's speaker notes. Sl
 All slide types below also accept these optional fields:
 - `notes`: slide-level speaker notes
 - `sources`: slide-level source strings
+- `variant`: optional layout variant for that slide type; defaults are listed below
 
 ### `title`
 
 ```json
 {
   "type": "title",
+  "variant": "hero-center",
   "title": "Quarterly Product Update",
   "subtitle": "Q2 2026",
   "kicker": "Board Review",
@@ -65,6 +69,7 @@ All slide types below also accept these optional fields:
 ```
 
 - `title`: required
+- `variant`: optional `"hero-left"` or `"hero-center"`; defaults to `"hero-left"`
 - `subtitle`, `kicker`, `byline`: optional
 
 ### `section`
@@ -72,6 +77,7 @@ All slide types below also accept these optional fields:
 ```json
 {
   "type": "section",
+  "variant": "statement",
   "title": "Wins and Risks",
   "subtitle": "What changed this quarter",
   "notes": "Pause here before moving into the next detail slide."
@@ -79,6 +85,7 @@ All slide types below also accept these optional fields:
 ```
 
 - `title`: required
+- `variant`: optional `"divider"` or `"statement"`; defaults to `"divider"`
 - `subtitle`: optional
 
 ### `bullets`
@@ -86,6 +93,7 @@ All slide types below also accept these optional fields:
 ```json
 {
   "type": "bullets",
+  "variant": "content-aside",
   "title": "Highlights",
   "body": "Three changes shaped the quarter.",
   "bullets": [
@@ -108,15 +116,19 @@ All slide types below also accept these optional fields:
 ```
 
 - `title`: required
+- `variant`: optional `"content-aside"` or `"two-column"`; defaults to `"content-aside"`
 - `bullets`: required non-empty array of strings
 - `body`, `aside_title`, `aside_body`: optional strings
 - `aside_bullets`: optional array of strings
+
+Use `variant: "two-column"` only when `aside_title`, `aside_body`, and `aside_bullets` are all omitted.
 
 ### `image`
 
 ```json
 {
   "type": "image",
+  "variant": "image-right",
   "title": "Prototype Snapshot",
   "image_path": "workspace/assets/prototype.png",
   "image_fit": "contain",
@@ -134,6 +146,7 @@ All slide types below also accept these optional fields:
 ```
 
 - `title`: required
+- `variant`: optional `"image-left"` or `"image-right"`; defaults to `"image-left"`
 - `image_path`: required local file path
 - `image_fit`: optional `"cover"` or `"contain"`; defaults to `"cover"`
 - `caption`: optional string
@@ -146,6 +159,7 @@ Use `image_fit: "contain"` for screenshots, charts, and UI mockups that should n
 ```json
 {
   "type": "closing",
+  "variant": "minimal",
   "title": "Thank You",
   "subtitle": "Questions and discussion",
   "notes": "Hold here for open discussion."
@@ -153,6 +167,7 @@ Use `image_fit: "contain"` for screenshots, charts, and UI mockups that should n
 ```
 
 - `title`: required
+- `variant`: optional `"card"` or `"minimal"`; defaults to `"card"`
 - `subtitle`: optional
 
 ## Full English example
@@ -163,6 +178,7 @@ Use `image_fit: "contain"` for screenshots, charts, and UI mockups that should n
   "subtitle": "Q2 2026",
   "filename": "quarterly-product-update",
   "layout": "wide",
+  "theme": "editorial",
   "lang": "en-US",
   "author": "Picoclaw",
   "company": "Example Co",
@@ -175,6 +191,7 @@ Use `image_fit: "contain"` for screenshots, charts, and UI mockups that should n
   "slides": [
     {
       "type": "title",
+      "variant": "hero-center",
       "title": "Quarterly Product Update",
       "subtitle": "Q2 2026",
       "kicker": "Board Review",
@@ -182,23 +199,20 @@ Use `image_fit: "contain"` for screenshots, charts, and UI mockups that should n
     },
     {
       "type": "section",
+      "variant": "statement",
       "title": "Topline Story",
       "subtitle": "What moved, what stalled, what changed",
       "notes": "Set up the next two slides as proof points."
     },
     {
       "type": "bullets",
+      "variant": "two-column",
       "title": "Highlights",
       "body": "The quarter was driven by improved onboarding and enterprise demand.",
       "bullets": [
         "Revenue grew 22% year over year",
         "Activation improved after onboarding changes",
         "The enterprise pipeline doubled"
-      ],
-      "aside_title": "Risks",
-      "aside_bullets": [
-        "Hiring is still behind plan",
-        "Renewal timing remains uneven"
       ],
       "sources": [
         "Q2 revenue workbook",
@@ -207,6 +221,7 @@ Use `image_fit: "contain"` for screenshots, charts, and UI mockups that should n
     },
     {
       "type": "image",
+      "variant": "image-right",
       "title": "Prototype Snapshot",
       "image_path": "workspace/assets/prototype.png",
       "image_fit": "contain",
@@ -219,6 +234,7 @@ Use `image_fit: "contain"` for screenshots, charts, and UI mockups that should n
     },
     {
       "type": "closing",
+      "variant": "minimal",
       "title": "Thank You",
       "subtitle": "Questions and discussion"
     }
