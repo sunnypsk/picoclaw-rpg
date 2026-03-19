@@ -65,12 +65,14 @@ var channelRateConfig = map[string]float64{
 }
 
 type channelWorker struct {
-	ch         Channel
-	queue      chan bus.OutboundMessage
-	mediaQueue chan bus.OutboundMediaMessage
-	done       chan struct{}
-	mediaDone  chan struct{}
-	limiter    *rate.Limiter
+	ch            Channel
+	queue         chan bus.OutboundMessage
+	mediaQueue    chan bus.OutboundMediaMessage
+	reactionQueue chan bus.OutboundReactionMessage
+	done          chan struct{}
+	mediaDone     chan struct{}
+	reactionDone  chan struct{}
+	limiter       *rate.Limiter
 }
 
 type Manager struct {
@@ -341,11 +343,13 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		m.workers[name] = w
 		go m.runWorker(dispatchCtx, name, w)
 		go m.runMediaWorker(dispatchCtx, name, w)
+		go m.runReactionWorker(dispatchCtx, name, w)
 	}
 
 	// Start the dispatcher that reads from the bus and routes to workers
 	go m.dispatchOutbound(dispatchCtx)
 	go m.dispatchOutboundMedia(dispatchCtx)
+	go m.dispatchOutboundReaction(dispatchCtx)
 
 	// Start the TTL janitor that cleans up stale typing/placeholder entries
 	go m.runTTLJanitor(dispatchCtx)
@@ -414,6 +418,17 @@ func (m *Manager) StopAll(ctx context.Context) error {
 			<-w.mediaDone
 		}
 	}
+	// Close all reaction worker queues and wait for them to drain
+	for _, w := range m.workers {
+		if w != nil {
+			close(w.reactionQueue)
+		}
+	}
+	for _, w := range m.workers {
+		if w != nil {
+			<-w.reactionDone
+		}
+	}
 
 	// Stop all channels
 	for name, channel := range m.channels {
@@ -442,12 +457,14 @@ func newChannelWorker(name string, ch Channel) *channelWorker {
 	burst := int(math.Max(1, math.Ceil(rateVal/2)))
 
 	return &channelWorker{
-		ch:         ch,
-		queue:      make(chan bus.OutboundMessage, defaultChannelQueueSize),
-		mediaQueue: make(chan bus.OutboundMediaMessage, defaultChannelQueueSize),
-		done:       make(chan struct{}),
-		mediaDone:  make(chan struct{}),
-		limiter:    rate.NewLimiter(rate.Limit(rateVal), burst),
+		ch:            ch,
+		queue:         make(chan bus.OutboundMessage, defaultChannelQueueSize),
+		mediaQueue:    make(chan bus.OutboundMediaMessage, defaultChannelQueueSize),
+		reactionQueue: make(chan bus.OutboundReactionMessage, defaultChannelQueueSize),
+		done:          make(chan struct{}),
+		mediaDone:     make(chan struct{}),
+		reactionDone:  make(chan struct{}),
+		limiter:       rate.NewLimiter(rate.Limit(rateVal), burst),
 	}
 }
 
@@ -627,6 +644,26 @@ func (m *Manager) dispatchOutboundMedia(ctx context.Context) {
 	)
 }
 
+func (m *Manager) dispatchOutboundReaction(ctx context.Context) {
+	dispatchLoop(
+		ctx, m,
+		m.bus.SubscribeOutboundReaction,
+		func(msg bus.OutboundReactionMessage) string { return msg.Channel },
+		func(ctx context.Context, w *channelWorker, msg bus.OutboundReactionMessage) bool {
+			select {
+			case w.reactionQueue <- msg:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		},
+		"Outbound reaction dispatcher started",
+		"Outbound reaction dispatcher stopped",
+		"Unknown channel for outbound reaction",
+		"Channel has no active worker, skipping reaction",
+	)
+}
+
 // runMediaWorker processes outbound media messages for a single channel.
 func (m *Manager) runMediaWorker(ctx context.Context, name string, w *channelWorker) {
 	defer close(w.mediaDone)
@@ -637,6 +674,22 @@ func (m *Manager) runMediaWorker(ctx context.Context, name string, w *channelWor
 				return
 			}
 			m.sendMediaWithRetry(ctx, name, w, msg)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// runReactionWorker processes outbound reaction messages for a single channel.
+func (m *Manager) runReactionWorker(ctx context.Context, name string, w *channelWorker) {
+	defer close(w.reactionDone)
+	for {
+		select {
+		case msg, ok := <-w.reactionQueue:
+			if !ok {
+				return
+			}
+			m.sendReactionWithRetry(ctx, name, w, msg)
 		case <-ctx.Done():
 			return
 		}
@@ -701,6 +754,61 @@ func (m *Manager) sendMediaWithRetry(ctx context.Context, name string, w *channe
 		"chat_id": msg.ChatID,
 		"error":   lastErr.Error(),
 		"retries": maxRetries,
+	})
+}
+
+// sendReactionWithRetry sends an explicit emoji reaction through the channel with rate limiting and retry logic.
+func (m *Manager) sendReactionWithRetry(ctx context.Context, name string, w *channelWorker, msg bus.OutboundReactionMessage) {
+	rs, ok := w.ch.(ReactionSender)
+	if !ok {
+		logger.DebugCF("channels", "Channel does not support ReactionSender, skipping reaction", map[string]any{
+			"channel": name,
+		})
+		return
+	}
+
+	if err := w.limiter.Wait(ctx); err != nil {
+		return
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		lastErr = rs.SendReaction(ctx, msg)
+		if lastErr == nil {
+			return
+		}
+
+		if errors.Is(lastErr, ErrNotRunning) || errors.Is(lastErr, ErrSendFailed) {
+			break
+		}
+
+		if attempt == maxRetries {
+			break
+		}
+
+		if errors.Is(lastErr, ErrRateLimit) {
+			select {
+			case <-time.After(rateLimitDelay):
+				continue
+			case <-ctx.Done():
+				return
+			}
+		}
+
+		backoff := min(time.Duration(float64(baseBackoff)*math.Pow(2, float64(attempt))), maxBackoff)
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return
+		}
+	}
+
+	logger.ErrorCF("channels", "SendReaction failed", map[string]any{
+		"channel":    name,
+		"chat_id":    msg.ChatID,
+		"message_id": msg.MessageID,
+		"error":      lastErr.Error(),
+		"retries":    maxRetries,
 	})
 }
 

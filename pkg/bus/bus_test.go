@@ -61,6 +61,35 @@ func TestPublishOutboundSubscribe(t *testing.T) {
 	}
 }
 
+func TestPublishOutboundReactionSubscribe(t *testing.T) {
+	mb := NewMessageBus()
+	defer mb.Close()
+
+	ctx := context.Background()
+	msg := OutboundReactionMessage{
+		Channel:        "whatsapp_native",
+		ChatID:         "123@s.whatsapp.net",
+		MessageID:      "wamid-1",
+		TargetSenderID: "123@s.whatsapp.net",
+		Emoji:          "👍",
+	}
+
+	if err := mb.PublishOutboundReaction(ctx, msg); err != nil {
+		t.Fatalf("PublishOutboundReaction failed: %v", err)
+	}
+
+	got, ok := mb.SubscribeOutboundReaction(ctx)
+	if !ok {
+		t.Fatal("SubscribeOutboundReaction returned ok=false")
+	}
+	if got.Emoji != "👍" {
+		t.Fatalf("expected emoji %q, got %q", "👍", got.Emoji)
+	}
+	if got.MessageID != "wamid-1" {
+		t.Fatalf("expected message_id %q, got %q", "wamid-1", got.MessageID)
+	}
+}
+
 func TestPublishInbound_ContextCancel(t *testing.T) {
 	mb := NewMessageBus()
 	defer mb.Close()
@@ -106,6 +135,16 @@ func TestPublishOutbound_BusClosed(t *testing.T) {
 	}
 }
 
+func TestPublishOutboundReaction_BusClosed(t *testing.T) {
+	mb := NewMessageBus()
+	mb.Close()
+
+	err := mb.PublishOutboundReaction(context.Background(), OutboundReactionMessage{Emoji: "👍"})
+	if err != ErrBusClosed {
+		t.Fatalf("expected ErrBusClosed, got %v", err)
+	}
+}
+
 func TestConsumeInbound_ContextCancel(t *testing.T) {
 	mb := NewMessageBus()
 	defer mb.Close()
@@ -140,6 +179,19 @@ func TestSubscribeOutbound_BusClosed(t *testing.T) {
 	defer cancel()
 
 	_, ok := mb.SubscribeOutbound(ctx)
+	if ok {
+		t.Fatal("expected ok=false when bus is closed")
+	}
+}
+
+func TestSubscribeOutboundReaction_BusClosed(t *testing.T) {
+	mb := NewMessageBus()
+	mb.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, ok := mb.SubscribeOutboundReaction(ctx)
 	if ok {
 		t.Fatal("expected ok=false when bus is closed")
 	}
