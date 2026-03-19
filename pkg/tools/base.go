@@ -11,7 +11,7 @@ type Tool interface {
 }
 
 // ContextualTool is an optional interface that tools can implement
-// to receive the current message context (channel, chatID)
+// to receive the current message context (channel, chatID).
 type ContextualTool interface {
 	Tool
 	SetContext(channel, chatID string)
@@ -20,14 +20,23 @@ type ContextualTool interface {
 type toolCtxKey struct{ name string }
 
 var (
-	ctxKeyChannel = &toolCtxKey{"channel"}
-	ctxKeyChatID  = &toolCtxKey{"chatID"}
+	ctxKeyChannel   = &toolCtxKey{"channel"}
+	ctxKeyChatID    = &toolCtxKey{"chatID"}
+	ctxKeyMessageID = &toolCtxKey{"messageID"}
+	ctxKeySenderID  = &toolCtxKey{"senderID"}
 )
 
 // WithToolContext returns a child context carrying channel and chatID.
 func WithToolContext(ctx context.Context, channel, chatID string) context.Context {
+	return WithToolMessageContext(ctx, channel, chatID, "", "")
+}
+
+// WithToolMessageContext returns a child context carrying message routing and source identifiers.
+func WithToolMessageContext(ctx context.Context, channel, chatID, messageID, senderID string) context.Context {
 	ctx = context.WithValue(ctx, ctxKeyChannel, channel)
 	ctx = context.WithValue(ctx, ctxKeyChatID, chatID)
+	ctx = context.WithValue(ctx, ctxKeyMessageID, messageID)
+	ctx = context.WithValue(ctx, ctxKeySenderID, senderID)
 	return ctx
 }
 
@@ -40,6 +49,18 @@ func ToolChannel(ctx context.Context) string {
 // ToolChatID extracts the chatID from ctx, or "" if unset.
 func ToolChatID(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyChatID).(string)
+	return v
+}
+
+// ToolMessageID extracts the current inbound platform message ID from ctx, or "" if unset.
+func ToolMessageID(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyMessageID).(string)
+	return v
+}
+
+// ToolSenderID extracts the current inbound raw sender ID from ctx, or "" if unset.
+func ToolSenderID(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeySenderID).(string)
 	return v
 }
 

@@ -55,6 +55,7 @@ type WhatsAppNativeChannel struct {
 	config       config.WhatsAppConfig
 	storePath    string
 	client       *whatsmeow.Client
+	isConnected  func(client *whatsmeow.Client) bool
 	container    *sqlstore.Container
 	mu           sync.Mutex
 	runCtx       context.Context
@@ -88,6 +89,9 @@ func NewWhatsAppNativeChannel(
 		BaseChannel: base,
 		config:      cfg,
 		storePath:   storePath,
+		isConnected: func(client *whatsmeow.Client) bool {
+			return client != nil && client.IsConnected()
+		},
 	}
 	return c, nil
 }
@@ -772,6 +776,39 @@ func (c *WhatsAppNativeChannel) SendMedia(ctx context.Context, msg bus.OutboundM
 	return nil
 }
 
+// SendReaction implements channels.ReactionSender for native WhatsApp.
+func (c *WhatsAppNativeChannel) SendReaction(ctx context.Context, msg bus.OutboundReactionMessage) error {
+	if !c.IsRunning() {
+		return channels.ErrNotRunning
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	c.mu.Lock()
+	client := c.client
+	c.mu.Unlock()
+
+	if client == nil || !c.isConnected(client) {
+		return fmt.Errorf("whatsapp connection not established: %w", channels.ErrTemporary)
+	}
+	if client.Store == nil || client.Store.ID == nil {
+		return fmt.Errorf("whatsapp not yet paired (QR login pending): %w", channels.ErrTemporary)
+	}
+
+	to, waMsg, err := buildWhatsAppReactionMessage(client, msg)
+	if err != nil {
+		return err
+	}
+
+	if _, err = client.SendMessage(ctx, to, waMsg); err != nil {
+		return fmt.Errorf("whatsapp send reaction: %w", channels.ErrTemporary)
+	}
+	return nil
+}
+
 // StartTyping implements channels.TypingCapable for native mode.
 // It sends composing presence immediately, refreshes periodically,
 // and sends paused presence when the returned stop function is called.
@@ -852,6 +889,39 @@ func (c *WhatsAppNativeChannel) sendChatPresence(ctx context.Context, chatID str
 	}
 
 	return nil
+}
+
+func buildWhatsAppReactionMessage(
+	client *whatsmeow.Client,
+	msg bus.OutboundReactionMessage,
+) (types.JID, *waE2E.Message, error) {
+	if client == nil || client.Store == nil {
+		return types.JID{}, nil, fmt.Errorf("whatsapp reaction client not initialized: %w", channels.ErrTemporary)
+	}
+
+	messageID := strings.TrimSpace(msg.MessageID)
+	if messageID == "" {
+		return types.JID{}, nil, fmt.Errorf("whatsapp reaction requires message_id: %w", channels.ErrSendFailed)
+	}
+	emoji := strings.TrimSpace(msg.Emoji)
+	if emoji == "" {
+		return types.JID{}, nil, fmt.Errorf("whatsapp reaction requires emoji: %w", channels.ErrSendFailed)
+	}
+	targetSenderID := strings.TrimSpace(msg.TargetSenderID)
+	if targetSenderID == "" {
+		return types.JID{}, nil, fmt.Errorf("whatsapp reaction requires target sender id: %w", channels.ErrSendFailed)
+	}
+
+	to, err := parseJID(msg.ChatID)
+	if err != nil {
+		return types.JID{}, nil, fmt.Errorf("invalid chat id %q: %w", msg.ChatID, channels.ErrSendFailed)
+	}
+	sender, err := parseJID(targetSenderID)
+	if err != nil {
+		return types.JID{}, nil, fmt.Errorf("invalid target sender id %q: %w", msg.TargetSenderID, channels.ErrSendFailed)
+	}
+
+	return to, client.BuildReaction(to, sender, messageID, emoji), nil
 }
 
 // parseJID converts a chat ID (phone number or JID string) to types.JID.

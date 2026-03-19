@@ -56,3 +56,12 @@ type OutboundMediaMessage struct {
 	ChatID  string      `json:"chat_id"`
 	Parts   []MediaPart `json:"parts"`
 }
+
+// OutboundReactionMessage carries an explicit emoji reaction to a previously received message.
+type OutboundReactionMessage struct {
+	Channel        string `json:"channel"`
+	ChatID         string `json:"chat_id"`
+	MessageID      string `json:"message_id"`
+	TargetSenderID string `json:"target_sender_id,omitempty"`
+	Emoji          string `json:"emoji"`
+}

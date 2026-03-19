@@ -3,14 +3,20 @@
 package whatsapp
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
+	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/store"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -87,5 +93,118 @@ func TestStoreIncomingMedia_ReplacesBinWithContentTypeExtension(t *testing.T) {
 	}
 	if got := filepath.Ext(meta.Filename); got != ".ogg" {
 		t.Fatalf("stored filename extension = %q, want .ogg (filename=%q)", got, meta.Filename)
+	}
+}
+
+func TestBuildWhatsAppReactionMessage_DirectChatOmitsParticipant(t *testing.T) {
+	client := &whatsmeow.Client{Store: &store.Device{}}
+	msg := bus.OutboundReactionMessage{
+		ChatID:         "123456789@s.whatsapp.net",
+		MessageID:      "msg-1",
+		TargetSenderID: "123456789@s.whatsapp.net",
+		Emoji:          "👍",
+	}
+
+	to, waMsg, err := buildWhatsAppReactionMessage(client, msg)
+	if err != nil {
+		t.Fatalf("buildWhatsAppReactionMessage() error = %v", err)
+	}
+	if to.String() != msg.ChatID {
+		t.Fatalf("reaction chat = %q, want %q", to.String(), msg.ChatID)
+	}
+
+	reaction := waMsg.GetReactionMessage()
+	if reaction == nil {
+		t.Fatal("expected reaction message")
+	}
+	key := reaction.GetKey()
+	if key == nil {
+		t.Fatal("expected message key")
+	}
+	if key.GetRemoteJID() != msg.ChatID {
+		t.Fatalf("remote JID = %q, want %q", key.GetRemoteJID(), msg.ChatID)
+	}
+	if key.GetID() != msg.MessageID {
+		t.Fatalf("message ID = %q, want %q", key.GetID(), msg.MessageID)
+	}
+	if key.GetFromMe() {
+		t.Fatal("expected reaction target to be treated as not from me")
+	}
+	if key.GetParticipant() != "" {
+		t.Fatalf("direct chat participant = %q, want empty", key.GetParticipant())
+	}
+	if reaction.GetText() != msg.Emoji {
+		t.Fatalf("reaction emoji = %q, want %q", reaction.GetText(), msg.Emoji)
+	}
+}
+
+func TestBuildWhatsAppReactionMessage_GroupChatSetsParticipant(t *testing.T) {
+	client := &whatsmeow.Client{Store: &store.Device{}}
+	msg := bus.OutboundReactionMessage{
+		ChatID:         "12345-678@g.us",
+		MessageID:      "group-msg-1",
+		TargetSenderID: "987654321@s.whatsapp.net",
+		Emoji:          "🔥",
+	}
+
+	_, waMsg, err := buildWhatsAppReactionMessage(client, msg)
+	if err != nil {
+		t.Fatalf("buildWhatsAppReactionMessage() error = %v", err)
+	}
+
+	reaction := waMsg.GetReactionMessage()
+	if reaction == nil || reaction.GetKey() == nil {
+		t.Fatal("expected reaction key")
+	}
+	if reaction.GetKey().GetParticipant() != msg.TargetSenderID {
+		t.Fatalf("group participant = %q, want %q", reaction.GetKey().GetParticipant(), msg.TargetSenderID)
+	}
+}
+
+func TestWhatsAppNativeSendReaction_Disconnected(t *testing.T) {
+	ch, err := NewWhatsAppNativeChannel(config.WhatsAppConfig{}, bus.NewMessageBus(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	channel := ch.(*WhatsAppNativeChannel)
+	channel.SetRunning(true)
+
+	err = channel.SendReaction(context.Background(), bus.OutboundReactionMessage{
+		ChatID:         "123456789@s.whatsapp.net",
+		MessageID:      "msg-1",
+		TargetSenderID: "123456789@s.whatsapp.net",
+		Emoji:          "👍",
+	})
+	if !errors.Is(err, channels.ErrTemporary) {
+		t.Fatalf("SendReaction() error = %v, want ErrTemporary", err)
+	}
+	if !strings.Contains(err.Error(), "connection not established") {
+		t.Fatalf("SendReaction() error = %v, want connection not established", err)
+	}
+}
+
+func TestWhatsAppNativeSendReaction_Unpaired(t *testing.T) {
+	ch, err := NewWhatsAppNativeChannel(config.WhatsAppConfig{}, bus.NewMessageBus(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	channel := ch.(*WhatsAppNativeChannel)
+	channel.SetRunning(true)
+	channel.client = &whatsmeow.Client{Store: &store.Device{}}
+	channel.isConnected = func(*whatsmeow.Client) bool { return true }
+
+	err = channel.SendReaction(context.Background(), bus.OutboundReactionMessage{
+		ChatID:         "123456789@s.whatsapp.net",
+		MessageID:      "msg-1",
+		TargetSenderID: "123456789@s.whatsapp.net",
+		Emoji:          "👍",
+	})
+	if !errors.Is(err, channels.ErrTemporary) {
+		t.Fatalf("SendReaction() error = %v, want ErrTemporary", err)
+	}
+	if !strings.Contains(err.Error(), "not yet paired") {
+		t.Fatalf("SendReaction() error = %v, want not yet paired", err)
 	}
 }

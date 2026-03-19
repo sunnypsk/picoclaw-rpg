@@ -57,6 +57,8 @@ type processOptions struct {
 	ContextSessionKey  string   // Optional session identifier to read history/summary from
 	Channel            string   // Target channel for tool execution
 	ChatID             string   // Target chat ID for tool execution
+	MessageID          string   // Inbound platform message ID for tool execution
+	SenderID           string   // Inbound raw sender ID for tool execution
 	UserMessage        string   // User message content (may include prefix)
 	SessionUserMessage string   // User message content as stored in session history
 	AutoRecallQuery    string   // Optional auto-recall query override
@@ -212,6 +214,18 @@ func registerSharedToolsForAgent(
 		return err
 	})
 	agent.Tools.Register(messageTool)
+	if cfg.Channels.WhatsApp.Enabled && cfg.Channels.WhatsApp.UseNative {
+		reactTool := tools.NewReactTool()
+		reactTool.SetSupportChecker(func(channel string) bool {
+			return channel == "whatsapp_native"
+		})
+		reactTool.SetSendCallback(func(ctx context.Context, msg bus.OutboundReactionMessage) error {
+			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer pubCancel()
+			return msgBus.PublishOutboundReaction(pubCtx, msg)
+		})
+		agent.Tools.Register(reactTool)
+	}
 	imageTool := tools.NewGenerateImageTool(agent.Workspace, cfg.Agents.Defaults.RestrictToWorkspace)
 	imageTool.SetMediaStore(store)
 	agent.Tools.Register(imageTool)
@@ -648,6 +662,8 @@ func (al *AgentLoop) processMessageCore(
 		SessionKey:         sessionKey,
 		Channel:            msg.Channel,
 		ChatID:             msg.ChatID,
+		MessageID:          msg.MessageID,
+		SenderID:           msg.SenderID,
 		UserMessage:        attributedUserMessage,
 		SessionUserMessage: attributedUserMessage,
 		AutoRecallQuery:    msg.Content,
@@ -1232,6 +1248,8 @@ func (al *AgentLoop) runLLMIteration(
 				tc.Arguments,
 				opts.Channel,
 				opts.ChatID,
+				opts.MessageID,
+				opts.SenderID,
 				asyncCallback,
 			)
 

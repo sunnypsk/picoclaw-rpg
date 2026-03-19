@@ -27,6 +27,15 @@ func (m *mockChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 func (m *mockChannel) Start(ctx context.Context) error { return nil }
 func (m *mockChannel) Stop(ctx context.Context) error  { return nil }
 
+type mockReactionChannel struct {
+	mockChannel
+	reactionFn func(ctx context.Context, msg bus.OutboundReactionMessage) error
+}
+
+func (m *mockReactionChannel) SendReaction(ctx context.Context, msg bus.OutboundReactionMessage) error {
+	return m.reactionFn(ctx, msg)
+}
+
 // newTestManager creates a minimal Manager suitable for unit tests.
 func newTestManager() *Manager {
 	return &Manager{
@@ -323,6 +332,69 @@ func TestNewChannelWorker_ConfiguredRate(t *testing.T) {
 		if w.limiter.Limit() != rate.Limit(expectedRate) {
 			t.Fatalf("channel %s: expected rate %v, got %v", name, expectedRate, w.limiter.Limit())
 		}
+	}
+}
+
+func TestSendReactionWithRetry_Success(t *testing.T) {
+	m := newTestManager()
+	var callCount int
+	ch := &mockReactionChannel{
+		mockChannel: mockChannel{},
+		reactionFn: func(_ context.Context, _ bus.OutboundReactionMessage) error {
+			callCount++
+			return nil
+		},
+	}
+	w := &channelWorker{
+		ch:      ch,
+		limiter: rate.NewLimiter(rate.Inf, 1),
+	}
+
+	m.sendReactionWithRetry(context.Background(), "whatsapp_native", w, bus.OutboundReactionMessage{
+		Channel: "whatsapp_native", ChatID: "chat", MessageID: "msg", Emoji: "👍",
+	})
+
+	if callCount != 1 {
+		t.Fatalf("expected 1 SendReaction call, got %d", callCount)
+	}
+}
+
+func TestDispatchOutboundReaction_RoutesToWorker(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	defer msgBus.Close()
+
+	m := &Manager{
+		channels: map[string]Channel{
+			"whatsapp_native": &mockReactionChannel{mockChannel: mockChannel{}},
+		},
+		workers: make(map[string]*channelWorker),
+		bus:     msgBus,
+	}
+	w := newChannelWorker("whatsapp_native", &mockReactionChannel{mockChannel: mockChannel{}})
+	m.workers["whatsapp_native"] = w
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.dispatchOutboundReaction(ctx)
+
+	want := bus.OutboundReactionMessage{
+		Channel:        "whatsapp_native",
+		ChatID:         "chat-1",
+		MessageID:      "msg-1",
+		TargetSenderID: "user-1",
+		Emoji:          "👍",
+	}
+	if err := msgBus.PublishOutboundReaction(context.Background(), want); err != nil {
+		t.Fatalf("PublishOutboundReaction failed: %v", err)
+	}
+
+	select {
+	case got := <-w.reactionQueue:
+		if got != want {
+			t.Fatalf("reaction routed = %#v, want %#v", got, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for reaction to be routed")
 	}
 }
 

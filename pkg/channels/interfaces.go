@@ -1,6 +1,10 @@
 package channels
 
-import "context"
+import (
+	"context"
+
+	"github.com/sipeed/picoclaw/pkg/bus"
+)
 
 // TypingCapable — channels that can show a typing/thinking indicator.
 // StartTyping begins the indicator and returns a stop function.
@@ -20,6 +24,11 @@ type MessageEditor interface {
 // The undo function MUST be idempotent and safe to call multiple times.
 type ReactionCapable interface {
 	ReactToMessage(ctx context.Context, chatID, messageID string) (undo func(), err error)
+}
+
+// ReactionSender sends an explicit user-visible emoji reaction to an existing message.
+type ReactionSender interface {
+	SendReaction(ctx context.Context, msg bus.OutboundReactionMessage) error
 }
 
 // PlaceholderCapable — channels that can send a placeholder message

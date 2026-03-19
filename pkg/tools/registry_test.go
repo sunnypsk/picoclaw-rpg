@@ -27,19 +27,23 @@ func (m *mockRegistryTool) Execute(_ context.Context, _ map[string]any) *ToolRes
 
 type mockCtxTool struct {
 	mockRegistryTool
-	channel string
-	chatID  string
+	channel   string
+	chatID    string
+	messageID string
+	senderID  string
 }
 
 func (m *mockCtxTool) Execute(ctx context.Context, _ map[string]any) *ToolResult {
 	m.channel = ToolChannel(ctx)
 	m.chatID = ToolChatID(ctx)
+	m.messageID = ToolMessageID(ctx)
+	m.senderID = ToolSenderID(ctx)
 	return m.result
 }
 
 type mockAsyncRegistryTool struct {
 	mockRegistryTool
-	cb                AsyncCallback
+	cb                 AsyncCallback
 	executeAsyncCalled bool
 }
 
@@ -147,13 +151,19 @@ func TestToolRegistry_ExecuteWithContext_InjectsRequestContext(t *testing.T) {
 	}
 	r.Register(ct)
 
-	r.ExecuteWithContext(context.Background(), "ctx_tool", nil, "telegram", "chat-42", nil)
+	r.ExecuteWithContext(context.Background(), "ctx_tool", nil, "telegram", "chat-42", "msg-9", "user-7", nil)
 
 	if ct.channel != "telegram" {
 		t.Errorf("expected channel 'telegram', got %q", ct.channel)
 	}
 	if ct.chatID != "chat-42" {
 		t.Errorf("expected chatID 'chat-42', got %q", ct.chatID)
+	}
+	if ct.messageID != "msg-9" {
+		t.Errorf("expected messageID 'msg-9', got %q", ct.messageID)
+	}
+	if ct.senderID != "user-7" {
+		t.Errorf("expected senderID 'user-7', got %q", ct.senderID)
 	}
 }
 
@@ -164,10 +174,10 @@ func TestToolRegistry_ExecuteWithContext_UsesEmptyContextWhenUnset(t *testing.T)
 	}
 	r.Register(ct)
 
-	r.ExecuteWithContext(context.Background(), "ctx_tool", nil, "", "", nil)
+	r.ExecuteWithContext(context.Background(), "ctx_tool", nil, "", "", "", "", nil)
 
-	if ct.channel != "" || ct.chatID != "" {
-		t.Error("expected empty tool context when channel/chatID are unset")
+	if ct.channel != "" || ct.chatID != "" || ct.messageID != "" || ct.senderID != "" {
+		t.Error("expected empty tool context when request context is unset")
 	}
 }
 
@@ -182,7 +192,7 @@ func TestToolRegistry_ExecuteWithContext_AsyncCallback(t *testing.T) {
 	called := false
 	cb := func(_ context.Context, _ *ToolResult) { called = true }
 
-	result := r.ExecuteWithContext(context.Background(), "async_tool", nil, "", "", cb)
+	result := r.ExecuteWithContext(context.Background(), "async_tool", nil, "", "", "", "", cb)
 	if !at.executeAsyncCalled {
 		t.Error("expected ExecuteAsync to have been called")
 	}

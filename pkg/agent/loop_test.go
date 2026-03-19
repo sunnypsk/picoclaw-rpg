@@ -167,9 +167,43 @@ func TestToolRegistry_ToolRegistration(t *testing.T) {
 	}
 }
 
+func TestToolRegistry_RegistersReactToolForWhatsAppNative(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+		Channels: config.ChannelsConfig{
+			WhatsApp: config.WhatsAppConfig{
+				Enabled:   true,
+				UseNative: true,
+			},
+		},
+	}
+
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+	if _, ok := agent.Tools.Get("react"); !ok {
+		t.Fatal("expected react tool to be registered for WhatsApp native")
+	}
+}
+
 // TestToolContext_Updates verifies tool context helpers work correctly.
 func TestToolContext_Updates(t *testing.T) {
-	ctx := tools.WithToolContext(context.Background(), "telegram", "chat-42")
+	ctx := tools.WithToolMessageContext(context.Background(), "telegram", "chat-42", "msg-99", "user-11")
 
 	if got := tools.ToolChannel(ctx); got != "telegram" {
 		t.Errorf("expected channel 'telegram', got %q", got)
@@ -177,11 +211,23 @@ func TestToolContext_Updates(t *testing.T) {
 	if got := tools.ToolChatID(ctx); got != "chat-42" {
 		t.Errorf("expected chatID 'chat-42', got %q", got)
 	}
+	if got := tools.ToolMessageID(ctx); got != "msg-99" {
+		t.Errorf("expected messageID 'msg-99', got %q", got)
+	}
+	if got := tools.ToolSenderID(ctx); got != "user-11" {
+		t.Errorf("expected senderID 'user-11', got %q", got)
+	}
 	if got := tools.ToolChannel(context.Background()); got != "" {
 		t.Errorf("expected empty channel from bare context, got %q", got)
 	}
 	if got := tools.ToolChatID(context.Background()); got != "" {
 		t.Errorf("expected empty chatID from bare context, got %q", got)
+	}
+	if got := tools.ToolMessageID(context.Background()); got != "" {
+		t.Errorf("expected empty messageID from bare context, got %q", got)
+	}
+	if got := tools.ToolSenderID(context.Background()); got != "" {
+		t.Errorf("expected empty senderID from bare context, got %q", got)
 	}
 }
 
