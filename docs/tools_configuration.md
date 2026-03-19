@@ -131,7 +131,7 @@ The cron tool is used for scheduling periodic tasks.
 ### Usage Notes
 
 - Proactive reminder behavior is controlled by workspace prompt rules (for example, `workspace/AGENTS.md`).
-- For reminders that should stay in the same conversational context, create cron jobs with `deliver=false`.
+- Chat-created cron reminders preserve conversational context in both deliver modes. Prefer `deliver=false` when the agent should phrase the reminder naturally instead of sending the stored text verbatim.
 
 ## MCP Tool
 

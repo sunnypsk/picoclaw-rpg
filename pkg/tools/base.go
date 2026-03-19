@@ -20,10 +20,11 @@ type ContextualTool interface {
 type toolCtxKey struct{ name string }
 
 var (
-	ctxKeyChannel   = &toolCtxKey{"channel"}
-	ctxKeyChatID    = &toolCtxKey{"chatID"}
-	ctxKeyMessageID = &toolCtxKey{"messageID"}
-	ctxKeySenderID  = &toolCtxKey{"senderID"}
+	ctxKeyChannel    = &toolCtxKey{"channel"}
+	ctxKeyChatID     = &toolCtxKey{"chatID"}
+	ctxKeyMessageID  = &toolCtxKey{"messageID"}
+	ctxKeySenderID   = &toolCtxKey{"senderID"}
+	ctxKeySessionKey = &toolCtxKey{"sessionKey"}
 )
 
 // WithToolContext returns a child context carrying channel and chatID.
@@ -33,10 +34,19 @@ func WithToolContext(ctx context.Context, channel, chatID string) context.Contex
 
 // WithToolMessageContext returns a child context carrying message routing and source identifiers.
 func WithToolMessageContext(ctx context.Context, channel, chatID, messageID, senderID string) context.Context {
+	return WithToolExecutionContext(ctx, channel, chatID, messageID, senderID, "")
+}
+
+// WithToolExecutionContext returns a child context carrying request-scoped routing, source, and session identifiers.
+func WithToolExecutionContext(
+	ctx context.Context,
+	channel, chatID, messageID, senderID, sessionKey string,
+) context.Context {
 	ctx = context.WithValue(ctx, ctxKeyChannel, channel)
 	ctx = context.WithValue(ctx, ctxKeyChatID, chatID)
 	ctx = context.WithValue(ctx, ctxKeyMessageID, messageID)
 	ctx = context.WithValue(ctx, ctxKeySenderID, senderID)
+	ctx = context.WithValue(ctx, ctxKeySessionKey, sessionKey)
 	return ctx
 }
 
@@ -61,6 +71,12 @@ func ToolMessageID(ctx context.Context) string {
 // ToolSenderID extracts the current inbound raw sender ID from ctx, or "" if unset.
 func ToolSenderID(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeySenderID).(string)
+	return v
+}
+
+// ToolSessionKey extracts the current routed session key from ctx, or "" if unset.
+func ToolSessionKey(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeySessionKey).(string)
 	return v
 }
 

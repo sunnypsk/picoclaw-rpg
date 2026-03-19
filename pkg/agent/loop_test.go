@@ -206,7 +206,14 @@ func TestToolRegistry_RegistersReactToolForWhatsAppNative(t *testing.T) {
 
 // TestToolContext_Updates verifies tool context helpers work correctly.
 func TestToolContext_Updates(t *testing.T) {
-	ctx := tools.WithToolMessageContext(context.Background(), "telegram", "chat-42", "msg-99", "user-11")
+	ctx := tools.WithToolExecutionContext(
+		context.Background(),
+		"telegram",
+		"chat-42",
+		"msg-99",
+		"user-11",
+		"agent:main:telegram:direct:user-11",
+	)
 
 	if got := tools.ToolChannel(ctx); got != "telegram" {
 		t.Errorf("expected channel 'telegram', got %q", got)
@@ -220,6 +227,9 @@ func TestToolContext_Updates(t *testing.T) {
 	if got := tools.ToolSenderID(ctx); got != "user-11" {
 		t.Errorf("expected senderID 'user-11', got %q", got)
 	}
+	if got := tools.ToolSessionKey(ctx); got != "agent:main:telegram:direct:user-11" {
+		t.Errorf("expected sessionKey 'agent:main:telegram:direct:user-11', got %q", got)
+	}
 	if got := tools.ToolChannel(context.Background()); got != "" {
 		t.Errorf("expected empty channel from bare context, got %q", got)
 	}
@@ -231,6 +241,9 @@ func TestToolContext_Updates(t *testing.T) {
 	}
 	if got := tools.ToolSenderID(context.Background()); got != "" {
 		t.Errorf("expected empty senderID from bare context, got %q", got)
+	}
+	if got := tools.ToolSessionKey(context.Background()); got != "" {
+		t.Errorf("expected empty sessionKey from bare context, got %q", got)
 	}
 }
 

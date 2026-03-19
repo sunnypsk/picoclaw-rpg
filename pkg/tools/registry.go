@@ -41,7 +41,7 @@ func (r *ToolRegistry) Get(name string) (Tool, bool) {
 }
 
 func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string]any) *ToolResult {
-	return r.ExecuteWithContext(ctx, name, args, "", "", "", "", nil)
+	return r.ExecuteWithContext(ctx, name, args, "", "", "", "", "", nil)
 }
 
 // ExecuteWithContext executes a tool with request-scoped message context and an optional async callback.
@@ -49,7 +49,7 @@ func (r *ToolRegistry) ExecuteWithContext(
 	ctx context.Context,
 	name string,
 	args map[string]any,
-	channel, chatID, messageID, senderID string,
+	channel, chatID, messageID, senderID, sessionKey string,
 	asyncCallback AsyncCallback,
 ) *ToolResult {
 	logger.InfoCF("tool", "Tool execution started",
@@ -67,7 +67,7 @@ func (r *ToolRegistry) ExecuteWithContext(
 		return ErrorResult(fmt.Sprintf("tool %q not found", name)).WithError(fmt.Errorf("tool not found"))
 	}
 
-	ctx = WithToolMessageContext(ctx, channel, chatID, messageID, senderID)
+	ctx = WithToolExecutionContext(ctx, channel, chatID, messageID, senderID, sessionKey)
 
 	start := time.Now()
 	var result *ToolResult

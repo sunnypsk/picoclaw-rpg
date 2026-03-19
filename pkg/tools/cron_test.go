@@ -64,6 +64,36 @@ func TestCronTool_AddJob_DerivesMessageFromNaturalRequestWithExplicitSchedule(t 
 	}
 }
 
+func TestCronTool_AddJob_StoresRoutedSessionKey(t *testing.T) {
+	tool, service := newTestCronTool(t)
+
+	ctx := WithToolExecutionContext(
+		context.Background(),
+		"telegram",
+		"chat-1",
+		"msg-1",
+		"user-1",
+		"agent:main:telegram:direct:user-1",
+	)
+	result := tool.Execute(ctx, map[string]any{
+		"action":     "add",
+		"message":    "stretch",
+		"at_seconds": 60,
+	})
+
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+
+	jobs := service.ListJobs(false)
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(jobs))
+	}
+	if jobs[0].Payload.SessionKey != "agent:main:telegram:direct:user-1" {
+		t.Fatalf("expected session key to be stored, got %q", jobs[0].Payload.SessionKey)
+	}
+}
+
 func TestCronTool_AddJob_IgnoresZeroValuedOptionalScheduleArgs(t *testing.T) {
 	tool, service := newTestCronTool(t)
 
@@ -210,6 +240,7 @@ func addEveryJob(t *testing.T, service *cron.CronService, message, channel, chat
 		true,
 		channel,
 		chatID,
+		"",
 	)
 	if err != nil {
 		t.Fatalf("failed to add job: %v", err)

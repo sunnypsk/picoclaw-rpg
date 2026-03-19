@@ -1238,6 +1238,7 @@ func (al *AgentLoop) runLLMIteration(
 				opts.ChatID,
 				opts.MessageID,
 				opts.SenderID,
+				opts.SessionKey,
 				asyncCallback,
 			)
 

@@ -28,7 +28,17 @@ var (
 
 // JobExecutor is the interface for executing cron jobs through the agent
 type JobExecutor interface {
-	ProcessDirectWithChannel(ctx context.Context, content, sessionKey, channel, chatID string) (string, error)
+	ProcessScheduledReminder(ctx context.Context, req ScheduledReminderRequest) (string, error)
+}
+
+// ScheduledReminderRequest describes a reminder firing that should be handled by the agent loop.
+type ScheduledReminderRequest struct {
+	JobID      string
+	Content    string
+	Channel    string
+	ChatID     string
+	SessionKey string
+	Deliver    bool
 }
 
 // CronTool provides scheduling capabilities for the agent
@@ -146,6 +156,7 @@ func (t *CronTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult {
 	channel := ToolChannel(ctx)
 	chatID := ToolChatID(ctx)
+	sessionKey := ToolSessionKey(ctx)
 
 	if channel == "" || chatID == "" {
 		return ErrorResult("no session context (channel/chat_id not set). Use this tool in an active conversation.")
@@ -203,6 +214,7 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 		deliver,
 		channel,
 		chatID,
+		sessionKey,
 	)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("Error adding job: %v", err))
@@ -659,29 +671,28 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		return "ok"
 	}
 
-	// If deliver=true, send message directly without agent processing
-	if job.Payload.Deliver {
-		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer pubCancel()
-		t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-			Channel: channel,
-			ChatID:  chatID,
-			Content: job.Payload.Message,
-		})
-		return "ok"
+	if t.executor == nil {
+		if job.Payload.Deliver {
+			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer pubCancel()
+			t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
+				Channel: channel,
+				ChatID:  chatID,
+				Content: job.Payload.Message,
+			})
+			return "ok"
+		}
+		return "Error: scheduled reminder executor not configured"
 	}
 
-	// For deliver=false, process through agent (for complex tasks)
-	sessionKey := fmt.Sprintf("cron-%s", job.ID)
-
-	// Call agent with job's message
-	response, err := t.executor.ProcessDirectWithChannel(
-		ctx,
-		job.Payload.Message,
-		sessionKey,
-		channel,
-		chatID,
-	)
+	response, err := t.executor.ProcessScheduledReminder(ctx, ScheduledReminderRequest{
+		JobID:      job.ID,
+		Content:    job.Payload.Message,
+		Channel:    channel,
+		ChatID:     chatID,
+		SessionKey: job.Payload.SessionKey,
+		Deliver:    job.Payload.Deliver,
+	})
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}

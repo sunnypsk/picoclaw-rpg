@@ -1496,7 +1496,7 @@ PicoClaw supports scheduled reminders and recurring tasks through the `cron` too
 * **Recurring tasks**: "Remind me every 2 hours" → triggers every 2 hours
 * **Cron expressions**: "Remind me at 9am daily" → uses cron expression
 * **Proactive reminders**: You can define proactive reminder behavior in `workspace/AGENTS.md` (for example, implicit future-intent reminders)
-* **Conversation continuity**: For reminder follow-ups in the same context, create jobs with `deliver=false`
+* **Conversation continuity**: Chat-created reminder jobs mirror visible reminder messages into the routed session in both deliver modes; prefer `deliver=false` when you want the agent to phrase the reminder naturally
 
 Jobs are stored in `~/.picoclaw/workspace/cron/` and processed automatically.
 

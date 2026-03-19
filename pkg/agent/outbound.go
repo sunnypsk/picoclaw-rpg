@@ -42,6 +42,14 @@ func proactiveOutputCaptureFromContext(ctx context.Context) *proactiveOutputCapt
 	return capture
 }
 
+func withMirroredOutboundCapture(ctx context.Context, capture *proactiveOutputCapture) context.Context {
+	return withProactiveOutputCapture(ctx, capture)
+}
+
+func mirroredOutboundCaptureFromContext(ctx context.Context) *proactiveOutputCapture {
+	return proactiveOutputCaptureFromContext(ctx)
+}
+
 func withProactiveSessionKey(ctx context.Context, sessionKey string) context.Context {
 	if ctx == nil || strings.TrimSpace(sessionKey) == "" {
 		return ctx
@@ -55,6 +63,14 @@ func proactiveSessionKeyFromContext(ctx context.Context) string {
 	}
 	sessionKey, _ := ctx.Value(proactiveSessionKeyContextKey).(string)
 	return strings.TrimSpace(sessionKey)
+}
+
+func withMirroredSessionKey(ctx context.Context, sessionKey string) context.Context {
+	return withProactiveSessionKey(ctx, sessionKey)
+}
+
+func mirroredSessionKeyFromContext(ctx context.Context) string {
+	return proactiveSessionKeyFromContext(ctx)
 }
 
 func withReplyStateTracker(ctx context.Context, tracker *replyStateTracker) context.Context {
@@ -163,7 +179,7 @@ func (al *AgentLoop) publishAgentMessage(
 	ctx context.Context,
 	agent *AgentInstance,
 	channel, chatID, content string,
-	proactive bool,
+	mirrorToSession bool,
 ) bool {
 	if al == nil || al.bus == nil {
 		return false
@@ -177,17 +193,17 @@ func (al *AgentLoop) publishAgentMessage(
 		Content: content,
 	}); err != nil {
 		logger.DebugCF("agent", "Skipped outbound publish", map[string]any{
-			"agent_id":  agentIDOrUnknown(agent),
-			"channel":   channel,
-			"chat_id":   chatID,
-			"proactive": proactive,
-			"error":     err.Error(),
+			"agent_id":          agentIDOrUnknown(agent),
+			"channel":           channel,
+			"chat_id":           chatID,
+			"mirror_to_session": mirrorToSession,
+			"error":             err.Error(),
 		})
 		return false
 	}
 	recordSuccessfulOutbound(ctx, agent, channel, chatID, content)
-	if proactive {
-		al.appendVisibleAssistantMessagesToSession(agent, proactiveSessionKeyFromContext(ctx), channel, chatID, []string{content})
+	if mirrorToSession {
+		al.appendVisibleAssistantMessagesToSession(agent, mirroredSessionKeyFromContext(ctx), channel, chatID, []string{content})
 	}
 	return true
 }
@@ -197,7 +213,7 @@ func recordSuccessfulOutbound(
 	agent *AgentInstance,
 	channel, chatID, content string,
 ) {
-	if capture := proactiveOutputCaptureFromContext(ctx); capture != nil {
+	if capture := mirroredOutboundCaptureFromContext(ctx); capture != nil {
 		capture.Add(content)
 		if err := recordNPCOutboundMessage(agent, channel, chatID); err != nil {
 			logger.WarnCF("agent", "Failed to record outbound message state", map[string]any{
