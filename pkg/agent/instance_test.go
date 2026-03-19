@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -246,6 +247,9 @@ func TestNewAgentInstance_SeedsBootstrapFilesFromDefaultWorkspace(t *testing.T) 
 	for rel, content := range sourceSkillFiles {
 		writeWorkspaceFile(t, defaultWorkspace, rel, content)
 	}
+	sourceSkillAssetRel := "skills/generate-image/assets/momonga_refs_sheet.png"
+	sourceSkillAsset := []byte{0x89, 0x50, 0x4E, 0x47, 0x01, 0x02, 0x03, 0x04}
+	writeWorkspaceBytes(t, defaultWorkspace, sourceSkillAssetRel, sourceSkillAsset)
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -289,6 +293,13 @@ func TestNewAgentInstance_SeedsBootstrapFilesFromDefaultWorkspace(t *testing.T) 
 		if string(data) != want {
 			t.Fatalf("content of %s = %q, want %q", rel, string(data), want)
 		}
+	}
+	assetData, err := os.ReadFile(filepath.Join(autoWorkspace, filepath.FromSlash(sourceSkillAssetRel)))
+	if err != nil {
+		t.Fatalf("read %s: %v", sourceSkillAssetRel, err)
+	}
+	if !bytes.Equal(assetData, sourceSkillAsset) {
+		t.Fatalf("binary asset content mismatch for %s", sourceSkillAssetRel)
 	}
 
 	if _, err := os.Stat(filepath.Join(autoWorkspace, "USER.md")); !os.IsNotExist(err) {
@@ -405,6 +416,9 @@ func TestDefaultWorkspaceBootstrapContent_ProactiveGuidanceIncludesAntiRepeatAnd
 	if !strings.Contains(agents, "treat that as a stronger reason to share a brief life update or a scene image") {
 		t.Fatalf("expected walk/image proactive guidance in fallback AGENTS.md template")
 	}
+	if !strings.Contains(agents, "momonga_refs_sheet.png") {
+		t.Fatalf("expected selfie reference guidance in fallback AGENTS.md template")
+	}
 }
 
 func TestNewAgentInstance_DoesNotOverwriteExistingBootstrapFile(t *testing.T) {
@@ -482,6 +496,17 @@ func writeWorkspaceFile(t *testing.T, workspace, relPath, content string) {
 		t.Fatalf("mkdir %s: %v", filepath.Dir(fullPath), err)
 	}
 	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", relPath, err)
+	}
+}
+
+func writeWorkspaceBytes(t *testing.T, workspace, relPath string, content []byte) {
+	t.Helper()
+	fullPath := filepath.Join(workspace, filepath.FromSlash(relPath))
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(fullPath), err)
+	}
+	if err := os.WriteFile(fullPath, content, 0o644); err != nil {
 		t.Fatalf("write %s: %v", relPath, err)
 	}
 }

@@ -163,10 +163,13 @@ func TestGenerateImageTool_StoresURLResult(t *testing.T) {
 	}
 }
 
-func TestGenerateImageTool_IncludesImageAndOptionsInChatPayload(t *testing.T) {
+func TestGenerateImageTool_IncludesNestedWorkspaceImageAndOptionsInChatPayload(t *testing.T) {
 	workspace := t.TempDir()
 	store := media.NewFileMediaStore()
-	sourceImage := filepath.Join(workspace, "source.png")
+	sourceImage := filepath.Join(workspace, "skills", "generate-image", "assets", "momonga_refs_sheet.png")
+	if err := os.MkdirAll(filepath.Dir(sourceImage), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(sourceImage, []byte("input-image"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +210,7 @@ func TestGenerateImageTool_IncludesImageAndOptionsInChatPayload(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tool := NewGenerateImageTool(workspace, false)
+	tool := NewGenerateImageTool(workspace, true)
 	tool.SetMediaStore(store)
 	tool.getenv = func(name string) string {
 		switch name {
@@ -224,7 +227,7 @@ func TestGenerateImageTool_IncludesImageAndOptionsInChatPayload(t *testing.T) {
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"prompt":       "edit this",
-		"image":        "source.png",
+		"image":        filepath.ToSlash(filepath.Join("skills", "generate-image", "assets", "momonga_refs_sheet.png")),
 		"size":         "1536x1024",
 		"aspect_ratio": "16:9",
 	})

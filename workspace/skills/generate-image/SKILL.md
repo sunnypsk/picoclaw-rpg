@@ -28,8 +28,13 @@ Rules:
 - Pass `prompt` every time.
 - For image editing, pass one explicit source image using `image`, `input_image`, or `input_images` with exactly one item.
 - Use a `media://...` ref from the current conversation when the user uploaded an image in chat.
+- The canonical Momonga appearance reference sheet is `skills/generate-image/assets/momonga_refs_sheet.png`.
+- For selfie requests or any Momonga image where her visible appearance should stay consistent, pass that path as `image`.
+- If the user already supplied an explicit source image, use that image instead of the Momonga reference sheet.
+- Do not attach the Momonga reference sheet for scenery-only images or images that do not depict Momonga.
 - Do not use Hugging Face Spaces, Nano Banana, or any Hugging Face path for this skill.
 - Do not guess between multiple possible source images. Ask or choose one explicit image only.
+- Do not combine the Momonga reference sheet with another explicit image. This tool safely supports only one explicit input image.
 
 Example tool input:
 
@@ -56,6 +61,7 @@ Ratio and resolution guidance:
 
 Examples:
 - square avatar: `aspect_ratio: 1:1`, `size: 1024x1024`
+- portrait selfie: `aspect_ratio: 3:4`, `size: 1024x1536`
 - desktop wallpaper: `aspect_ratio: 16:9`, `size: 1536x1024`
 - phone story: `aspect_ratio: 9:16`, `size: 1024x1536`
 
