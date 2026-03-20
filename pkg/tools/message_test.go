@@ -4,16 +4,18 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/bus"
 )
 
 func TestMessageTool_Execute_Success(t *testing.T) {
 	tool := NewMessageTool()
 
 	var sentChannel, sentChatID, sentContent string
-	tool.SetSendCallback(func(ctx context.Context, channel, chatID, content string) error {
-		sentChannel = channel
-		sentChatID = chatID
-		sentContent = content
+	tool.SetSendCallback(func(ctx context.Context, msg bus.OutboundMessage) error {
+		sentChannel = msg.Channel
+		sentChatID = msg.ChatID
+		sentContent = msg.Content
 		return nil
 	})
 
@@ -61,9 +63,9 @@ func TestMessageTool_Execute_WithCustomChannel(t *testing.T) {
 	tool := NewMessageTool()
 
 	var sentChannel, sentChatID string
-	tool.SetSendCallback(func(ctx context.Context, channel, chatID, content string) error {
-		sentChannel = channel
-		sentChatID = chatID
+	tool.SetSendCallback(func(ctx context.Context, msg bus.OutboundMessage) error {
+		sentChannel = msg.Channel
+		sentChatID = msg.ChatID
 		return nil
 	})
 
@@ -92,11 +94,59 @@ func TestMessageTool_Execute_WithCustomChannel(t *testing.T) {
 	}
 }
 
+func TestMessageTool_Execute_SameChatCarriesReplyTarget(t *testing.T) {
+	tool := NewMessageTool()
+
+	var sent bus.OutboundMessage
+	tool.SetSendCallback(func(ctx context.Context, msg bus.OutboundMessage) error {
+		sent = msg
+		return nil
+	})
+
+	ctx := WithToolMessageContext(context.Background(), "whatsapp_native", "chat-1", "msg-99", "user-7")
+	result := tool.Execute(ctx, map[string]any{
+		"content": "Replying here",
+	})
+
+	if result.IsError {
+		t.Fatalf("Execute() returned error: %s", result.ForLLM)
+	}
+	if sent.ReplyToMessageID != "msg-99" {
+		t.Fatalf("ReplyToMessageID = %q, want %q", sent.ReplyToMessageID, "msg-99")
+	}
+	if sent.ReplyToSenderID != "user-7" {
+		t.Fatalf("ReplyToSenderID = %q, want %q", sent.ReplyToSenderID, "user-7")
+	}
+}
+
+func TestMessageTool_Execute_CrossChatOmitsReplyTarget(t *testing.T) {
+	tool := NewMessageTool()
+
+	var sent bus.OutboundMessage
+	tool.SetSendCallback(func(ctx context.Context, msg bus.OutboundMessage) error {
+		sent = msg
+		return nil
+	})
+
+	ctx := WithToolMessageContext(context.Background(), "whatsapp_native", "chat-1", "msg-99", "user-7")
+	result := tool.Execute(ctx, map[string]any{
+		"content": "Send elsewhere",
+		"chat_id": "chat-2",
+	})
+
+	if result.IsError {
+		t.Fatalf("Execute() returned error: %s", result.ForLLM)
+	}
+	if sent.ReplyToMessageID != "" || sent.ReplyToSenderID != "" {
+		t.Fatalf("expected no reply target, got %#v", sent)
+	}
+}
+
 func TestMessageTool_Execute_SendFailure(t *testing.T) {
 	tool := NewMessageTool()
 
 	sendErr := errors.New("network error")
-	tool.SetSendCallback(func(ctx context.Context, channel, chatID, content string) error {
+	tool.SetSendCallback(func(ctx context.Context, msg bus.OutboundMessage) error {
 		return sendErr
 	})
 
@@ -148,7 +198,7 @@ func TestMessageTool_Execute_MissingContent(t *testing.T) {
 func TestMessageTool_Execute_NoTargetChannel(t *testing.T) {
 	tool := NewMessageTool()
 
-	tool.SetSendCallback(func(ctx context.Context, channel, chatID, content string) error {
+	tool.SetSendCallback(func(ctx context.Context, msg bus.OutboundMessage) error {
 		return nil
 	})
 

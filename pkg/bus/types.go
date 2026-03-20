@@ -36,9 +36,11 @@ type InboundMessage struct {
 }
 
 type OutboundMessage struct {
-	Channel string `json:"channel"`
-	ChatID  string `json:"chat_id"`
-	Content string `json:"content"`
+	Channel          string `json:"channel"`
+	ChatID           string `json:"chat_id"`
+	Content          string `json:"content"`
+	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
+	ReplyToSenderID  string `json:"reply_to_sender_id,omitempty"`
 }
 
 // MediaPart describes a single media attachment to send.
@@ -52,9 +54,11 @@ type MediaPart struct {
 
 // OutboundMediaMessage carries media attachments from Agent to channels via the bus.
 type OutboundMediaMessage struct {
-	Channel string      `json:"channel"`
-	ChatID  string      `json:"chat_id"`
-	Parts   []MediaPart `json:"parts"`
+	Channel          string      `json:"channel"`
+	ChatID           string      `json:"chat_id"`
+	Parts            []MediaPart `json:"parts"`
+	ReplyToMessageID string      `json:"reply_to_message_id,omitempty"`
+	ReplyToSenderID  string      `json:"reply_to_sender_id,omitempty"`
 }
 
 // OutboundReactionMessage carries an explicit emoji reaction to a previously received message.

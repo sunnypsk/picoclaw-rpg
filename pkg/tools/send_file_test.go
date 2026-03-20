@@ -122,6 +122,40 @@ func TestSendFileTool_Execute_StickerSuccess(t *testing.T) {
 	}
 }
 
+func TestSendFileTool_Execute_CarriesReplyTargetFromContext(t *testing.T) {
+	workspace := t.TempDir()
+	filePath := filepath.Join(workspace, "report.pdf")
+	if err := os.WriteFile(filePath, []byte("%PDF-1.4 fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewSendFileTool(workspace, true)
+	store := media.NewFileMediaStore()
+	tool.SetMediaStore(store)
+	tool.SetSupportChecker(func(channel string) bool { return channel == "whatsapp_native" })
+
+	var sent bus.OutboundMediaMessage
+	tool.SetSendCallback(func(ctx context.Context, msg bus.OutboundMediaMessage) error {
+		sent = msg
+		return nil
+	})
+
+	ctx := WithToolMessageContext(context.Background(), "whatsapp_native", "123456789@s.whatsapp.net", "wamid-1", "987654321@s.whatsapp.net")
+	result := tool.Execute(ctx, map[string]any{
+		"path": "report.pdf",
+	})
+
+	if result.IsError {
+		t.Fatalf("Execute() returned error: %s", result.ForLLM)
+	}
+	if sent.ReplyToMessageID != "wamid-1" {
+		t.Fatalf("ReplyToMessageID = %q, want %q", sent.ReplyToMessageID, "wamid-1")
+	}
+	if sent.ReplyToSenderID != "987654321@s.whatsapp.net" {
+		t.Fatalf("ReplyToSenderID = %q, want %q", sent.ReplyToSenderID, "987654321@s.whatsapp.net")
+	}
+}
+
 func TestSendFileTool_Execute_RejectsPathOutsideWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "secret.pdf")

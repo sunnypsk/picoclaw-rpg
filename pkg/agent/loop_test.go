@@ -988,6 +988,65 @@ func TestProcessMessage_DirectMessageDoesNotAddSenderAttribution(t *testing.T) {
 	}
 }
 
+func TestProcessMessage_ReplyContextOnlyAugmentsLivePrompt(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &captureMessagesProvider{response: "ok"}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	helper := testHelper{al: al}
+	sessionKey := al.registry.ResolveRoute(routing.RouteInput{
+		Channel: "whatsapp_native",
+		Peer:    &routing.RoutePeer{Kind: "direct", ID: "42"},
+	}).SessionKey
+
+	msg := bus.InboundMessage{
+		Channel:   "whatsapp_native",
+		SenderID:  "whatsapp:42",
+		ChatID:    "42",
+		MessageID: "wamid-7",
+		Content:   "what do you mean?",
+		Peer:      bus.Peer{Kind: "direct", ID: "42"},
+		Metadata: map[string]string{
+			"reply_to_message_id": "wamid-prev",
+			"reply_to_text":       "Earlier assistant message",
+		},
+	}
+
+	if got := helper.executeAndGetResponse(t, context.Background(), msg); got != "ok" {
+		t.Fatalf("response = %q, want ok", got)
+	}
+
+	if len(provider.calls) != 1 {
+		t.Fatalf("provider calls = %d, want 1", len(provider.calls))
+	}
+	livePrompt := provider.calls[0][len(provider.calls[0])-1].Content
+	if !strings.Contains(livePrompt, "[Reply context: quoted message: Earlier assistant message]") {
+		t.Fatalf("live prompt missing reply context: %q", livePrompt)
+	}
+	if !strings.Contains(livePrompt, "what do you mean?") {
+		t.Fatalf("live prompt missing original message: %q", livePrompt)
+	}
+
+	history := al.registry.GetDefaultAgent().Sessions.GetHistory(sessionKey)
+	if len(history) != 2 {
+		t.Fatalf("history len = %d, want 2", len(history))
+	}
+	if got := history[0].Content; got != "what do you mean?" {
+		t.Fatalf("history[0] = %q, want %q", got, "what do you mean?")
+	}
+}
+
 // mockCustomTool is a simple mock tool for registration testing
 type mockCustomTool struct{}
 
@@ -1008,6 +1067,61 @@ func (m *mockCustomTool) Parameters() map[string]any {
 
 func (m *mockCustomTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	return tools.SilentResult("Custom tool executed")
+}
+
+type mockMediaResultTool struct{}
+
+func (m *mockMediaResultTool) Name() string {
+	return "mock_media_result"
+}
+
+func (m *mockMediaResultTool) Description() string {
+	return "Mock media tool for testing"
+}
+
+func (m *mockMediaResultTool) Parameters() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	}
+}
+
+func (m *mockMediaResultTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+	return tools.MediaResult("Media sent", []string{"media://test-ref"})
+}
+
+type singleToolCallProvider struct {
+	toolName string
+	calls    int
+}
+
+func (p *singleToolCallProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	if p.calls == 0 {
+		p.calls++
+		return &providers.LLMResponse{
+			ToolCalls: []providers.ToolCall{{
+				ID:        "tool-call-1",
+				Name:      p.toolName,
+				Arguments: map[string]any{},
+			}},
+			FinishReason: "tool_calls",
+		}, nil
+	}
+
+	return &providers.LLMResponse{
+		Content:      "done",
+		FinishReason: "stop",
+	}, nil
+}
+
+func (p *singleToolCallProvider) GetDefaultModel() string {
+	return "mock-tool-model"
 }
 
 // testHelper executes a message and returns the response
@@ -1034,6 +1148,20 @@ func drainOutboundMessages(msgBus *bus.MessageBus, wait time.Duration) []bus.Out
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), wait)
 		msg, ok := msgBus.SubscribeOutbound(ctx)
+		cancel()
+		if !ok {
+			break
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs
+}
+
+func drainOutboundMediaMessages(msgBus *bus.MessageBus, wait time.Duration) []bus.OutboundMediaMessage {
+	var msgs []bus.OutboundMediaMessage
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), wait)
+		msg, ok := msgBus.SubscribeOutboundMedia(ctx)
 		cancel()
 		if !ok {
 			break
@@ -1207,6 +1335,105 @@ func TestProcessMessageAndSend_ExplicitExecOutputPublishesToolResultAndFinalAnsw
 	}
 	if outbound[1].Content != "Final answer" {
 		t.Fatalf("expected second outbound message to be final answer, got %+v", outbound[1])
+	}
+}
+
+func TestProcessMessageAndSend_WhatsAppNativeReplyCarriesReplyTarget(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &simpleMockProvider{response: "Final answer"}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	response, err := al.processMessageAndSend(context.Background(), bus.InboundMessage{
+		Channel:   "whatsapp_native",
+		SenderID:  "987654321@s.whatsapp.net",
+		ChatID:    "12345-678@g.us",
+		MessageID: "wamid-1",
+		Content:   "reply to this",
+		Sender: bus.SenderInfo{
+			Platform:   "whatsapp",
+			PlatformID: "987654321@s.whatsapp.net",
+		},
+		Peer:       bus.Peer{Kind: "group", ID: "12345-678@g.us"},
+		SessionKey: "test-session",
+	})
+	if err != nil {
+		t.Fatalf("processMessageAndSend failed: %v", err)
+	}
+	if response != "Final answer" {
+		t.Fatalf("response = %q, want %q", response, "Final answer")
+	}
+
+	outbound := drainOutboundMessages(msgBus, 50*time.Millisecond)
+	if len(outbound) != 1 {
+		t.Fatalf("expected 1 outbound message, got %d: %+v", len(outbound), outbound)
+	}
+	if outbound[0].ReplyToMessageID != "wamid-1" {
+		t.Fatalf("ReplyToMessageID = %q, want %q", outbound[0].ReplyToMessageID, "wamid-1")
+	}
+	if outbound[0].ReplyToSenderID != "987654321@s.whatsapp.net" {
+		t.Fatalf("ReplyToSenderID = %q, want %q", outbound[0].ReplyToSenderID, "987654321@s.whatsapp.net")
+	}
+}
+
+func TestProcessMessageAndSend_MediaResultCarriesReplyTarget(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &singleToolCallProvider{toolName: "mock_media_result"}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	al.RegisterTool(&mockMediaResultTool{})
+
+	response, err := al.processMessageAndSend(context.Background(), bus.InboundMessage{
+		Channel:   "whatsapp_native",
+		SenderID:  "987654321@s.whatsapp.net",
+		ChatID:    "12345-678@g.us",
+		MessageID: "wamid-2",
+		Content:   "send media",
+		Sender: bus.SenderInfo{
+			Platform:   "whatsapp",
+			PlatformID: "987654321@s.whatsapp.net",
+		},
+		Peer:       bus.Peer{Kind: "group", ID: "12345-678@g.us"},
+		SessionKey: "test-session",
+	})
+	if err != nil {
+		t.Fatalf("processMessageAndSend failed: %v", err)
+	}
+	if response != "done" {
+		t.Fatalf("response = %q, want %q", response, "done")
+	}
+
+	outboundMedia := drainOutboundMediaMessages(msgBus, 50*time.Millisecond)
+	if len(outboundMedia) != 1 {
+		t.Fatalf("expected 1 outbound media message, got %d: %+v", len(outboundMedia), outboundMedia)
+	}
+	if outboundMedia[0].ReplyToMessageID != "wamid-2" {
+		t.Fatalf("ReplyToMessageID = %q, want %q", outboundMedia[0].ReplyToMessageID, "wamid-2")
+	}
+	if outboundMedia[0].ReplyToSenderID != "987654321@s.whatsapp.net" {
+		t.Fatalf("ReplyToSenderID = %q, want %q", outboundMedia[0].ReplyToSenderID, "987654321@s.whatsapp.net")
 	}
 }
 

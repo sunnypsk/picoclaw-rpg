@@ -369,46 +369,7 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 	}
 	senderID := evt.Info.Sender.String()
 	chatID := evt.Info.Chat.String()
-	content := evt.Message.GetConversation()
-	if content == "" && evt.Message.ExtendedTextMessage != nil {
-		content = evt.Message.ExtendedTextMessage.GetText()
-	}
-
-	// Media captions in WhatsApp are carried on the media message payload
-	// rather than the top-level conversation text. Prefer those captions when
-	// present so image/video/document + caption messages stay intact.
-	if content == "" {
-		switch {
-		case evt.Message.GetImageMessage() != nil:
-			content = evt.Message.GetImageMessage().GetCaption()
-		case evt.Message.GetVideoMessage() != nil:
-			content = evt.Message.GetVideoMessage().GetCaption()
-		case evt.Message.GetDocumentMessage() != nil:
-			content = evt.Message.GetDocumentMessage().GetCaption()
-		}
-	}
-
-	// Keep non-text interactions visible to the agent so stickers/media can
-	// still trigger a response in chat.
-	if content == "" {
-		switch {
-		case evt.Message.GetStickerMessage() != nil:
-			content = "[Sticker]"
-		case evt.Message.GetImageMessage() != nil:
-			content = "[Image]"
-		case evt.Message.GetVideoMessage() != nil:
-			content = "[Video]"
-		case evt.Message.GetAudioMessage() != nil:
-			if whatsAppMessageSubtype(evt.Message) == bus.MessageSubtypeVoiceNote {
-				content = "[voice]"
-			} else {
-				content = "[Audio]"
-			}
-		case evt.Message.GetDocumentMessage() != nil:
-			content = "[Document]"
-		}
-	}
-	content = utils.SanitizeMessageContent(content)
+	content := extractWhatsAppMessageContent(evt.Message)
 
 	if content == "" {
 		return
@@ -430,6 +391,9 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 	}
 	if subtype := whatsAppMessageSubtype(evt.Message); subtype != "" {
 		metadata[bus.MetadataMessageSubtype] = subtype
+	}
+	for key, value := range extractWhatsAppReplyMetadata(evt.Message) {
+		metadata[key] = value
 	}
 
 	peerKind := "direct"
@@ -455,6 +419,96 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 		map[string]any{"sender_id": senderID, "content_preview": utils.Truncate(content, 50)},
 	)
 	c.HandleMessage(c.runCtx, peer, messageID, senderID, chatID, content, mediaPaths, metadata, sender)
+}
+
+func extractWhatsAppMessageContent(msg *waE2E.Message) string {
+	if msg == nil {
+		return ""
+	}
+
+	content := msg.GetConversation()
+	if content == "" && msg.GetExtendedTextMessage() != nil {
+		content = msg.GetExtendedTextMessage().GetText()
+	}
+
+	// Media captions are carried on the media payload instead of top-level conversation text.
+	if content == "" {
+		switch {
+		case msg.GetImageMessage() != nil:
+			content = msg.GetImageMessage().GetCaption()
+		case msg.GetVideoMessage() != nil:
+			content = msg.GetVideoMessage().GetCaption()
+		case msg.GetDocumentMessage() != nil:
+			content = msg.GetDocumentMessage().GetCaption()
+		}
+	}
+
+	// Keep non-text interactions visible to the agent so stickers/media can still trigger a response.
+	if content == "" {
+		switch {
+		case msg.GetStickerMessage() != nil:
+			content = "[Sticker]"
+		case msg.GetImageMessage() != nil:
+			content = "[Image]"
+		case msg.GetVideoMessage() != nil:
+			content = "[Video]"
+		case msg.GetAudioMessage() != nil:
+			if whatsAppMessageSubtype(msg) == bus.MessageSubtypeVoiceNote {
+				content = "[voice]"
+			} else {
+				content = "[Audio]"
+			}
+		case msg.GetDocumentMessage() != nil:
+			content = "[Document]"
+		}
+	}
+
+	return utils.SanitizeMessageContent(content)
+}
+
+func whatsAppContextInfo(msg *waE2E.Message) *waE2E.ContextInfo {
+	if msg == nil {
+		return nil
+	}
+	switch {
+	case msg.GetExtendedTextMessage() != nil:
+		return msg.GetExtendedTextMessage().GetContextInfo()
+	case msg.GetImageMessage() != nil:
+		return msg.GetImageMessage().GetContextInfo()
+	case msg.GetVideoMessage() != nil:
+		return msg.GetVideoMessage().GetContextInfo()
+	case msg.GetAudioMessage() != nil:
+		return msg.GetAudioMessage().GetContextInfo()
+	case msg.GetDocumentMessage() != nil:
+		return msg.GetDocumentMessage().GetContextInfo()
+	case msg.GetStickerMessage() != nil:
+		return msg.GetStickerMessage().GetContextInfo()
+	default:
+		return nil
+	}
+}
+
+func extractWhatsAppReplyMetadata(msg *waE2E.Message) map[string]string {
+	contextInfo := whatsAppContextInfo(msg)
+	if contextInfo == nil {
+		return nil
+	}
+
+	replyToMessageID := strings.TrimSpace(contextInfo.GetStanzaID())
+	if replyToMessageID == "" {
+		return nil
+	}
+
+	metadata := map[string]string{
+		"reply_to_message_id": replyToMessageID,
+	}
+	if replyToSenderID := strings.TrimSpace(contextInfo.GetParticipant()); replyToSenderID != "" {
+		metadata["reply_to_sender_id"] = replyToSenderID
+	}
+	if replyToText := extractWhatsAppMessageContent(contextInfo.GetQuotedMessage()); replyToText != "" {
+		metadata["reply_to_text"] = replyToText
+	}
+	return metadata
 }
 
 func whatsAppMessageSubtype(msg *waE2E.Message) string {
@@ -687,9 +741,7 @@ func (c *WhatsAppNativeChannel) Send(ctx context.Context, msg bus.OutboundMessag
 		return fmt.Errorf("invalid chat id %q: %w", msg.ChatID, err)
 	}
 
-	waMsg := &waE2E.Message{
-		Conversation: proto.String(msg.Content),
-	}
+	waMsg := buildWhatsAppTextMessage(msg, to)
 
 	if _, err = client.SendMessage(ctx, to, waMsg); err != nil {
 		return fmt.Errorf("whatsapp send: %w", channels.ErrTemporary)
@@ -728,6 +780,7 @@ func (c *WhatsAppNativeChannel) SendMedia(ctx context.Context, msg bus.OutboundM
 	if err != nil {
 		return fmt.Errorf("invalid chat id %q: %w", msg.ChatID, err)
 	}
+	replyContext := buildWhatsAppReplyContext(to, msg.ReplyToMessageID, msg.ReplyToSenderID)
 
 	for _, part := range msg.Parts {
 		localPath, meta, err := store.ResolveWithMeta(part.Ref)
@@ -749,13 +802,13 @@ func (c *WhatsAppNativeChannel) SendMedia(ctx context.Context, msg bus.OutboundM
 			continue
 		}
 
-		uploadType, _ := buildWhatsAppMediaMessage(resolvedPart, whatsmeow.UploadResponse{})
+		uploadType, _ := buildWhatsAppMediaMessage(resolvedPart, whatsmeow.UploadResponse{}, replyContext)
 		uploadResp, err := client.Upload(ctx, data, uploadType)
 		if err != nil {
 			return fmt.Errorf("whatsapp upload media: %w", channels.ErrTemporary)
 		}
 
-		_, waMsg := buildWhatsAppMediaMessage(resolvedPart, uploadResp)
+		_, waMsg := buildWhatsAppMediaMessage(resolvedPart, uploadResp, replyContext)
 
 		if _, err = client.SendMessage(ctx, to, waMsg); err != nil {
 			return fmt.Errorf("whatsapp send media: %w", channels.ErrTemporary)
@@ -821,7 +874,45 @@ func normalizeWhatsAppContentType(mediaType, contentType, filename string) strin
 	}
 }
 
-func buildWhatsAppMediaMessage(part resolvedWhatsAppMediaPart, uploadResp whatsmeow.UploadResponse) (whatsmeow.MediaType, *waE2E.Message) {
+func buildWhatsAppReplyContext(chatJID types.JID, replyToMessageID, replyToSenderID string) *waE2E.ContextInfo {
+	replyToMessageID = strings.TrimSpace(replyToMessageID)
+	if replyToMessageID == "" {
+		return nil
+	}
+
+	contextInfo := &waE2E.ContextInfo{
+		StanzaID:  proto.String(replyToMessageID),
+		RemoteJID: proto.String(chatJID.String()),
+	}
+
+	replyToSenderID = normalizeWhatsAppJID(replyToSenderID)
+	if chatJID.Server == types.GroupServer && replyToSenderID != "" {
+		contextInfo.Participant = proto.String(replyToSenderID)
+	}
+
+	return contextInfo
+}
+
+func buildWhatsAppTextMessage(msg bus.OutboundMessage, to types.JID) *waE2E.Message {
+	if contextInfo := buildWhatsAppReplyContext(to, msg.ReplyToMessageID, msg.ReplyToSenderID); contextInfo != nil {
+		return &waE2E.Message{
+			ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+				Text:        proto.String(msg.Content),
+				ContextInfo: contextInfo,
+			},
+		}
+	}
+
+	return &waE2E.Message{
+		Conversation: proto.String(msg.Content),
+	}
+}
+
+func buildWhatsAppMediaMessage(
+	part resolvedWhatsAppMediaPart,
+	uploadResp whatsmeow.UploadResponse,
+	contextInfo *waE2E.ContextInfo,
+) (whatsmeow.MediaType, *waE2E.Message) {
 	switch part.mediaType {
 	case "audio":
 		audioMsg := &waE2E.AudioMessage{
@@ -833,6 +924,7 @@ func buildWhatsAppMediaMessage(part resolvedWhatsAppMediaPart, uploadResp whatsm
 			FileEncSHA256: uploadResp.FileEncSHA256,
 			FileSHA256:    uploadResp.FileSHA256,
 			FileLength:    &uploadResp.FileLength,
+			ContextInfo:   contextInfo,
 		}
 		return whatsmeow.MediaAudio, &waE2E.Message{AudioMessage: audioMsg}
 	case "video":
@@ -845,6 +937,7 @@ func buildWhatsAppMediaMessage(part resolvedWhatsAppMediaPart, uploadResp whatsm
 			FileEncSHA256: uploadResp.FileEncSHA256,
 			FileSHA256:    uploadResp.FileSHA256,
 			FileLength:    &uploadResp.FileLength,
+			ContextInfo:   contextInfo,
 		}
 		return whatsmeow.MediaVideo, &waE2E.Message{VideoMessage: videoMsg}
 	case "file":
@@ -859,6 +952,7 @@ func buildWhatsAppMediaMessage(part resolvedWhatsAppMediaPart, uploadResp whatsm
 			FileEncSHA256: uploadResp.FileEncSHA256,
 			FileSHA256:    uploadResp.FileSHA256,
 			FileLength:    &uploadResp.FileLength,
+			ContextInfo:   contextInfo,
 		}
 		return whatsmeow.MediaDocument, &waE2E.Message{DocumentMessage: documentMsg}
 	case "sticker":
@@ -871,6 +965,7 @@ func buildWhatsAppMediaMessage(part resolvedWhatsAppMediaPart, uploadResp whatsm
 			FileSHA256:    uploadResp.FileSHA256,
 			FileLength:    &uploadResp.FileLength,
 			IsAnimated:    proto.Bool(false),
+			ContextInfo:   contextInfo,
 		}
 		return whatsmeow.MediaImage, &waE2E.Message{StickerMessage: stickerMsg}
 	default:
@@ -883,6 +978,7 @@ func buildWhatsAppMediaMessage(part resolvedWhatsAppMediaPart, uploadResp whatsm
 			FileEncSHA256: uploadResp.FileEncSHA256,
 			FileSHA256:    uploadResp.FileSHA256,
 			FileLength:    &uploadResp.FileLength,
+			ContextInfo:   contextInfo,
 		}
 		return whatsmeow.MediaImage, &waE2E.Message{ImageMessage: imageMsg}
 	}

@@ -152,6 +152,7 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			ContentType: contentType,
 		}},
 	}
+	msg.ReplyToMessageID, msg.ReplyToSenderID = toolReplyTarget(ctx, channel, chatID)
 	if err := t.sendCallback(ctx, msg); err != nil {
 		return (&ToolResult{
 			ForLLM:  fmt.Sprintf("sending file: %v", err),

@@ -86,6 +86,32 @@ func attributeInboundMessage(msg bus.InboundMessage) string {
 	return fmt.Sprintf("[From: %s] %s", label, content)
 }
 
+func addReplyContextToUserMessage(msg bus.InboundMessage, content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+
+	replyText := strings.TrimSpace(msg.Metadata["reply_to_text"])
+	replyMessageID := strings.TrimSpace(msg.Metadata["reply_to_message_id"])
+	replySenderID := strings.TrimSpace(msg.Metadata["reply_to_sender_id"])
+	if replyText == "" && replyMessageID == "" && replySenderID == "" {
+		return content
+	}
+
+	var details string
+	if replyText != "" {
+		replyText = strings.Join(strings.Fields(replyText), " ")
+		details = fmt.Sprintf("quoted message: %s", utils.Truncate(replyText, 160))
+	} else if replySenderID != "" {
+		details = fmt.Sprintf("replying to a previous message from %s", replySenderID)
+	} else {
+		details = "replying to a previous message"
+	}
+
+	return fmt.Sprintf("[Reply context: %s]\n%s", details, content)
+}
+
 func bestSenderLabel(msg bus.InboundMessage) string {
 	if display := strings.TrimSpace(msg.Sender.DisplayName); display != "" {
 		return display
@@ -206,16 +232,12 @@ func registerSharedToolsForAgent(
 
 	// Message tool
 	messageTool := tools.NewMessageTool()
-	messageTool.SetSendCallback(func(ctx context.Context, channel, chatID, content string) error {
+	messageTool.SetSendCallback(func(ctx context.Context, msg bus.OutboundMessage) error {
 		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer pubCancel()
-		err := msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-			Channel: channel,
-			ChatID:  chatID,
-			Content: content,
-		})
+		err := msgBus.PublishOutbound(pubCtx, msg)
 		if err == nil {
-			recordOutboundMessageForRegistry(ctx, registry, agentID, channel, chatID, content)
+			recordOutboundMessageForRegistry(ctx, registry, agentID, msg.Channel, msg.ChatID, msg.Content)
 		}
 		return err
 	})
@@ -600,6 +622,7 @@ func (al *AgentLoop) processMessageCore(
 	sessionKey := al.resolveSessionKey(route, msg)
 	turnTracker := &replyStateTracker{}
 	turnCtx := withReplyStateTracker(ctx, turnTracker)
+	turnCtx = tools.WithToolExecutionContext(turnCtx, msg.Channel, msg.ChatID, msg.MessageID, toolSenderID(msg), sessionKey)
 	scheduleReplyStateUpdate := func() {
 		reply := turnTracker.LastContent()
 		if strings.TrimSpace(reply) == "" {
@@ -656,13 +679,14 @@ func (al *AgentLoop) processMessageCore(
 
 	msg = al.prepareVoiceNoteMessage(turnCtx, agent, msg)
 	attributedUserMessage := attributeInboundMessage(msg)
+	liveUserMessage := addReplyContextToUserMessage(msg, attributedUserMessage)
 	response, err := al.runAgentLoop(turnCtx, agent, processOptions{
 		SessionKey:         sessionKey,
 		Channel:            msg.Channel,
 		ChatID:             msg.ChatID,
 		MessageID:          msg.MessageID,
 		SenderID:           toolSenderID(msg),
-		UserMessage:        attributedUserMessage,
+		UserMessage:        liveUserMessage,
 		SessionUserMessage: attributedUserMessage,
 		AutoRecallQuery:    msg.Content,
 		Media:              msg.Media,
@@ -1301,11 +1325,13 @@ func (al *AgentLoop) runLLMIteration(
 					}
 					parts = append(parts, part)
 				}
-				al.bus.PublishOutboundMedia(ctx, bus.OutboundMediaMessage{
+				outboundMedia := bus.OutboundMediaMessage{
 					Channel: opts.Channel,
 					ChatID:  opts.ChatID,
 					Parts:   parts,
-				})
+				}
+				outboundMedia.ReplyToMessageID, outboundMedia.ReplyToSenderID = replyTargetFromContext(ctx, opts.Channel, opts.ChatID)
+				al.bus.PublishOutboundMedia(ctx, outboundMedia)
 			}
 
 			// Determine content for LLM based on tool result

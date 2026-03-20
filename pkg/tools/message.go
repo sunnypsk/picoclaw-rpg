@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"sync/atomic"
+
+	"github.com/sipeed/picoclaw/pkg/bus"
 )
 
-type SendCallback func(ctx context.Context, channel, chatID, content string) error
+type SendCallback func(ctx context.Context, msg bus.OutboundMessage) error
 
 type MessageTool struct {
 	sendCallback SendCallback
@@ -84,7 +86,14 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return &ToolResult{ForLLM: "Message sending not configured", IsError: true}
 	}
 
-	if err := t.sendCallback(ctx, channel, chatID, content); err != nil {
+	msg := bus.OutboundMessage{
+		Channel: channel,
+		ChatID:  chatID,
+		Content: content,
+	}
+	msg.ReplyToMessageID, msg.ReplyToSenderID = toolReplyTarget(ctx, channel, chatID)
+
+	if err := t.sendCallback(ctx, msg); err != nil {
 		return &ToolResult{
 			ForLLM:  fmt.Sprintf("sending message: %v", err),
 			IsError: true,

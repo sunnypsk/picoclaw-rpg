@@ -109,7 +109,7 @@ func TestBuildWhatsAppMediaMessage_Image(t *testing.T) {
 		caption:     "hello",
 	}
 
-	uploadType, waMsg := buildWhatsAppMediaMessage(part, uploadResp)
+	uploadType, waMsg := buildWhatsAppMediaMessage(part, uploadResp, nil)
 	if uploadType != whatsmeow.MediaImage {
 		t.Fatalf("uploadType = %v, want MediaImage", uploadType)
 	}
@@ -137,7 +137,7 @@ func TestBuildWhatsAppMediaMessage_Audio(t *testing.T) {
 		caption:     "ignored",
 	}
 
-	uploadType, waMsg := buildWhatsAppMediaMessage(part, uploadResp)
+	uploadType, waMsg := buildWhatsAppMediaMessage(part, uploadResp, nil)
 	if uploadType != whatsmeow.MediaAudio {
 		t.Fatalf("uploadType = %v, want MediaAudio", uploadType)
 	}
@@ -165,7 +165,7 @@ func TestBuildWhatsAppMediaMessage_Video(t *testing.T) {
 		caption:     "clip",
 	}
 
-	uploadType, waMsg := buildWhatsAppMediaMessage(part, uploadResp)
+	uploadType, waMsg := buildWhatsAppMediaMessage(part, uploadResp, nil)
 	if uploadType != whatsmeow.MediaVideo {
 		t.Fatalf("uploadType = %v, want MediaVideo", uploadType)
 	}
@@ -191,7 +191,7 @@ func TestBuildWhatsAppMediaMessage_Document(t *testing.T) {
 		caption:     "report",
 	}
 
-	uploadType, waMsg := buildWhatsAppMediaMessage(part, uploadResp)
+	uploadType, waMsg := buildWhatsAppMediaMessage(part, uploadResp, nil)
 	if uploadType != whatsmeow.MediaDocument {
 		t.Fatalf("uploadType = %v, want MediaDocument", uploadType)
 	}
@@ -233,7 +233,7 @@ func TestBuildWhatsAppMediaMessage_Sticker(t *testing.T) {
 		contentType: "image/webp",
 	}
 
-	uploadType, waMsg := buildWhatsAppMediaMessage(part, uploadResp)
+	uploadType, waMsg := buildWhatsAppMediaMessage(part, uploadResp, nil)
 	if uploadType != whatsmeow.MediaImage {
 		t.Fatalf("uploadType = %v, want MediaImage", uploadType)
 	}
@@ -246,6 +246,141 @@ func TestBuildWhatsAppMediaMessage_Sticker(t *testing.T) {
 	}
 	if sticker.GetIsAnimated() {
 		t.Fatal("expected static sticker to have IsAnimated=false")
+	}
+}
+
+func TestBuildWhatsAppReplyContext_DirectChatOmitsParticipant(t *testing.T) {
+	chatJID, err := parseJID("123456789@s.whatsapp.net")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	contextInfo := buildWhatsAppReplyContext(chatJID, "wamid-1", "123456789@s.whatsapp.net")
+	if contextInfo == nil {
+		t.Fatal("expected reply context")
+	}
+	if contextInfo.GetStanzaID() != "wamid-1" {
+		t.Fatalf("stanza ID = %q, want %q", contextInfo.GetStanzaID(), "wamid-1")
+	}
+	if contextInfo.GetRemoteJID() != "123456789@s.whatsapp.net" {
+		t.Fatalf("remote JID = %q, want %q", contextInfo.GetRemoteJID(), "123456789@s.whatsapp.net")
+	}
+	if contextInfo.GetParticipant() != "" {
+		t.Fatalf("participant = %q, want empty", contextInfo.GetParticipant())
+	}
+}
+
+func TestBuildWhatsAppReplyContext_GroupChatSetsParticipant(t *testing.T) {
+	chatJID, err := parseJID("12345-678@g.us")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	contextInfo := buildWhatsAppReplyContext(chatJID, "wamid-2", "whatsapp:987654321@s.whatsapp.net")
+	if contextInfo == nil {
+		t.Fatal("expected reply context")
+	}
+	if contextInfo.GetParticipant() != "987654321@s.whatsapp.net" {
+		t.Fatalf("participant = %q, want %q", contextInfo.GetParticipant(), "987654321@s.whatsapp.net")
+	}
+}
+
+func TestBuildWhatsAppTextMessage_ReplyUsesExtendedTextMessage(t *testing.T) {
+	to, err := parseJID("12345-678@g.us")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waMsg := buildWhatsAppTextMessage(bus.OutboundMessage{
+		ChatID:           "12345-678@g.us",
+		Content:          "hello there",
+		ReplyToMessageID: "wamid-3",
+		ReplyToSenderID:  "555123456@s.whatsapp.net",
+	}, to)
+
+	if waMsg.GetExtendedTextMessage() == nil {
+		t.Fatal("expected extended text message")
+	}
+	if waMsg.GetExtendedTextMessage().GetText() != "hello there" {
+		t.Fatalf("text = %q, want %q", waMsg.GetExtendedTextMessage().GetText(), "hello there")
+	}
+	if waMsg.GetExtendedTextMessage().GetContextInfo().GetStanzaID() != "wamid-3" {
+		t.Fatalf("stanza ID = %q, want %q", waMsg.GetExtendedTextMessage().GetContextInfo().GetStanzaID(), "wamid-3")
+	}
+	if waMsg.GetConversation() != "" {
+		t.Fatalf("conversation = %q, want empty", waMsg.GetConversation())
+	}
+}
+
+func TestBuildWhatsAppMediaMessage_AttachesReplyContext(t *testing.T) {
+	uploadResp := whatsmeow.UploadResponse{
+		URL:        "https://example.com/image",
+		DirectPath: "/image",
+		MediaKey:   []byte("media-key"),
+		FileLength: 123,
+	}
+	part := resolvedWhatsAppMediaPart{
+		mediaType:   "image",
+		contentType: "image/png",
+	}
+	contextInfo := &waE2E.ContextInfo{
+		StanzaID:    proto.String("wamid-4"),
+		RemoteJID:   proto.String("12345-678@g.us"),
+		Participant: proto.String("555123456@s.whatsapp.net"),
+	}
+
+	_, waMsg := buildWhatsAppMediaMessage(part, uploadResp, contextInfo)
+	if waMsg.GetImageMessage() == nil {
+		t.Fatal("expected image message")
+	}
+	if waMsg.GetImageMessage().GetContextInfo().GetStanzaID() != "wamid-4" {
+		t.Fatalf("stanza ID = %q, want %q", waMsg.GetImageMessage().GetContextInfo().GetStanzaID(), "wamid-4")
+	}
+}
+
+func TestExtractWhatsAppReplyMetadata_IncludesQuotedText(t *testing.T) {
+	msg := &waE2E.Message{
+		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+			Text: proto.String("current reply"),
+			ContextInfo: &waE2E.ContextInfo{
+				StanzaID:    proto.String("wamid-5"),
+				Participant: proto.String("555123456@s.whatsapp.net"),
+				QuotedMessage: &waE2E.Message{
+					ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+						Text: proto.String("quoted hello"),
+					},
+				},
+			},
+		},
+	}
+
+	metadata := extractWhatsAppReplyMetadata(msg)
+	if metadata["reply_to_message_id"] != "wamid-5" {
+		t.Fatalf("reply_to_message_id = %q, want %q", metadata["reply_to_message_id"], "wamid-5")
+	}
+	if metadata["reply_to_sender_id"] != "555123456@s.whatsapp.net" {
+		t.Fatalf("reply_to_sender_id = %q, want %q", metadata["reply_to_sender_id"], "555123456@s.whatsapp.net")
+	}
+	if metadata["reply_to_text"] != "quoted hello" {
+		t.Fatalf("reply_to_text = %q, want %q", metadata["reply_to_text"], "quoted hello")
+	}
+}
+
+func TestExtractWhatsAppReplyMetadata_UsesMediaPlaceholderFallback(t *testing.T) {
+	msg := &waE2E.Message{
+		ImageMessage: &waE2E.ImageMessage{
+			ContextInfo: &waE2E.ContextInfo{
+				StanzaID: proto.String("wamid-6"),
+				QuotedMessage: &waE2E.Message{
+					VideoMessage: &waE2E.VideoMessage{},
+				},
+			},
+		},
+	}
+
+	metadata := extractWhatsAppReplyMetadata(msg)
+	if metadata["reply_to_text"] != "[Video]" {
+		t.Fatalf("reply_to_text = %q, want %q", metadata["reply_to_text"], "[Video]")
 	}
 }
 

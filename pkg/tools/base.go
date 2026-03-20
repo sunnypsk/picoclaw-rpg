@@ -1,6 +1,9 @@
 package tools
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // Tool is the interface that all tools must implement.
 type Tool interface {
@@ -78,6 +81,18 @@ func ToolSenderID(ctx context.Context) string {
 func ToolSessionKey(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeySessionKey).(string)
 	return v
+}
+
+func toolReplyTarget(ctx context.Context, channel, chatID string) (string, string) {
+	channel = strings.TrimSpace(channel)
+	chatID = strings.TrimSpace(chatID)
+	if channel == "" || chatID == "" {
+		return "", ""
+	}
+	if strings.TrimSpace(ToolChannel(ctx)) != channel || strings.TrimSpace(ToolChatID(ctx)) != chatID {
+		return "", ""
+	}
+	return strings.TrimSpace(ToolMessageID(ctx)), strings.TrimSpace(ToolSenderID(ctx))
 }
 
 // AsyncCallback is a function type that async tools use to notify completion.

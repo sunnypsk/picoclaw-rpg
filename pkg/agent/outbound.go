@@ -175,6 +175,18 @@ func recordOutboundMessageForRegistry(
 	recordSuccessfulOutbound(ctx, agent, channel, chatID, content)
 }
 
+func replyTargetFromContext(ctx context.Context, channel, chatID string) (string, string) {
+	channel = strings.TrimSpace(channel)
+	chatID = strings.TrimSpace(chatID)
+	if channel == "" || chatID == "" {
+		return "", ""
+	}
+	if strings.TrimSpace(tools.ToolChannel(ctx)) != channel || strings.TrimSpace(tools.ToolChatID(ctx)) != chatID {
+		return "", ""
+	}
+	return strings.TrimSpace(tools.ToolMessageID(ctx)), strings.TrimSpace(tools.ToolSenderID(ctx))
+}
+
 func (al *AgentLoop) publishAgentMessage(
 	ctx context.Context,
 	agent *AgentInstance,
@@ -187,11 +199,13 @@ func (al *AgentLoop) publishAgentMessage(
 	if strings.TrimSpace(channel) == "" || strings.TrimSpace(chatID) == "" || content == "" {
 		return false
 	}
-	if err := al.bus.PublishOutbound(ctx, bus.OutboundMessage{
+	outbound := bus.OutboundMessage{
 		Channel: channel,
 		ChatID:  chatID,
 		Content: content,
-	}); err != nil {
+	}
+	outbound.ReplyToMessageID, outbound.ReplyToSenderID = replyTargetFromContext(ctx, channel, chatID)
+	if err := al.bus.PublishOutbound(ctx, outbound); err != nil {
 		logger.DebugCF("agent", "Skipped outbound publish", map[string]any{
 			"agent_id":          agentIDOrUnknown(agent),
 			"channel":           channel,
