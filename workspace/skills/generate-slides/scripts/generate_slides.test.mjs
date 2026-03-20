@@ -8,18 +8,23 @@ import { __test__ } from "./generate_slides.mjs";
 const {
   REPO_ROOT,
   WORKSPACE_ROOT,
+  TEMPLATE_PRESETS,
   buildPresentation,
   buildDensityWarnings,
   defineDefaultMaster,
+  getDefaultVariantForPreset,
+  getPreset,
   normalizeSpec,
   renderBulletsSlide,
   renderClosingSlide,
   renderImageSlide,
   renderTitleSlide,
+  resolveActivePreset,
   resolveSafeOutputPath
 } = __test__;
 
 const WIDE_METRICS = { width: 13.333, height: 7.5 };
+const TINY_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aRsAAAAASUVORK5CYII=";
 
 function createRecordingSlide() {
   const texts = [];
@@ -43,11 +48,13 @@ function createRecordingSlide() {
 }
 
 function createDeckSpec(overrides = {}) {
-  return {
+  const deck = {
     title: "Deck",
     subtitle: "Q2 2026",
     layout: "wide",
     theme: "classic",
+    templatePreset: "",
+    activePreset: "classic",
     outputPath: path.join(WORKSPACE_ROOT, "generated-slides", "deck-test.pptx"),
     author: "Picoclaw",
     company: "",
@@ -59,6 +66,9 @@ function createDeckSpec(overrides = {}) {
     warnings: [],
     ...overrides
   };
+
+  deck.activePreset = overrides.activePreset || deck.templatePreset || deck.theme || "classic";
+  return deck;
 }
 
 function createSlide(type, overrides = {}) {
@@ -68,6 +78,12 @@ function createSlide(type, overrides = {}) {
     sources: [],
     ...overrides
   };
+}
+
+async function writeTinyPng(filePath) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+  return filePath;
 }
 
 test("resolveSafeOutputPath rejects outputs that escape workspace through a junction", async t => {
@@ -97,7 +113,7 @@ test("resolveSafeOutputPath keeps regular workspace outputs valid", () => {
   assert.equal(outputPath, path.join(WORKSPACE_ROOT, "generated-slides", "regression-deck.pptx"));
 });
 
-test("normalizeSpec defaults to the classic theme and default variants", async () => {
+test("normalizeSpec defaults to the classic preset family and legacy variants", async () => {
   const spec = await normalizeSpec({
     title: "Deck",
     slides: [
@@ -109,6 +125,72 @@ test("normalizeSpec defaults to the classic theme and default variants", async (
   });
 
   assert.equal(spec.theme, "classic");
+  assert.equal(spec.templatePreset, "");
+  assert.equal(spec.activePreset, "classic");
+  assert.deepEqual(
+    spec.slides.map(slide => slide.variant),
+    ["hero-left", "divider", "content-aside", "card"]
+  );
+});
+
+test("normalizeSpec accepts valid template_preset values", async () => {
+  for (const presetName of Object.keys(TEMPLATE_PRESETS)) {
+    const spec = await normalizeSpec({
+      title: `Deck ${presetName}`,
+      template_preset: presetName,
+      slides: [{ type: "title", title: `Deck ${presetName}` }]
+    });
+
+    assert.equal(spec.templatePreset, presetName);
+    assert.equal(spec.activePreset, presetName);
+  }
+});
+
+test("normalizeSpec rejects unknown template_preset values", async () => {
+  await assert.rejects(
+    normalizeSpec({
+      title: "Deck",
+      template_preset: "retro-futurist",
+      slides: [{ type: "title", title: "Deck" }]
+    }),
+    /template_preset must be one of:/
+  );
+});
+
+test("template_preset takes precedence over theme", async () => {
+  const spec = await normalizeSpec({
+    title: "Deck",
+    theme: "contrast",
+    template_preset: "pitch-deck",
+    slides: [
+      { type: "title", title: "Deck" },
+      { type: "bullets", title: "Story", bullets: ["One", "Two", "Three", "Four"] },
+      { type: "closing", title: "Done" }
+    ]
+  });
+
+  assert.equal(spec.theme, "contrast");
+  assert.equal(spec.templatePreset, "pitch-deck");
+  assert.equal(spec.activePreset, "pitch-deck");
+  assert.deepEqual(spec.slides.map(slide => slide.variant), ["hero-center", "two-column", "minimal"]);
+  assert.equal(resolveActivePreset({ theme: spec.theme, templatePreset: spec.templatePreset }), "pitch-deck");
+});
+
+test("legacy theme-only specs still normalize correctly", async () => {
+  const spec = await normalizeSpec({
+    title: "Deck",
+    theme: "editorial",
+    slides: [
+      { type: "title", title: "Deck" },
+      { type: "section", title: "Story" },
+      { type: "bullets", title: "Agenda", bullets: ["One", "Two"] },
+      { type: "closing", title: "Questions" }
+    ]
+  });
+
+  assert.equal(spec.theme, "editorial");
+  assert.equal(spec.templatePreset, "");
+  assert.equal(spec.activePreset, "editorial");
   assert.deepEqual(
     spec.slides.map(slide => slide.variant),
     ["hero-left", "divider", "content-aside", "card"]
@@ -154,20 +236,116 @@ test("normalizeSpec rejects two-column bullet slides with aside content", async 
   );
 });
 
-test("defineDefaultMaster applies distinct theme styling", () => {
+test("preset-aware default variants work when variant is omitted", async t => {
+  const tempDir = path.join(WORKSPACE_ROOT, "generated-slides", `preset-defaults-${process.pid}-${Date.now()}`);
+  const imagePath = path.join(tempDir, "tiny.png");
+  await writeTinyPng(imagePath);
+
+  t.after(async () => {
+    await fs.rm(tempDir, { force: true, recursive: true });
+  });
+
+  const consultingSpec = await normalizeSpec({
+    title: "Consulting",
+    template_preset: "consulting-proposal",
+    slides: [
+      { type: "title", title: "Consulting" },
+      { type: "section", title: "Summary" },
+      { type: "bullets", title: "Agenda", bullets: ["One", "Two"], aside_title: "Focus" },
+      { type: "image", title: "Snapshot", image_path: imagePath },
+      { type: "closing", title: "Questions" }
+    ]
+  });
+
+  const academicSpec = await normalizeSpec({
+    title: "Academic",
+    template_preset: "academic",
+    slides: [
+      { type: "title", title: "Academic" },
+      { type: "section", title: "Outline" },
+      { type: "bullets", title: "Findings", bullets: ["One", "Two"] },
+      { type: "image", title: "Figure", image_path: imagePath },
+      { type: "closing", title: "謝謝" }
+    ]
+  });
+
+  const pitchDeckNoAside = await normalizeSpec({
+    title: "Pitch",
+    template_preset: "pitch-deck",
+    slides: [
+      { type: "bullets", title: "Story", bullets: ["One", "Two", "Three", "Four"] }
+    ]
+  });
+
+  const pitchDeckWithAside = await normalizeSpec({
+    title: "Pitch",
+    template_preset: "pitch-deck",
+    slides: [
+      {
+        type: "bullets",
+        title: "Story",
+        bullets: ["One", "Two", "Three", "Four"],
+        aside_title: "Proof",
+        aside_bullets: ["Retention is improving"]
+      }
+    ]
+  });
+
+  assert.deepEqual(
+    consultingSpec.slides.map(slide => slide.variant),
+    ["hero-left", "divider", "content-aside", "image-right", "card"]
+  );
+  assert.deepEqual(
+    academicSpec.slides.map(slide => slide.variant),
+    ["hero-left", "divider", "content-aside", "image-left", "minimal"]
+  );
+  assert.equal(pitchDeckNoAside.slides[0].variant, "two-column");
+  assert.equal(pitchDeckWithAside.slides[0].variant, "content-aside");
+  assert.equal(getDefaultVariantForPreset("pitch-deck", "closing"), "minimal");
+});
+
+test("explicit variants still override preset defaults", async t => {
+  const tempDir = path.join(WORKSPACE_ROOT, "generated-slides", `preset-explicit-${process.pid}-${Date.now()}`);
+  const imagePath = path.join(tempDir, "tiny.png");
+  await writeTinyPng(imagePath);
+
+  t.after(async () => {
+    await fs.rm(tempDir, { force: true, recursive: true });
+  });
+
+  const spec = await normalizeSpec({
+    title: "Pitch Override",
+    template_preset: "pitch-deck",
+    slides: [
+      { type: "title", title: "Pitch Override", variant: "hero-left" },
+      { type: "section", title: "Plan", variant: "divider" },
+      { type: "bullets", title: "Story", variant: "content-aside", bullets: ["One", "Two"] },
+      { type: "image", title: "Mockup", variant: "image-left", image_path: imagePath },
+      { type: "closing", title: "Done", variant: "card" }
+    ]
+  });
+
+  assert.deepEqual(
+    spec.slides.map(slide => slide.variant),
+    ["hero-left", "divider", "content-aside", "image-left", "card"]
+  );
+});
+
+test("defineDefaultMaster applies distinct preset styling", () => {
   const classic = { defineSlideMaster(config) { this.master = config; } };
-  const editorial = { defineSlideMaster(config) { this.master = config; } };
-  const contrast = { defineSlideMaster(config) { this.master = config; } };
+  const consulting = { defineSlideMaster(config) { this.master = config; } };
+  const pitch = { defineSlideMaster(config) { this.master = config; } };
 
   defineDefaultMaster(classic, WIDE_METRICS, "classic");
-  defineDefaultMaster(editorial, WIDE_METRICS, "editorial");
-  defineDefaultMaster(contrast, WIDE_METRICS, "contrast");
+  defineDefaultMaster(consulting, WIDE_METRICS, "consulting-proposal");
+  defineDefaultMaster(pitch, WIDE_METRICS, "pitch-deck");
 
   assert.equal(classic.master.background.color, "F7F4EE");
-  assert.equal(editorial.master.background.color, "F4F7FB");
-  assert.equal(contrast.master.background.color, "0E1520");
-  assert.notEqual(classic.master.slideNumber.color, editorial.master.slideNumber.color);
-  assert.notDeepEqual(editorial.master.objects, contrast.master.objects);
+  assert.equal(consulting.master.background.color, "F7F9FC");
+  assert.equal(pitch.master.background.color, "FFF7F0");
+  assert.notEqual(classic.master.slideNumber.color, consulting.master.slideNumber.color);
+  assert.notDeepEqual(consulting.master.objects, pitch.master.objects);
+  assert.equal(getPreset("consulting-proposal").fonts.title, "Aptos Display");
 });
 
 test("renderTitleSlide changes geometry for hero-center", () => {
@@ -279,7 +457,7 @@ test("renderClosingSlide omits the deck subtitle when the closing slide has none
   renderClosingSlide(
     slide,
     createSlide("closing", { variant: "card", title: "Questions", subtitle: "" }),
-    createDeckSpec({ subtitle: "Q2 2026", theme: "classic", lang: "en" }),
+    createDeckSpec({ subtitle: "Q2 2026", theme: "classic", activePreset: "classic", lang: "en" }),
     WIDE_METRICS
   );
 
@@ -289,7 +467,7 @@ test("renderClosingSlide omits the deck subtitle when the closing slide has none
 test("renderClosingSlide minimal variant removes the filled card treatment", () => {
   const cardSlide = createRecordingSlide();
   const minimalSlide = createRecordingSlide();
-  const deckSpec = createDeckSpec({ theme: "contrast" });
+  const deckSpec = createDeckSpec({ theme: "contrast", activePreset: "contrast" });
   const cardSpec = createSlide("closing", { variant: "card", title: "Questions", subtitle: "Discuss next steps" });
   const minimalSpec = createSlide("closing", { variant: "minimal", title: "Questions", subtitle: "Discuss next steps" });
 
@@ -314,41 +492,41 @@ test("buildDensityWarnings ignores the deck subtitle for closing slides", () => 
   assert.equal(warnings.some(warning => warning.includes("closing subtitle")), false);
 });
 
-test("buildPresentation writes decks for each supported theme", async t => {
+test("buildPresentation writes decks for a subset of presets", async t => {
   const pptxModule = await import("pptxgenjs");
   const PptxGenJS = pptxModule.default || pptxModule;
-  const outputDir = path.join(WORKSPACE_ROOT, "generated-slides", `theme-smoke-${process.pid}-${Date.now()}`);
+  const outputDir = path.join(WORKSPACE_ROOT, "generated-slides", `preset-smoke-${process.pid}-${Date.now()}`);
 
   await fs.mkdir(outputDir, { recursive: true });
   t.after(async () => {
     await fs.rm(outputDir, { force: true, recursive: true });
   });
 
-  for (const theme of ["classic", "editorial", "contrast"]) {
-    const outputPath = path.join(outputDir, `${theme}.pptx`);
-    const presentation = buildPresentation(
-      PptxGenJS,
-      createDeckSpec({
-        title: `Smoke ${theme}`,
-        theme,
-        outputPath,
+  const presetsToTest = [
+    { name: "classic", raw: { theme: "classic" } },
+    { name: "consulting-proposal", raw: { template_preset: "consulting-proposal" } },
+    { name: "pitch-deck", raw: { template_preset: "pitch-deck" } },
+    { name: "project-kickoff", raw: { template_preset: "project-kickoff" } }
+  ];
+
+  for (const entry of presetsToTest) {
+    const outputPath = path.join(outputDir, `${entry.name}.pptx`);
+    const spec = await normalizeSpec(
+      {
+        title: `Smoke ${entry.name}`,
+        subtitle: "Preset validation",
+        ...entry.raw,
         slides: [
-          createSlide("title", {
-            variant: theme === "classic" ? "hero-left" : "hero-center",
-            title: `Smoke ${theme}`,
-            subtitle: "Theme validation",
-            kicker: "Theme",
-            byline: ""
-          }),
-          createSlide("closing", {
-            variant: theme === "contrast" ? "minimal" : "card",
-            title: "Done",
-            subtitle: "Validation complete"
-          })
+          { type: "title", title: `Smoke ${entry.name}` },
+          { type: "section", title: "Story", subtitle: "Preset defaults" },
+          { type: "bullets", title: "Highlights", bullets: ["One", "Two", "Three", "Four"] },
+          { type: "closing", title: "Done", subtitle: "Validation complete" }
         ]
-      })
+      },
+      outputPath
     );
 
+    const presentation = buildPresentation(PptxGenJS, spec);
     await presentation.writeFile({ fileName: outputPath });
 
     const stats = await fs.stat(outputPath);

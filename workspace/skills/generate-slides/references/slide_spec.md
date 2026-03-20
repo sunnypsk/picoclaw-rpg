@@ -7,25 +7,25 @@ Use this reference when building the JSON input for
 
 ```json
 {
-  "title": "Quarterly Product Update",
-  "subtitle": "Q2 2026",
-  "filename": "quarterly-product-update",
+  "title": "Client Growth Plan",
+  "subtitle": "Q2 2026 proposal",
+  "filename": "client-growth-plan",
   "layout": "wide",
-  "theme": "editorial",
+  "template_preset": "consulting-proposal",
   "lang": "en-US",
   "author": "Picoclaw",
   "company": "Example Co",
-  "subject": "Quarterly business review",
-  "notes": "Open with the topline story, then pause for questions after the risks slide.",
+  "subject": "Client growth proposal",
+  "notes": "Open with the executive summary, then pause before the recommendation slide.",
   "sources": [
-    "Finance dashboard export - 2026-07-01",
-    "Product analytics weekly summary - 2026-06-30"
+    "CRM export - 2026-07-01",
+    "Quarterly pipeline review - 2026-06-30"
   ],
   "slides": [
     {
       "type": "title",
-      "title": "Quarterly Product Update",
-      "subtitle": "Q2 2026"
+      "title": "Client Growth Plan",
+      "subtitle": "Q2 2026 proposal"
     }
   ]
 }
@@ -35,21 +35,34 @@ Use this reference when building the JSON input for
 - `subtitle`: optional string
 - `filename`: optional output filename stem; `.pptx` is added automatically
 - `layout`: optional `"wide"` or `"standard"`; defaults to `"wide"`
-- `theme`: optional `"classic"`, `"editorial"`, or `"contrast"`; defaults to `"classic"`
+- `template_preset`: optional preset family selector. Supported values:
+  `"classic"`, `"editorial"`, `"contrast"`, `"academic"`, `"brand-design"`,
+  `"consulting-proposal"`, `"market-research"`, `"pitch-deck"`, `"project-kickoff"`
+- `theme`: optional legacy alias for `"classic"`, `"editorial"`, or `"contrast"`
 - `lang`: optional language tag such as `"en-US"` or `"zh-TW"`; applied to slide text
 - `author`, `company`, `subject`: optional metadata strings
 - `notes`: optional deck-level speaker notes
 - `sources`: optional deck-level source strings
 - `slides`: required array with one or more supported slide objects
 
-Deck-level `notes` and `sources` are merged into every slide's speaker notes. Slide-level `notes` and `sources` are appended after deck-level content.
+Precedence rules:
+- If `template_preset` is present, it overrides `theme`.
+- If `template_preset` is omitted, the generator uses `theme`.
+- If both are omitted, the generator falls back to the legacy `classic` family.
+
+Deck-level `notes` and `sources` are merged into every slide's speaker notes.
+Slide-level `notes` and `sources` are appended after deck-level content.
 
 ## Supported slide types
 
 All slide types below also accept these optional fields:
 - `notes`: slide-level speaker notes
 - `sources`: slide-level source strings
-- `variant`: optional layout variant for that slide type; defaults are listed below
+- `variant`: optional layout variant for that slide type; explicit variants always override preset defaults
+
+When `variant` is omitted, the generator chooses a preset-aware default.
+For legacy theme-only specs and the `classic`, `editorial`, and `contrast`
+families, those defaults remain the same as before.
 
 ### `title`
 
@@ -60,17 +73,17 @@ All slide types below also accept these optional fields:
   "title": "Quarterly Product Update",
   "subtitle": "Q2 2026",
   "kicker": "Board Review",
-  "byline": "Prepared by Product and Finance",
-  "notes": "Use this slide to set context and expected outcomes.",
-  "sources": [
-    "Board packet draft - 2026-06-28"
-  ]
+  "byline": "Prepared by Product and Finance"
 }
 ```
 
 - `title`: required
-- `variant`: optional `"hero-left"` or `"hero-center"`; defaults to `"hero-left"`
+- `variant`: optional `"hero-left"` or `"hero-center"`
 - `subtitle`, `kicker`, `byline`: optional
+
+Common defaults:
+- `hero-left`: `classic`, `editorial`, `contrast`, `academic`, `consulting-proposal`, `project-kickoff`
+- `hero-center`: `brand-design`, `pitch-deck`
 
 ### `section`
 
@@ -79,14 +92,17 @@ All slide types below also accept these optional fields:
   "type": "section",
   "variant": "statement",
   "title": "Wins and Risks",
-  "subtitle": "What changed this quarter",
-  "notes": "Pause here before moving into the next detail slide."
+  "subtitle": "What changed this quarter"
 }
 ```
 
 - `title`: required
-- `variant`: optional `"divider"` or `"statement"`; defaults to `"divider"`
+- `variant`: optional `"divider"` or `"statement"`
 - `subtitle`: optional
+
+Common defaults:
+- `divider`: most families
+- `statement`: `brand-design`, `pitch-deck`
 
 ### `bullets`
 
@@ -106,22 +122,20 @@ All slide types below also accept these optional fields:
   "aside_bullets": [
     "Hiring remains behind plan",
     "Renewal timing is still lumpy"
-  ],
-  "notes": "Spend more time on the enterprise pipeline if the audience is sales-heavy.",
-  "sources": [
-    "Revenue workbook v3",
-    "Hiring tracker - June"
   ]
 }
 ```
 
 - `title`: required
-- `variant`: optional `"content-aside"` or `"two-column"`; defaults to `"content-aside"`
+- `variant`: optional `"content-aside"` or `"two-column"`
 - `bullets`: required non-empty array of strings
 - `body`, `aside_title`, `aside_body`: optional strings
 - `aside_bullets`: optional array of strings
 
-Use `variant: "two-column"` only when `aside_title`, `aside_body`, and `aside_bullets` are all omitted.
+Notes:
+- `content-aside` remains the general default for most presets.
+- `pitch-deck` may default to `"two-column"` when no aside content is present and the main bullet list is story-like enough for a split layout.
+- Use `variant: "two-column"` only when `aside_title`, `aside_body`, and `aside_bullets` are all omitted.
 
 ### `image`
 
@@ -137,22 +151,23 @@ Use `variant: "two-column"` only when `aside_title`, `aside_body`, and `aside_bu
     "One-tap repeat purchase",
     "Clearer delivery timing",
     "Fewer abandoned carts in user tests"
-  ],
-  "notes": "Call out the new navigation affordance in the top right.",
-  "sources": [
-    "Prototype v17 screenshot"
   ]
 }
 ```
 
 - `title`: required
-- `variant`: optional `"image-left"` or `"image-right"`; defaults to `"image-left"`
+- `variant`: optional `"image-left"` or `"image-right"`
 - `image_path`: required local file path
 - `image_fit`: optional `"cover"` or `"contain"`; defaults to `"cover"`
 - `caption`: optional string
 - `bullets`: optional array of strings
 
-Use `image_fit: "contain"` for screenshots, charts, and UI mockups that should not be cropped.
+Common defaults:
+- `image-left`: `classic`, `editorial`, `contrast`, `academic`
+- `image-right`: `brand-design`, `consulting-proposal`, `market-research`, `pitch-deck`, `project-kickoff`
+
+Use `image_fit: "contain"` for screenshots, charts, and UI mockups that should
+not be cropped.
 
 ### `closing`
 
@@ -161,16 +176,121 @@ Use `image_fit: "contain"` for screenshots, charts, and UI mockups that should n
   "type": "closing",
   "variant": "minimal",
   "title": "Thank You",
-  "subtitle": "Questions and discussion",
-  "notes": "Hold here for open discussion."
+  "subtitle": "Questions and discussion"
 }
 ```
 
 - `title`: required
-- `variant`: optional `"card"` or `"minimal"`; defaults to `"card"`
+- `variant`: optional `"card"` or `"minimal"`
 - `subtitle`: optional
 
-## Full English example
+Common defaults:
+- `card`: `classic`, `editorial`, `contrast`, `consulting-proposal`
+- `minimal`: `academic`, `brand-design`, `market-research`, `pitch-deck`, `project-kickoff`
+
+## Example using `template_preset: "consulting-proposal"`
+
+```json
+{
+  "title": "Client Growth Plan",
+  "subtitle": "Q2 2026 proposal",
+  "filename": "client-growth-plan",
+  "layout": "wide",
+  "template_preset": "consulting-proposal",
+  "lang": "en-US",
+  "author": "Picoclaw",
+  "company": "Example Co",
+  "subject": "Client growth proposal",
+  "notes": "Lead with the recommendation, then support it with the operating facts.",
+  "sources": [
+    "CRM export - 2026-07-01",
+    "Quarterly pipeline review - 2026-06-30"
+  ],
+  "slides": [
+    {
+      "type": "title",
+      "title": "Client Growth Plan",
+      "subtitle": "Q2 2026 proposal",
+      "kicker": "Executive Summary",
+      "byline": "Strategy and Operations"
+    },
+    {
+      "type": "section",
+      "title": "What We Recommend",
+      "subtitle": "A focused plan to increase pipeline efficiency"
+    },
+    {
+      "type": "bullets",
+      "title": "Three moves for the next quarter",
+      "body": "The proposal concentrates resources on the highest-conversion segments.",
+      "bullets": [
+        "Rebalance spend toward higher-yield partner channels",
+        "Tighten follow-up SLAs for mid-market opportunities",
+        "Standardize the executive escalation path for late-stage deals"
+      ],
+      "aside_title": "Impact",
+      "aside_bullets": [
+        "Higher qualified pipeline coverage",
+        "Better forecast confidence",
+        "Clearer ownership by team"
+      ]
+    },
+    {
+      "type": "closing",
+      "title": "Questions",
+      "subtitle": "Decision points and next steps"
+    }
+  ]
+}
+```
+
+## Example using `template_preset: "pitch-deck"`
+
+```json
+{
+  "title": "Why This Market Opens Now",
+  "subtitle": "Seed narrative - 2026",
+  "filename": "why-this-market-opens-now",
+  "layout": "wide",
+  "template_preset": "pitch-deck",
+  "lang": "en-US",
+  "author": "Picoclaw",
+  "notes": "Keep the pace fast and the copy concise.",
+  "slides": [
+    {
+      "type": "title",
+      "title": "Why This Market Opens Now",
+      "subtitle": "Seed narrative - 2026",
+      "kicker": "Fundraising Story",
+      "byline": "Founding Team"
+    },
+    {
+      "type": "section",
+      "title": "The old workflow is breaking",
+      "subtitle": "Teams are stitching together too many tools"
+    },
+    {
+      "type": "bullets",
+      "title": "Three signals we can build on",
+      "bullets": [
+        "AI adoption is shifting buyer expectations",
+        "Category incumbents are still workflow-fragmented",
+        "The distribution channel is already consolidating",
+        "Design partners are asking for end-to-end automation"
+      ]
+    },
+    {
+      "type": "closing",
+      "title": "We're building the default operating layer",
+      "subtitle": "Questions, product demo, and next steps"
+    }
+  ]
+}
+```
+
+## Legacy theme example
+
+This remains valid for backward compatibility:
 
 ```json
 {
@@ -201,8 +321,7 @@ Use `image_fit: "contain"` for screenshots, charts, and UI mockups that should n
       "type": "section",
       "variant": "statement",
       "title": "Topline Story",
-      "subtitle": "What moved, what stalled, what changed",
-      "notes": "Set up the next two slides as proof points."
+      "subtitle": "What moved, what stalled, what changed"
     },
     {
       "type": "bullets",
@@ -213,24 +332,7 @@ Use `image_fit: "contain"` for screenshots, charts, and UI mockups that should n
         "Revenue grew 22% year over year",
         "Activation improved after onboarding changes",
         "The enterprise pipeline doubled"
-      ],
-      "sources": [
-        "Q2 revenue workbook",
-        "Sales pipeline snapshot - 2026-06-29"
       ]
-    },
-    {
-      "type": "image",
-      "variant": "image-right",
-      "title": "Prototype Snapshot",
-      "image_path": "workspace/assets/prototype.png",
-      "image_fit": "contain",
-      "caption": "The checkout redesign tested best with repeat buyers.",
-      "bullets": [
-        "The CTA moved above the fold",
-        "Price transparency improved trust"
-      ],
-      "notes": "Contain mode keeps the screenshot readable without cropping."
     },
     {
       "type": "closing",
@@ -242,49 +344,54 @@ Use `image_fit: "contain"` for screenshots, charts, and UI mockups that should n
 }
 ```
 
-## Traditional Chinese example
+## Traditional Chinese example using `template_preset: "project-kickoff"`
 
 ```json
 {
-  "title": "產品季度更新",
+  "title": "專案啟動簡報",
   "subtitle": "2026 年第二季",
-  "filename": "產品季度更新",
+  "filename": "專案啟動簡報",
   "layout": "wide",
+  "template_preset": "project-kickoff",
   "lang": "zh-TW",
   "author": "Picoclaw",
-  "notes": "先講結論，再進入風險與下季需求。",
+  "notes": "先對齊目標與分工，再進入風險與里程碑。",
   "sources": [
-    "營運儀表板匯出 - 2026-07-01",
-    "產品分析週報 - 2026-06-30"
+    "啟動會議紀要 - 2026-07-01",
+    "專案排程草案 - 2026-06-30"
   ],
   "slides": [
     {
       "type": "title",
-      "title": "產品季度更新",
+      "title": "專案啟動簡報",
       "subtitle": "2026 年第二季",
-      "kicker": "董事會簡報",
-      "byline": "產品與營運團隊"
+      "kicker": "跨部門協作",
+      "byline": "產品、工程與營運團隊"
+    },
+    {
+      "type": "section",
+      "title": "本次啟動要對齊什麼",
+      "subtitle": "目標、時程、責任分工"
     },
     {
       "type": "bullets",
-      "title": "本季重點",
-      "body": "本季成長主要來自新手引導優化與企業客戶需求增加。",
+      "title": "本週重點",
+      "body": "先把決策節點、交付物與風險窗口講清楚。",
       "bullets": [
-        "營收年增 22%",
-        "新手引導調整後啟動率提升",
-        "企業管道數量翻倍"
+        "確認專案範圍與成功指標",
+        "鎖定第一階段里程碑與依賴項",
+        "建立例會節奏與升級機制"
       ],
-      "aside_title": "注意事項",
+      "aside_title": "協作提醒",
       "aside_bullets": [
-        "招募進度仍落後計畫",
-        "續約時程仍有波動"
-      ],
-      "notes": "若觀眾偏商務團隊，可多講企業客戶管道的來源。"
+        "需求變更需同步 PM 與 Tech Lead",
+        "跨部門阻塞超過兩天即升級"
+      ]
     },
     {
       "type": "closing",
       "title": "謝謝",
-      "subtitle": "歡迎提問"
+      "subtitle": "接下來進入 Q&A 與分工確認"
     }
   ]
 }

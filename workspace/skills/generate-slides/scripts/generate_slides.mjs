@@ -387,6 +387,1168 @@ const TEXT_ROLES = {
   }
 };
 
+const LEGACY_THEME_NAMES = Object.freeze(Object.keys(THEMES));
+const BASE_LAYOUT_TOKENS = {
+  content: {
+    slideTitleMargin: 0.75,
+    slideTitleY: 0.42,
+    slideTitleHeight: 0.65,
+    slideTitleAccentHeight: 0,
+    slideTitleAccentWidthWide: 1.05,
+    slideTitleAccentWidthStandard: 0.85,
+    slideTitleAccentGap: 0.06,
+    slideTitleAccentAlign: "left",
+    slideTitleAccentInset: 0,
+    slideTitleAccentColorKey: "accent"
+  },
+  panel: {
+    fillColorKey: "surface",
+    lineColorKey: "border",
+    lineWidth: 1,
+    accentBarHeight: 0,
+    accentBarInset: 0,
+    accentBarPosition: "top",
+    accentBarColorKey: "accent",
+    edgeBarWidth: 0,
+    edgeBarInset: 0,
+    edgeBarPosition: "left",
+    edgeBarColorKey: "accentDark"
+  },
+  title: {
+    heroLeft: {
+      margin: 0.8,
+      kickerY: 1.0,
+      kickerWidthWide: 2.45,
+      kickerWidthStandard: 2.2,
+      kickerHeight: 0.44,
+      kickerFillColorKey: "accentDark",
+      kickerTextColor: "FFFFFF",
+      titleY: 1.7,
+      titleHeight: 1.45,
+      titleColorKey: "text",
+      subtitleY: 3.25,
+      subtitleWidthFactor: 0.86,
+      subtitleHeight: 1.1,
+      subtitleColorKey: "muted",
+      bylineY: 5.95,
+      bylineHeight: 0.55,
+      bylineColorKey: "muted"
+    },
+    heroCenter: {
+      pillWidthWide: 2.65,
+      pillWidthStandard: 2.3,
+      blockWidthWide: 9.2,
+      blockWidthStandard: 7.4,
+      kickerY: 1.08,
+      kickerHeight: 0.42,
+      kickerFillColorKey: "accentDark",
+      kickerTextColor: "FFFFFF",
+      titleY: 1.82,
+      titleHeight: 1.45,
+      titleColorKey: "text",
+      subtitleInset: 0.24,
+      subtitleY: 3.34,
+      subtitleHeight: 1.0,
+      subtitleColorKey: "muted",
+      bylineY: 5.92,
+      bylineHeight: 0.5,
+      bylineColorKey: "muted"
+    }
+  },
+  section: {
+    divider: {
+      margin: 0.85,
+      labelText: "SECTION",
+      labelY: 1.0,
+      labelWidth: 1.6,
+      labelHeight: 0.28,
+      labelColorKey: "accentDark",
+      titleY: 1.9,
+      titleHeight: 1.55,
+      titleColorKey: "text",
+      subtitleY: 3.7,
+      subtitleWidthFactor: 0.82,
+      subtitleHeight: 0.95,
+      subtitleColorKey: "muted"
+    },
+    statement: {
+      barWidthWide: 1.35,
+      barWidthStandard: 1.1,
+      barY: 1.55,
+      barHeight: 0.06,
+      barColorKey: "accent",
+      blockWidthWide: 9.15,
+      blockWidthStandard: 7.2,
+      titleY: 2.0,
+      titleHeight: 1.45,
+      titleColorKey: "text",
+      subtitleInset: 0.18,
+      subtitleY: 3.74,
+      subtitleHeight: 0.9,
+      subtitleColorKey: "muted"
+    }
+  },
+  bullets: {
+    contentAside: {
+      margin: 0.75,
+      top: 1.3,
+      height: 5.2,
+      gap: 0.35,
+      rightWidthWide: 3.55,
+      rightWidthStandard: 2.85,
+      bodyHeight: 0.72,
+      bodyGap: 0.14,
+      bodyColorKey: "muted",
+      bulletsColorKey: "text",
+      bulletsIndent: 20,
+      panelPaddingX: 0.16,
+      panelInsetY: 0.14,
+      asideTitleHeight: 0.26,
+      asideTitleGap: 0.34,
+      asideTitleColorKey: "accentDark",
+      asideBodyHeightWithBullets: 0.82,
+      asideBodyColorKey: "text",
+      panelBulletInsetX: 0.1,
+      panelBulletIndent: 14,
+      panelBottomPad: 0.12
+    },
+    twoColumn: {
+      margin: 0.75,
+      top: 1.3,
+      height: 5.2,
+      gap: 0.42,
+      bodyHeight: 0.72,
+      bodyGap: 0.18,
+      bodyColorKey: "muted",
+      bulletsColorKey: "text",
+      bulletsIndent: 18,
+      dividerWidth: 0.02,
+      dividerInsetY: 0.08,
+      dividerColorKey: "border"
+    }
+  },
+  image: {
+    margin: 0.75,
+    gap: 0.38,
+    top: 1.3,
+    height: 5.2,
+    imageWidthWide: 7.45,
+    imageWidthStandard: 5.55,
+    captionColorKey: "text",
+    panelPaddingX: 0.16,
+    panelTopInset: 0.18,
+    captionHeightWithBullets: 1.15,
+    bulletsColorKey: "text",
+    panelBulletInsetX: 0.1,
+    panelBulletIndent: 16,
+    panelBottomPad: 0.12
+  },
+  closing: {
+    card: {
+      blockWidthWide: 8.9,
+      blockWidthStandard: 7.4,
+      titleY: 2.1,
+      titleHeight: 1.15,
+      titleFillColorKey: "accentDark",
+      titleColor: "FFFFFF",
+      subtitleY: 3.55,
+      subtitleHeight: 0.9,
+      subtitleColorKey: "muted"
+    },
+    minimal: {
+      barWidthWide: 1.6,
+      barWidthStandard: 1.35,
+      barY: 2.18,
+      barHeight: 0.06,
+      barColorKey: "accent",
+      blockWidthWide: 8.7,
+      blockWidthStandard: 7.1,
+      titleY: 2.55,
+      titleHeight: 0.95,
+      titleColorKey: "text",
+      subtitleInset: 0.12,
+      subtitleY: 3.7,
+      subtitleHeight: 0.78,
+      subtitleColorKey: "muted"
+    }
+  }
+};
+const TEMPLATE_PRESETS = Object.freeze({
+  classic: createPreset({
+    ...THEMES.classic
+  }),
+  editorial: createPreset({
+    ...THEMES.editorial
+  }),
+  contrast: createPreset({
+    ...THEMES.contrast
+  }),
+  academic: createPreset({
+    fonts: {
+      title: "Cambria",
+      body: "Aptos"
+    },
+    palette: {
+      background: "F6F5F1",
+      surface: "FBFAF7",
+      text: "1F2630",
+      muted: "66727F",
+      accent: "7A8C7F",
+      accentDark: "4F6255",
+      border: "CBD2CD"
+    },
+    defaultVariants: {
+      closing: "minimal"
+    },
+    layoutTokens: {
+      content: {
+        slideTitleMargin: 0.68,
+        slideTitleY: 0.48,
+        slideTitleHeight: 0.58,
+        slideTitleAccentHeight: 0.04,
+        slideTitleAccentWidthWide: 0.92,
+        slideTitleAccentWidthStandard: 0.78,
+        slideTitleAccentGap: 0.08,
+        slideTitleAccentColorKey: "accentDark"
+      },
+      title: {
+        heroLeft: {
+          margin: 0.72,
+          kickerY: 0.92,
+          kickerWidthWide: 2.2,
+          kickerWidthStandard: 2.0,
+          titleY: 1.5,
+          titleHeight: 1.38,
+          subtitleY: 3.0,
+          subtitleWidthFactor: 0.78,
+          subtitleHeight: 1.2,
+          bylineY: 6.05
+        }
+      },
+      section: {
+        divider: {
+          margin: 0.74,
+          labelY: 0.95,
+          labelWidth: 1.8,
+          titleY: 1.75,
+          titleHeight: 1.45,
+          subtitleY: 3.55,
+          subtitleWidthFactor: 0.78
+        }
+      },
+      bullets: {
+        contentAside: {
+          margin: 0.68,
+          top: 1.25,
+          height: 5.35,
+          gap: 0.28,
+          rightWidthWide: 3.2,
+          rightWidthStandard: 2.7,
+          bodyHeight: 0.82,
+          bodyGap: 0.12,
+          panelPaddingX: 0.18,
+          panelInsetY: 0.18,
+          asideBodyHeightWithBullets: 1.05
+        },
+        twoColumn: {
+          margin: 0.68,
+          top: 1.25,
+          height: 5.35,
+          gap: 0.34,
+          bodyHeight: 0.82,
+          bodyGap: 0.14
+        }
+      },
+      image: {
+        margin: 0.68,
+        gap: 0.28,
+        top: 1.25,
+        height: 5.35,
+        imageWidthWide: 7.1,
+        imageWidthStandard: 5.3,
+        captionHeightWithBullets: 1.35
+      },
+      closing: {
+        minimal: {
+          barWidthWide: 1.1,
+          barWidthStandard: 0.95,
+          barY: 2.24,
+          titleY: 2.48,
+          titleHeight: 0.98,
+          subtitleY: 3.62
+        }
+      }
+    },
+    textRoleOverrides: {
+      heroTitle: { wide: 28, standard: 24, min: 18 },
+      heroSubtitle: { wide: 17, standard: 15 },
+      sectionTitle: { wide: 30, standard: 26 },
+      slideTitle: { wide: 20, standard: 18 },
+      body: { wide: 14, standard: 13 },
+      bullets: { wide: 18, standard: 16 },
+      asideBody: { wide: 12, standard: 11 },
+      closingTitle: { wide: 24, standard: 21 }
+    },
+    master: {
+      objects(metrics, palette) {
+        return [
+          {
+            rect: {
+              x: 0,
+              y: 0,
+              w: metrics.width,
+              h: 0.08,
+              line: { color: palette.accentDark, width: 1 },
+              fill: { color: palette.accentDark }
+            }
+          },
+          {
+            line: {
+              x: 0.68,
+              y: 1.0,
+              w: metrics.width - 1.36,
+              h: 0,
+              line: { color: palette.border, width: 1 }
+            }
+          },
+          {
+            line: {
+              x: 0.68,
+              y: 6.92,
+              w: metrics.width - 1.36,
+              h: 0,
+              line: { color: palette.border, width: 1 }
+            }
+          }
+        ];
+      },
+      slideNumber(metrics, fonts, palette) {
+        return {
+          x: metrics.width - 0.88,
+          y: 7.0,
+          w: 0.38,
+          h: 0.2,
+          fontFace: fonts.body,
+          fontSize: 9,
+          color: palette.muted,
+          align: "right"
+        };
+      }
+    }
+  }),
+  "brand-design": createPreset({
+    fonts: {
+      title: "Bahnschrift",
+      body: "Aptos"
+    },
+    palette: {
+      background: "FFF7F2",
+      surface: "FFFFFF",
+      text: "231815",
+      muted: "7C6558",
+      accent: "F05A28",
+      accentDark: "8C2E16",
+      border: "F0C9BA"
+    },
+    defaultVariants: {
+      title: "hero-center",
+      section: "statement",
+      image: "image-right",
+      closing: "minimal"
+    },
+    layoutTokens: {
+      content: {
+        slideTitleMargin: 0.82,
+        slideTitleY: 0.52,
+        slideTitleAccentHeight: 0.07,
+        slideTitleAccentWidthWide: 1.35,
+        slideTitleAccentWidthStandard: 1.1,
+        slideTitleAccentGap: 0.08
+      },
+      panel: {
+        lineColorKey: "accent",
+        lineWidth: 1.5,
+        edgeBarWidth: 0.12,
+        edgeBarPosition: "left",
+        edgeBarColorKey: "accentDark"
+      },
+      title: {
+        heroCenter: {
+          pillWidthWide: 2.95,
+          pillWidthStandard: 2.6,
+          blockWidthWide: 9.6,
+          blockWidthStandard: 7.7,
+          kickerY: 1.02,
+          titleY: 1.72,
+          titleHeight: 1.62,
+          subtitleY: 3.48,
+          subtitleHeight: 1.0,
+          bylineY: 6.0
+        }
+      },
+      section: {
+        statement: {
+          barWidthWide: 1.8,
+          barWidthStandard: 1.45,
+          barY: 1.45,
+          titleY: 1.95,
+          titleHeight: 1.55,
+          subtitleY: 3.82
+        }
+      },
+      bullets: {
+        contentAside: {
+          margin: 0.82,
+          top: 1.42,
+          height: 4.95,
+          gap: 0.45,
+          rightWidthWide: 3.7,
+          rightWidthStandard: 3.0,
+          bodyHeight: 0.64,
+          bodyGap: 0.18
+        },
+        twoColumn: {
+          margin: 0.82,
+          top: 1.42,
+          height: 4.95,
+          gap: 0.56,
+          bodyHeight: 0.64,
+          bodyGap: 0.2,
+          dividerWidth: 0.04
+        }
+      },
+      image: {
+        margin: 0.82,
+        gap: 0.44,
+        top: 1.42,
+        height: 4.95,
+        imageWidthWide: 7.7,
+        imageWidthStandard: 5.7,
+        captionHeightWithBullets: 1.05
+      },
+      closing: {
+        minimal: {
+          barWidthWide: 2.1,
+          barWidthStandard: 1.75,
+          barY: 2.08,
+          titleY: 2.45,
+          titleHeight: 1.05,
+          subtitleY: 3.72
+        }
+      }
+    },
+    textRoleOverrides: {
+      heroTitle: { wide: 34, standard: 30 },
+      heroSubtitle: { wide: 17, standard: 15 },
+      sectionTitle: { wide: 34, standard: 30 },
+      slideTitle: { wide: 25, standard: 22 },
+      bullets: { wide: 19, standard: 17 },
+      closingTitle: { wide: 28, standard: 24 }
+    },
+    master: {
+      objects(metrics, palette) {
+        return [
+          {
+            rect: {
+              x: 0,
+              y: 0,
+              w: 4.25,
+              h: 0.2,
+              line: { color: palette.accent, width: 1 },
+              fill: { color: palette.accent }
+            }
+          },
+          {
+            rect: {
+              x: metrics.width - 0.36,
+              y: 0.85,
+              w: 0.36,
+              h: 5.95,
+              line: { color: palette.accentDark, width: 1 },
+              fill: { color: palette.accentDark }
+            }
+          },
+          {
+            line: {
+              x: 0.82,
+              y: 6.92,
+              w: metrics.width - 1.64,
+              h: 0,
+              line: { color: palette.border, width: 1 }
+            }
+          }
+        ];
+      },
+      slideNumber(metrics, fonts, palette) {
+        return {
+          x: metrics.width - 1.05,
+          y: 7.0,
+          w: 0.55,
+          h: 0.2,
+          fontFace: fonts.body,
+          fontSize: 9,
+          color: palette.accentDark,
+          align: "right"
+        };
+      }
+    }
+  }),
+  "consulting-proposal": createPreset({
+    fonts: {
+      title: "Aptos Display",
+      body: "Aptos"
+    },
+    palette: {
+      background: "F7F9FC",
+      surface: "FFFFFF",
+      text: "182431",
+      muted: "5E6C7A",
+      accent: "2B6CB0",
+      accentDark: "1E4A75",
+      border: "CFD8E3"
+    },
+    defaultVariants: {
+      title: "hero-left",
+      section: "divider",
+      bullets: "content-aside",
+      image: "image-right",
+      closing: "card"
+    },
+    layoutTokens: {
+      content: {
+        slideTitleMargin: 0.72,
+        slideTitleY: 0.46,
+        slideTitleHeight: 0.58,
+        slideTitleAccentHeight: 0.04,
+        slideTitleAccentWidthWide: 1.0,
+        slideTitleAccentWidthStandard: 0.82,
+        slideTitleAccentGap: 0.06
+      },
+      panel: {
+        accentBarHeight: 0.06,
+        accentBarInset: 0.12,
+        accentBarColorKey: "accent",
+        edgeBarWidth: 0.08,
+        edgeBarPosition: "left",
+        edgeBarColorKey: "accentDark"
+      },
+      title: {
+        heroLeft: {
+          margin: 0.74,
+          kickerY: 0.98,
+          kickerWidthWide: 2.35,
+          kickerWidthStandard: 2.1,
+          titleY: 1.58,
+          titleHeight: 1.35,
+          subtitleY: 3.08,
+          subtitleWidthFactor: 0.8,
+          bylineY: 6.02
+        }
+      },
+      section: {
+        divider: {
+          margin: 0.78,
+          labelY: 1.02,
+          labelWidth: 1.8,
+          titleY: 1.82,
+          titleHeight: 1.42,
+          subtitleY: 3.55,
+          subtitleWidthFactor: 0.76
+        }
+      },
+      bullets: {
+        contentAside: {
+          margin: 0.72,
+          top: 1.28,
+          height: 5.18,
+          gap: 0.32,
+          rightWidthWide: 3.4,
+          rightWidthStandard: 2.8,
+          bodyHeight: 0.66,
+          bodyGap: 0.14
+        }
+      },
+      image: {
+        margin: 0.72,
+        gap: 0.32,
+        top: 1.28,
+        height: 5.18,
+        imageWidthWide: 7.2,
+        imageWidthStandard: 5.35,
+        captionHeightWithBullets: 1.0
+      },
+      closing: {
+        card: {
+          blockWidthWide: 9.1,
+          blockWidthStandard: 7.55,
+          titleY: 2.06,
+          titleHeight: 1.05,
+          subtitleY: 3.38,
+          subtitleHeight: 0.88
+        }
+      }
+    },
+    textRoleOverrides: {
+      heroTitle: { wide: 29, standard: 25 },
+      sectionTitle: { wide: 30, standard: 26 },
+      slideTitle: { wide: 21, standard: 19 },
+      bullets: { wide: 18, standard: 16 },
+      asideBody: { wide: 12, standard: 11 },
+      closingTitle: { wide: 24, standard: 21 }
+    },
+    master: {
+      objects(metrics, palette) {
+        return [
+          {
+            rect: {
+              x: 0,
+              y: 0,
+              w: metrics.width,
+              h: 0.12,
+              line: { color: palette.accentDark, width: 1 },
+              fill: { color: palette.accentDark }
+            }
+          },
+          {
+            rect: {
+              x: 0.72,
+              y: 0.82,
+              w: 2.85,
+              h: 0.12,
+              line: { color: palette.accent, width: 1 },
+              fill: { color: palette.accent }
+            }
+          },
+          {
+            line: {
+              x: 0.72,
+              y: 6.92,
+              w: metrics.width - 1.44,
+              h: 0,
+              line: { color: palette.border, width: 1 }
+            }
+          }
+        ];
+      },
+      slideNumber(metrics, fonts, palette) {
+        return {
+          x: metrics.width - 1.1,
+          y: 0.44,
+          w: 0.6,
+          h: 0.2,
+          fontFace: fonts.body,
+          fontSize: 9,
+          color: palette.accentDark,
+          align: "right"
+        };
+      }
+    }
+  }),
+  "market-research": createPreset({
+    fonts: {
+      title: "Georgia",
+      body: "Aptos"
+    },
+    palette: {
+      background: "F5F7F9",
+      surface: "FFFFFF",
+      text: "21303A",
+      muted: "64727B",
+      accent: "3B7A84",
+      accentDark: "27545B",
+      border: "D5DEE2"
+    },
+    defaultVariants: {
+      image: "image-right",
+      closing: "minimal"
+    },
+    layoutTokens: {
+      content: {
+        slideTitleMargin: 0.76,
+        slideTitleAccentHeight: 0.05,
+        slideTitleAccentWidthWide: 0.95,
+        slideTitleAccentWidthStandard: 0.8,
+        slideTitleAccentGap: 0.08
+      },
+      panel: {
+        accentBarHeight: 0.08,
+        accentBarInset: 0.12,
+        accentBarColorKey: "accentDark"
+      },
+      title: {
+        heroLeft: {
+          margin: 0.78,
+          kickerY: 0.96,
+          kickerWidthWide: 2.3,
+          kickerWidthStandard: 2.05,
+          titleY: 1.62,
+          subtitleY: 3.12,
+          subtitleWidthFactor: 0.74,
+          bylineY: 5.98
+        }
+      },
+      section: {
+        divider: {
+          margin: 0.8,
+          labelWidth: 1.7,
+          titleY: 1.82,
+          subtitleY: 3.58,
+          subtitleWidthFactor: 0.72
+        }
+      },
+      bullets: {
+        contentAside: {
+          margin: 0.76,
+          top: 1.28,
+          height: 5.18,
+          gap: 0.34,
+          rightWidthWide: 3.65,
+          rightWidthStandard: 2.95,
+          bodyHeight: 0.68,
+          bodyGap: 0.12
+        }
+      },
+      image: {
+        margin: 0.76,
+        gap: 0.34,
+        top: 1.28,
+        height: 5.18,
+        imageWidthWide: 7.0,
+        imageWidthStandard: 5.2,
+        captionHeightWithBullets: 1.22
+      },
+      closing: {
+        minimal: {
+          barWidthWide: 1.3,
+          barWidthStandard: 1.05
+        }
+      }
+    },
+    textRoleOverrides: {
+      heroTitle: { wide: 29, standard: 25 },
+      sectionTitle: { wide: 31, standard: 27 },
+      slideTitle: { wide: 22, standard: 19 },
+      bullets: { wide: 18, standard: 16 },
+      asideBody: { wide: 12, standard: 11 }
+    },
+    master: {
+      objects(metrics, palette) {
+        return [
+          {
+            rect: {
+              x: 0,
+              y: 0,
+              w: 0.2,
+              h: metrics.height,
+              line: { color: palette.accentDark, width: 1 },
+              fill: { color: palette.accentDark }
+            }
+          },
+          {
+            rect: {
+              x: 0.2,
+              y: 0,
+              w: 3.8,
+              h: 0.11,
+              line: { color: palette.accent, width: 1 },
+              fill: { color: palette.accent }
+            }
+          },
+          {
+            line: {
+              x: 0.76,
+              y: 6.92,
+              w: metrics.width - 1.52,
+              h: 0,
+              line: { color: palette.border, width: 1 }
+            }
+          }
+        ];
+      },
+      slideNumber(metrics, fonts, palette) {
+        return {
+          x: metrics.width - 1.0,
+          y: 7.0,
+          w: 0.5,
+          h: 0.2,
+          fontFace: fonts.body,
+          fontSize: 9,
+          color: palette.accentDark,
+          align: "right"
+        };
+      }
+    }
+  }),
+  "pitch-deck": createPreset({
+    fonts: {
+      title: "Bahnschrift",
+      body: "Aptos"
+    },
+    palette: {
+      background: "FFF7F0",
+      surface: "FFFFFF",
+      text: "20161A",
+      muted: "6A5A60",
+      accent: "FF6B35",
+      accentDark: "B83616",
+      border: "F3C5B6"
+    },
+    defaultVariants: {
+      title: "hero-center",
+      section: "statement",
+      bullets: pitchDeckBulletsDefaultVariant,
+      image: "image-right",
+      closing: "minimal"
+    },
+    layoutTokens: {
+      content: {
+        slideTitleMargin: 0.84,
+        slideTitleY: 0.48,
+        slideTitleAccentHeight: 0.08,
+        slideTitleAccentWidthWide: 1.4,
+        slideTitleAccentWidthStandard: 1.15,
+        slideTitleAccentGap: 0.08
+      },
+      panel: {
+        lineColorKey: "accent",
+        lineWidth: 1.2,
+        edgeBarWidth: 0.12,
+        edgeBarPosition: "right",
+        edgeBarColorKey: "accentDark"
+      },
+      title: {
+        heroCenter: {
+          pillWidthWide: 2.8,
+          pillWidthStandard: 2.45,
+          blockWidthWide: 9.7,
+          blockWidthStandard: 7.8,
+          kickerY: 1.0,
+          titleY: 1.72,
+          titleHeight: 1.7,
+          subtitleY: 3.5,
+          subtitleHeight: 0.92,
+          bylineY: 6.02
+        }
+      },
+      section: {
+        statement: {
+          barWidthWide: 2.0,
+          barWidthStandard: 1.6,
+          barY: 1.46,
+          titleY: 1.95,
+          titleHeight: 1.55,
+          subtitleY: 3.86
+        }
+      },
+      bullets: {
+        contentAside: {
+          margin: 0.84,
+          top: 1.42,
+          height: 4.9,
+          gap: 0.44,
+          rightWidthWide: 3.4,
+          rightWidthStandard: 2.9,
+          bodyHeight: 0.64,
+          bodyGap: 0.18
+        },
+        twoColumn: {
+          margin: 0.84,
+          top: 1.42,
+          height: 4.9,
+          gap: 0.56,
+          bodyHeight: 0.64,
+          bodyGap: 0.2,
+          dividerWidth: 0.04
+        }
+      },
+      image: {
+        margin: 0.84,
+        gap: 0.44,
+        top: 1.42,
+        height: 4.9,
+        imageWidthWide: 7.85,
+        imageWidthStandard: 5.75,
+        captionHeightWithBullets: 0.95
+      },
+      closing: {
+        minimal: {
+          barWidthWide: 2.2,
+          barWidthStandard: 1.8,
+          barY: 2.05,
+          titleY: 2.36,
+          titleHeight: 1.1,
+          subtitleY: 3.64
+        }
+      }
+    },
+    textRoleOverrides: {
+      heroTitle: { wide: 36, standard: 32, min: 22 },
+      heroSubtitle: { wide: 17, standard: 15 },
+      sectionTitle: { wide: 35, standard: 31 },
+      slideTitle: { wide: 26, standard: 22 },
+      bullets: { wide: 18, standard: 16 },
+      closingTitle: { wide: 30, standard: 26 }
+    },
+    master: {
+      objects(metrics, palette) {
+        return [
+          {
+            rect: {
+              x: 0,
+              y: 0,
+              w: metrics.width,
+              h: 0.18,
+              line: { color: palette.accent, width: 1 },
+              fill: { color: palette.accent }
+            }
+          },
+          {
+            rect: {
+              x: metrics.width - 0.34,
+              y: 0.88,
+              w: 0.34,
+              h: 5.9,
+              line: { color: palette.accentDark, width: 1 },
+              fill: { color: palette.accentDark }
+            }
+          },
+          {
+            rect: {
+              x: 0.84,
+              y: metrics.height - 0.18,
+              w: 2.6,
+              h: 0.18,
+              line: { color: palette.accentDark, width: 1 },
+              fill: { color: palette.accentDark }
+            }
+          }
+        ];
+      },
+      slideNumber(metrics, fonts, palette) {
+        return {
+          x: metrics.width - 1.0,
+          y: 0.34,
+          w: 0.5,
+          h: 0.2,
+          fontFace: fonts.body,
+          fontSize: 9,
+          color: palette.accentDark,
+          align: "right"
+        };
+      }
+    }
+  }),
+  "project-kickoff": createPreset({
+    fonts: {
+      title: "Aptos Display",
+      body: "Aptos"
+    },
+    palette: {
+      background: "F6F7FB",
+      surface: "FFFFFF",
+      text: "1D2840",
+      muted: "60708A",
+      accent: "7B6CF6",
+      accentDark: "493AAE",
+      border: "D8DCEE"
+    },
+    defaultVariants: {
+      image: "image-right",
+      closing: "minimal"
+    },
+    layoutTokens: {
+      content: {
+        slideTitleMargin: 0.72,
+        slideTitleY: 0.44,
+        slideTitleAccentHeight: 0.06,
+        slideTitleAccentWidthWide: 1.2,
+        slideTitleAccentWidthStandard: 0.95,
+        slideTitleAccentGap: 0.06
+      },
+      panel: {
+        accentBarHeight: 0.08,
+        accentBarColorKey: "accentDark",
+        edgeBarWidth: 0.1,
+        edgeBarPosition: "left",
+        edgeBarColorKey: "accent"
+      },
+      title: {
+        heroLeft: {
+          margin: 0.78,
+          kickerY: 0.98,
+          kickerWidthWide: 2.5,
+          kickerWidthStandard: 2.2,
+          titleY: 1.62,
+          subtitleY: 3.08,
+          subtitleWidthFactor: 0.8,
+          bylineY: 6.0
+        }
+      },
+      section: {
+        divider: {
+          margin: 0.76,
+          labelY: 0.98,
+          labelWidth: 1.75,
+          titleY: 1.8,
+          subtitleY: 3.58,
+          subtitleWidthFactor: 0.8
+        }
+      },
+      bullets: {
+        contentAside: {
+          margin: 0.72,
+          top: 1.26,
+          height: 5.2,
+          gap: 0.32,
+          rightWidthWide: 3.7,
+          rightWidthStandard: 3.0,
+          bodyHeight: 0.68,
+          bodyGap: 0.12
+        }
+      },
+      image: {
+        margin: 0.72,
+        gap: 0.32,
+        top: 1.26,
+        height: 5.2,
+        imageWidthWide: 7.15,
+        imageWidthStandard: 5.28,
+        captionHeightWithBullets: 1.1
+      },
+      closing: {
+        minimal: {
+          barWidthWide: 1.7,
+          barWidthStandard: 1.4,
+          barY: 2.14,
+          titleY: 2.48,
+          titleHeight: 0.98,
+          subtitleY: 3.68
+        }
+      }
+    },
+    textRoleOverrides: {
+      heroTitle: { wide: 31, standard: 27 },
+      sectionTitle: { wide: 31, standard: 27 },
+      slideTitle: { wide: 23, standard: 20 },
+      bullets: { wide: 18, standard: 16 },
+      closingTitle: { wide: 26, standard: 23 }
+    },
+    master: {
+      objects(metrics, palette) {
+        return [
+          {
+            rect: {
+              x: 0,
+              y: 0,
+              w: 0.28,
+              h: metrics.height,
+              line: { color: palette.accent, width: 1 },
+              fill: { color: palette.accent }
+            }
+          },
+          {
+            rect: {
+              x: 0.28,
+              y: 0,
+              w: metrics.width - 0.28,
+              h: 0.08,
+              line: { color: palette.accentDark, width: 1 },
+              fill: { color: palette.accentDark }
+            }
+          },
+          {
+            line: {
+              x: 0.72,
+              y: 6.92,
+              w: metrics.width - 1.44,
+              h: 0,
+              line: { color: palette.border, width: 1 }
+            }
+          }
+        ];
+      },
+      slideNumber(metrics, fonts, palette) {
+        return {
+          x: metrics.width - 1.05,
+          y: 7.0,
+          w: 0.55,
+          h: 0.2,
+          fontFace: fonts.body,
+          fontSize: 9,
+          color: palette.accentDark,
+          align: "right"
+        };
+      }
+    }
+  })
+});
+const SUPPORTED_TEMPLATE_PRESETS = Object.freeze(Object.keys(TEMPLATE_PRESETS));
+
+function createPreset(definition) {
+  return {
+    ...definition,
+    defaultVariants: {
+      ...DEFAULT_VARIANTS,
+      ...(definition.defaultVariants || {})
+    },
+    layoutTokens: mergeDeep(BASE_LAYOUT_TOKENS, definition.layoutTokens || {}),
+    textRoles: mergeDeep(TEXT_ROLES, definition.textRoleOverrides || {}),
+    textRoleOverrides: definition.textRoleOverrides || {}
+  };
+}
+
+function mergeDeep(baseValue, overrideValue) {
+  if (overrideValue == null) {
+    return cloneValue(baseValue);
+  }
+
+  if (baseValue == null) {
+    return cloneValue(overrideValue);
+  }
+
+  if (Array.isArray(overrideValue)) {
+    return overrideValue.slice();
+  }
+
+  if (isPlainObject(baseValue) && isPlainObject(overrideValue)) {
+    const result = {};
+    const keys = new Set([...Object.keys(baseValue), ...Object.keys(overrideValue)]);
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(overrideValue, key)) {
+        result[key] = mergeDeep(baseValue[key], overrideValue[key]);
+      } else {
+        result[key] = cloneValue(baseValue[key]);
+      }
+    }
+    return result;
+  }
+
+  return cloneValue(overrideValue);
+}
+
+function cloneValue(value) {
+  if (Array.isArray(value)) {
+    return value.slice();
+  }
+  if (isPlainObject(value)) {
+    return mergeDeep({}, value);
+  }
+  return value;
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function pitchDeckBulletsDefaultVariant(slideSpec) {
+  if (hasAsideContent(slideSpec)) {
+    return "content-aside";
+  }
+
+  const bulletCount = Array.isArray(slideSpec?.bullets) ? slideSpec.bullets.length : 0;
+  return bulletCount >= 4 ? "two-column" : "content-aside";
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === SCRIPT_PATH) {
   main().catch(handleFatalError);
 }
@@ -515,6 +1677,8 @@ async function normalizeSpec(rawSpec, outputOverride) {
 
   const layoutKey = normalizeLayout(rawSpec.layout);
   const theme = normalizeTheme(rawSpec.theme, "theme");
+  const templatePreset = normalizeTemplatePreset(rawSpec.template_preset, "template_preset");
+  const activePreset = resolveActivePreset({ theme, templatePreset });
   const title = normalizeRequiredString(rawSpec.title, "title");
   const subtitle = normalizeOptionalString(rawSpec.subtitle, "subtitle");
   const filename = normalizeOptionalString(rawSpec.filename, "filename");
@@ -522,7 +1686,7 @@ async function normalizeSpec(rawSpec, outputOverride) {
   const notes = normalizeOptionalNotes(rawSpec.notes, "notes");
   const sources = normalizeOptionalSources(rawSpec.sources, "sources");
   const slides = await Promise.all(
-    normalizeArray(rawSpec.slides, "slides").map((slide, index) => normalizeSlide(slide, index))
+    normalizeArray(rawSpec.slides, "slides").map((slide, index) => normalizeSlide(slide, index, activePreset))
   );
 
   if (slides.length === 0) {
@@ -546,6 +1710,8 @@ async function normalizeSpec(rawSpec, outputOverride) {
     filename,
     layout: layoutKey,
     theme,
+    templatePreset,
+    activePreset,
     outputPath,
     author: normalizeOptionalString(rawSpec.author, "author"),
     company: normalizeOptionalString(rawSpec.company, "company"),
@@ -558,13 +1724,13 @@ async function normalizeSpec(rawSpec, outputOverride) {
   };
 }
 
-async function normalizeSlide(rawSlide, index) {
+async function normalizeSlide(rawSlide, index, activePreset) {
   if (!rawSlide || typeof rawSlide !== "object" || Array.isArray(rawSlide)) {
     throw new Error(`slides[${index}] must be an object`);
   }
 
   const type = normalizeRequiredString(rawSlide.type, `slides[${index}].type`);
-  const variant = normalizeSlideVariant(type, rawSlide.variant, `slides[${index}].variant`);
+  const variant = normalizeSlideVariant(type, rawSlide.variant, `slides[${index}].variant`, activePreset, rawSlide);
   const common = {
     notes: normalizeOptionalNotes(rawSlide.notes, `slides[${index}].notes`),
     sources: normalizeOptionalSources(rawSlide.sources, `slides[${index}].sources`)
@@ -658,21 +1824,38 @@ function normalizeTheme(value, fieldName) {
   }
 
   const theme = normalizeRequiredString(value, fieldName).toLowerCase();
-  if (!THEMES[theme]) {
-    throw new Error(`${fieldName} must be one of: ${Object.keys(THEMES).join(", ")}`);
+  if (!LEGACY_THEME_NAMES.includes(theme)) {
+    throw new Error(`${fieldName} must be one of: ${LEGACY_THEME_NAMES.join(", ")}`);
   }
 
   return theme;
 }
 
-function normalizeSlideVariant(type, value, fieldName) {
+function normalizeTemplatePreset(value, fieldName) {
+  if (value == null || value === "") {
+    return "";
+  }
+
+  const preset = normalizeRequiredString(value, fieldName).toLowerCase();
+  if (!SUPPORTED_TEMPLATE_PRESETS.includes(preset)) {
+    throw new Error(`${fieldName} must be one of: ${SUPPORTED_TEMPLATE_PRESETS.join(", ")}`);
+  }
+
+  return preset;
+}
+
+function resolveActivePreset({ theme = DEFAULT_THEME, templatePreset = "" } = {}) {
+  return templatePreset || theme || DEFAULT_THEME;
+}
+
+function normalizeSlideVariant(type, value, fieldName, presetName, rawSlide) {
   const variants = SLIDE_VARIANTS[type];
   if (!variants) {
     return "";
   }
 
   if (value == null || value === "") {
-    return DEFAULT_VARIANTS[type];
+    return getDefaultVariantForPreset(presetName, type, rawSlide);
   }
 
   const variant = normalizeRequiredString(value, fieldName).toLowerCase();
@@ -681,6 +1864,37 @@ function normalizeSlideVariant(type, value, fieldName) {
   }
 
   return variant;
+}
+
+function getDefaultVariantForPreset(presetName, type, slideSpec = {}) {
+  const preset = getPreset(presetName);
+  const configured = preset.defaultVariants[type];
+  const variant = typeof configured === "function" ? configured(slideSpec) : configured;
+  return variant || DEFAULT_VARIANTS[type] || "";
+}
+
+function getPreset(presetName = DEFAULT_THEME) {
+  return TEMPLATE_PRESETS[presetName] || TEMPLATE_PRESETS[DEFAULT_THEME];
+}
+
+function getPresetLayoutTokens(presetName) {
+  return getPreset(presetName).layoutTokens;
+}
+
+function getPresetTextRoleOverrides(presetName) {
+  return getPreset(presetName).textRoleOverrides || {};
+}
+
+function getTextRoleForPreset(presetName, roleName) {
+  const preset = getPreset(presetName);
+  return preset.textRoles[roleName] || TEXT_ROLES[roleName];
+}
+
+function getDeckPresetName(deckSpec) {
+  return resolveActivePreset({
+    theme: deckSpec?.theme || DEFAULT_THEME,
+    templatePreset: deckSpec?.activePreset || deckSpec?.templatePreset || ""
+  });
 }
 
 function normalizeRequiredString(value, fieldName) {
@@ -1033,7 +2247,7 @@ function buildPresentation(PptxGenJS, spec) {
   pptx.subject = spec.subject || "";
   pptx.title = spec.title;
 
-  defineDefaultMaster(pptx, metrics, spec.theme);
+  defineDefaultMaster(pptx, metrics, spec.activePreset);
 
   for (const slideSpec of spec.slides) {
     const slide = pptx.addSlide({ masterName: MASTER_NAME });
@@ -1047,11 +2261,6 @@ function buildPresentation(PptxGenJS, spec) {
 
   return pptx;
 }
-
-function getTheme(themeName = DEFAULT_THEME) {
-  return THEMES[themeName] || THEMES[DEFAULT_THEME];
-}
-
 function buildSpeakerNotes(spec, slideSpec) {
   const blocks = [];
   const mergedSources = dedupeStrings([...spec.sources, ...slideSpec.sources]);
@@ -1071,13 +2280,13 @@ function buildSpeakerNotes(spec, slideSpec) {
   return blocks.join("\n\n").trim();
 }
 
-function defineDefaultMaster(pptx, metrics, themeName = DEFAULT_THEME) {
-  const theme = getTheme(themeName);
+function defineDefaultMaster(pptx, metrics, presetName = DEFAULT_THEME) {
+  const preset = getPreset(presetName);
   pptx.defineSlideMaster({
     title: MASTER_NAME,
-    background: { color: theme.palette.background },
-    objects: theme.master.objects(metrics, theme.palette),
-    slideNumber: theme.master.slideNumber(metrics, theme.fonts, theme.palette)
+    background: { color: preset.palette.background },
+    objects: preset.master.objects(metrics, preset.palette),
+    slideNumber: preset.master.slideNumber(metrics, preset.fonts, preset.palette)
   });
 }
 
@@ -1113,99 +2322,104 @@ function renderTitleSlide(slide, slideSpec, deckSpec, metrics) {
 }
 
 function renderTitleSlideHeroLeft(slide, slideSpec, deckSpec, metrics) {
-  const { palette } = getTheme(deckSpec.theme);
-  const margin = 0.8;
+  const presetName = getDeckPresetName(deckSpec);
+  const { palette } = getPreset(presetName);
+  const tokens = getPresetLayoutTokens(presetName).title.heroLeft;
+  const margin = tokens.margin;
   const contentWidth = metrics.width - margin * 2;
   const subtitle = slideSpec.subtitle || deckSpec.subtitle || "";
+  const kickerWidth = pickByLayout(tokens, metrics, "kickerWidthWide", "kickerWidthStandard");
 
   addFittedText(slide, (slideSpec.kicker || "Presentation").toUpperCase(), {
     x: margin,
-    y: 1.0,
-    w: 2.45,
-    h: 0.44
+    y: tokens.kickerY,
+    w: kickerWidth,
+    h: tokens.kickerHeight
   }, "kicker", metrics, deckSpec, {
     bold: true,
-    color: "FFFFFF",
+    color: tokens.kickerTextColor,
     align: "center",
-    fill: { color: palette.accentDark }
+    fill: { color: resolvePaletteColor(palette, tokens.kickerFillColorKey, "accentDark") }
   });
 
   addFittedText(slide, slideSpec.title, {
     x: margin,
-    y: 1.7,
+    y: tokens.titleY,
     w: contentWidth,
-    h: 1.45
+    h: tokens.titleHeight
   }, "heroTitle", metrics, deckSpec, {
     bold: true,
-    color: palette.text
+    color: resolvePaletteColor(palette, tokens.titleColorKey, "text")
   });
 
   addFittedText(slide, subtitle, {
     x: margin,
-    y: 3.25,
-    w: contentWidth * 0.86,
-    h: 1.1
+    y: tokens.subtitleY,
+    w: contentWidth * tokens.subtitleWidthFactor,
+    h: tokens.subtitleHeight
   }, "heroSubtitle", metrics, deckSpec, {
-    color: palette.muted
+    color: resolvePaletteColor(palette, tokens.subtitleColorKey, "muted")
   });
 
   addFittedText(slide, slideSpec.byline, {
     x: margin,
-    y: 5.95,
+    y: tokens.bylineY,
     w: contentWidth,
-    h: 0.55
+    h: tokens.bylineHeight
   }, "byline", metrics, deckSpec, {
-    color: palette.muted
+    color: resolvePaletteColor(palette, tokens.bylineColorKey, "muted")
   });
 }
 
 function renderTitleSlideHeroCenter(slide, slideSpec, deckSpec, metrics) {
-  const { palette } = getTheme(deckSpec.theme);
+  const presetName = getDeckPresetName(deckSpec);
+  const { palette } = getPreset(presetName);
+  const tokens = getPresetLayoutTokens(presetName).title.heroCenter;
   const subtitle = slideSpec.subtitle || deckSpec.subtitle || "";
-  const pillWidth = metrics.width > 11 ? 2.65 : 2.3;
-  const blockWidth = metrics.width > 11 ? 9.2 : 7.4;
+  const pillWidth = pickByLayout(tokens, metrics, "pillWidthWide", "pillWidthStandard");
+  const blockWidth = pickByLayout(tokens, metrics, "blockWidthWide", "blockWidthStandard");
   const blockX = (metrics.width - blockWidth) / 2;
 
   addFittedText(slide, (slideSpec.kicker || "Presentation").toUpperCase(), {
     x: (metrics.width - pillWidth) / 2,
-    y: 1.08,
+    y: tokens.kickerY,
     w: pillWidth,
-    h: 0.42
+    h: tokens.kickerHeight
   }, "kicker", metrics, deckSpec, {
     bold: true,
-    color: "FFFFFF",
+    color: tokens.kickerTextColor,
     align: "center",
-    fill: { color: palette.accentDark }
+    fill: { color: resolvePaletteColor(palette, tokens.kickerFillColorKey, "accentDark") }
   });
 
   addFittedText(slide, slideSpec.title, {
     x: blockX,
-    y: 1.82,
+    y: tokens.titleY,
     w: blockWidth,
-    h: 1.45
+    h: tokens.titleHeight
   }, "heroTitle", metrics, deckSpec, {
     bold: true,
-    color: palette.text,
+    color: resolvePaletteColor(palette, tokens.titleColorKey, "text"),
     align: "center"
   });
 
   addFittedText(slide, subtitle, {
-    x: blockX + 0.24,
-    y: 3.34,
-    w: blockWidth - 0.48,
-    h: 1.0
+    x: blockX + tokens.subtitleInset,
+    y: tokens.subtitleY,
+    w: blockWidth - tokens.subtitleInset * 2,
+    h: tokens.subtitleHeight
   }, "heroSubtitle", metrics, deckSpec, {
-    color: palette.muted,
+    color: resolvePaletteColor(palette, tokens.subtitleColorKey, "muted"),
     align: "center"
   });
 
   addFittedText(slide, slideSpec.byline, {
     x: blockX,
-    y: 5.92,
+    y: tokens.bylineY,
     w: blockWidth,
-    h: 0.5
+    h: tokens.bylineHeight
   }, "byline", metrics, deckSpec, {
-    color: palette.muted,
+    color: resolvePaletteColor(palette, tokens.bylineColorKey, "muted"),
     align: "center"
   });
 }
@@ -1220,72 +2434,77 @@ function renderSectionSlide(slide, slideSpec, deckSpec, metrics) {
 }
 
 function renderSectionSlideDivider(slide, slideSpec, deckSpec, metrics) {
-  const { palette } = getTheme(deckSpec.theme);
-  const margin = 0.85;
+  const presetName = getDeckPresetName(deckSpec);
+  const { palette } = getPreset(presetName);
+  const tokens = getPresetLayoutTokens(presetName).section.divider;
+  const margin = tokens.margin;
   const contentWidth = metrics.width - margin * 2;
 
-  addFittedText(slide, "SECTION", {
+  addFittedText(slide, tokens.labelText, {
     x: margin,
-    y: 1.0,
-    w: 1.6,
-    h: 0.28
+    y: tokens.labelY,
+    w: tokens.labelWidth,
+    h: tokens.labelHeight
   }, "sectionLabel", metrics, deckSpec, {
     bold: true,
-    color: palette.accentDark
+    color: resolvePaletteColor(palette, tokens.labelColorKey, "accentDark")
   });
 
   addFittedText(slide, slideSpec.title, {
     x: margin,
-    y: 1.9,
+    y: tokens.titleY,
     w: contentWidth,
-    h: 1.55
+    h: tokens.titleHeight
   }, "sectionTitle", metrics, deckSpec, {
     bold: true,
-    color: palette.text
+    color: resolvePaletteColor(palette, tokens.titleColorKey, "text")
   });
 
   addFittedText(slide, slideSpec.subtitle, {
     x: margin,
-    y: 3.7,
-    w: contentWidth * 0.82,
-    h: 0.95
+    y: tokens.subtitleY,
+    w: contentWidth * tokens.subtitleWidthFactor,
+    h: tokens.subtitleHeight
   }, "subtitle", metrics, deckSpec, {
-    color: palette.muted
+    color: resolvePaletteColor(palette, tokens.subtitleColorKey, "muted")
   });
 }
 
 function renderSectionSlideStatement(slide, slideSpec, deckSpec, metrics) {
-  const { palette } = getTheme(deckSpec.theme);
-  const blockWidth = metrics.width > 11 ? 9.15 : 7.2;
+  const presetName = getDeckPresetName(deckSpec);
+  const { palette } = getPreset(presetName);
+  const tokens = getPresetLayoutTokens(presetName).section.statement;
+  const barWidth = pickByLayout(tokens, metrics, "barWidthWide", "barWidthStandard");
+  const blockWidth = pickByLayout(tokens, metrics, "blockWidthWide", "blockWidthStandard");
   const blockX = (metrics.width - blockWidth) / 2;
 
   slide.addShape("rect", {
-    x: (metrics.width - 1.35) / 2,
-    y: 1.55,
-    w: 1.35,
-    h: 0.06,
-    fill: { color: palette.accent },
-    line: { color: palette.accent, width: 1 }
+    x: (metrics.width - barWidth) / 2,
+    y: tokens.barY,
+    w: barWidth,
+    h: tokens.barHeight,
+    fill: { color: resolvePaletteColor(palette, tokens.barColorKey, "accent") },
+    line: { color: resolvePaletteColor(palette, tokens.barColorKey, "accent"), width: 1 }
   });
 
   addFittedText(slide, slideSpec.title, {
     x: blockX,
-    y: 2.0,
+    y: tokens.titleY,
     w: blockWidth,
-    h: 1.45
+    h: tokens.titleHeight
   }, "sectionTitle", metrics, deckSpec, {
     bold: true,
-    color: palette.text,
+    color: resolvePaletteColor(palette, tokens.titleColorKey, "text"),
     align: "center"
   });
 
   addFittedText(slide, slideSpec.subtitle, {
-    x: blockX + 0.18,
-    y: 3.74,
-    w: blockWidth - 0.36,
-    h: 0.9
+    x: blockX + tokens.subtitleInset,
+    y: tokens.subtitleY,
+    w: blockWidth - tokens.subtitleInset * 2,
+    h: tokens.subtitleHeight
   }, "subtitle", metrics, deckSpec, {
-    color: palette.muted,
+    color: resolvePaletteColor(palette, tokens.subtitleColorKey, "muted"),
     align: "center"
   });
 }
@@ -1300,17 +2519,19 @@ function renderBulletsSlide(slide, slideSpec, deckSpec, metrics) {
 }
 
 function renderBulletsSlideAside(slide, slideSpec, deckSpec, metrics) {
-  const { palette } = getTheme(deckSpec.theme);
-  const margin = 0.75;
-  const contentTop = 1.3;
-  const contentHeight = 5.2;
-  const gap = 0.35;
-  const hasAside = slideSpec.asideTitle || slideSpec.asideBody || slideSpec.asideBullets.length > 0;
+  const presetName = getDeckPresetName(deckSpec);
+  const { palette } = getPreset(presetName);
+  const tokens = getPresetLayoutTokens(presetName).bullets.contentAside;
+  const margin = tokens.margin;
+  const contentTop = tokens.top;
+  const contentHeight = tokens.height;
+  const gap = tokens.gap;
+  const hasAside = hasAsideContent(slideSpec);
   const contentWidth = metrics.width - margin * 2;
-  const rightWidth = hasAside ? (metrics.width > 11 ? 3.55 : 2.85) : 0;
+  const rightWidth = hasAside ? pickByLayout(tokens, metrics, "rightWidthWide", "rightWidthStandard") : 0;
   const leftWidth = hasAside ? contentWidth - gap - rightWidth : contentWidth;
-  const bodyHeight = slideSpec.body ? 0.72 : 0;
-  const bodyBottomGap = slideSpec.body ? 0.14 : 0;
+  const bodyHeight = slideSpec.body ? tokens.bodyHeight : 0;
+  const bodyBottomGap = slideSpec.body ? tokens.bodyGap : 0;
   const bulletsY = contentTop + bodyHeight + bodyBottomGap;
   const bulletsHeight = contentHeight - (bulletsY - contentTop);
 
@@ -1322,7 +2543,7 @@ function renderBulletsSlideAside(slide, slideSpec, deckSpec, metrics) {
     w: leftWidth,
     h: bodyHeight || 0.6
   }, "body", metrics, deckSpec, {
-    color: palette.muted
+    color: resolvePaletteColor(palette, tokens.bodyColorKey, "muted")
   });
 
   addBulletList(slide, slideSpec.bullets, {
@@ -1331,8 +2552,8 @@ function renderBulletsSlideAside(slide, slideSpec, deckSpec, metrics) {
     w: leftWidth,
     h: bulletsHeight
   }, "bullets", metrics, deckSpec, {
-    color: palette.text,
-    bulletIndent: 20
+    color: resolvePaletteColor(palette, tokens.bulletsColorKey, "text"),
+    bulletIndent: tokens.bulletsIndent
   });
 
   if (!hasAside) {
@@ -1340,8 +2561,8 @@ function renderBulletsSlideAside(slide, slideSpec, deckSpec, metrics) {
   }
 
   const asideX = margin + leftWidth + gap;
-  const panelPaddingX = 0.16;
-  let cursorY = contentTop + 0.14;
+  const panelPaddingX = tokens.panelPaddingX;
+  let cursorY = contentTop + tokens.panelInsetY;
 
   addPanelFrame(slide, {
     x: asideX,
@@ -1355,50 +2576,55 @@ function renderBulletsSlideAside(slide, slideSpec, deckSpec, metrics) {
       x: asideX + panelPaddingX,
       y: cursorY,
       w: rightWidth - panelPaddingX * 2,
-      h: 0.26
+      h: tokens.asideTitleHeight
     }, "asideTitle", metrics, deckSpec, {
       bold: true,
-      color: palette.accentDark
+      color: resolvePaletteColor(palette, tokens.asideTitleColorKey, "accentDark")
     });
-    cursorY += 0.34;
+    cursorY += tokens.asideTitleGap;
   }
 
   if (slideSpec.asideBody) {
-    const asideBodyHeight = slideSpec.asideBullets.length > 0 ? 0.82 : contentHeight - (cursorY - contentTop) - 0.18;
+    const asideBodyHeight = slideSpec.asideBullets.length > 0
+      ? tokens.asideBodyHeightWithBullets
+      : contentHeight - (cursorY - contentTop) - tokens.panelBottomPad;
     addFittedText(slide, slideSpec.asideBody, {
       x: asideX + panelPaddingX,
       y: cursorY,
       w: rightWidth - panelPaddingX * 2,
       h: asideBodyHeight
     }, "asideBody", metrics, deckSpec, {
-      color: palette.text
+      color: resolvePaletteColor(palette, tokens.asideBodyColorKey, "text")
     });
     cursorY += asideBodyHeight + 0.08;
   }
 
   if (slideSpec.asideBullets.length > 0) {
+    const bulletInsetX = tokens.panelBulletInsetX;
     addBulletList(slide, slideSpec.asideBullets, {
-      x: asideX + 0.1,
+      x: asideX + bulletInsetX,
       y: cursorY,
-      w: rightWidth - 0.2,
-      h: Math.max(0.7, contentHeight - (cursorY - contentTop) - 0.12)
+      w: rightWidth - bulletInsetX * 2,
+      h: Math.max(0.7, contentHeight - (cursorY - contentTop) - tokens.panelBottomPad)
     }, "asideBody", metrics, deckSpec, {
-      color: palette.text,
-      bulletIndent: 14
+      color: resolvePaletteColor(palette, tokens.asideBodyColorKey, "text"),
+      bulletIndent: tokens.panelBulletIndent
     });
   }
 }
 
 function renderBulletsSlideTwoColumn(slide, slideSpec, deckSpec, metrics) {
-  const { palette } = getTheme(deckSpec.theme);
-  const margin = 0.75;
-  const contentTop = 1.3;
-  const contentHeight = 5.2;
-  const gap = 0.42;
+  const presetName = getDeckPresetName(deckSpec);
+  const { palette } = getPreset(presetName);
+  const tokens = getPresetLayoutTokens(presetName).bullets.twoColumn;
+  const margin = tokens.margin;
+  const contentTop = tokens.top;
+  const contentHeight = tokens.height;
+  const gap = tokens.gap;
   const contentWidth = metrics.width - margin * 2;
   const columnWidth = (contentWidth - gap) / 2;
-  const bodyHeight = slideSpec.body ? 0.72 : 0;
-  const bodyBottomGap = slideSpec.body ? 0.18 : 0;
+  const bodyHeight = slideSpec.body ? tokens.bodyHeight : 0;
+  const bodyBottomGap = slideSpec.body ? tokens.bodyGap : 0;
   const bulletsY = contentTop + bodyHeight + bodyBottomGap;
   const bulletsHeight = contentHeight - (bulletsY - contentTop);
   const [leftItems, rightItems] = splitItemsForColumns(slideSpec.bullets);
@@ -1411,7 +2637,7 @@ function renderBulletsSlideTwoColumn(slide, slideSpec, deckSpec, metrics) {
     w: contentWidth,
     h: bodyHeight || 0.6
   }, "body", metrics, deckSpec, {
-    color: palette.muted
+    color: resolvePaletteColor(palette, tokens.bodyColorKey, "muted")
   });
 
   addBulletList(slide, leftItems, {
@@ -1420,8 +2646,8 @@ function renderBulletsSlideTwoColumn(slide, slideSpec, deckSpec, metrics) {
     w: columnWidth,
     h: bulletsHeight
   }, "body", metrics, deckSpec, {
-    color: palette.text,
-    bulletIndent: 18
+    color: resolvePaletteColor(palette, tokens.bulletsColorKey, "text"),
+    bulletIndent: tokens.bulletsIndent
   });
 
   addBulletList(slide, rightItems, {
@@ -1430,18 +2656,18 @@ function renderBulletsSlideTwoColumn(slide, slideSpec, deckSpec, metrics) {
     w: columnWidth,
     h: bulletsHeight
   }, "body", metrics, deckSpec, {
-    color: palette.text,
-    bulletIndent: 18
+    color: resolvePaletteColor(palette, tokens.bulletsColorKey, "text"),
+    bulletIndent: tokens.bulletsIndent
   });
 
   if (rightItems.length > 0) {
     slide.addShape("rect", {
-      x: margin + columnWidth + gap / 2 - 0.01,
-      y: bulletsY + 0.08,
-      w: 0.02,
-      h: Math.max(0.8, bulletsHeight - 0.16),
-      fill: { color: palette.border },
-      line: { color: palette.border, width: 1 }
+      x: margin + columnWidth + gap / 2 - tokens.dividerWidth / 2,
+      y: bulletsY + tokens.dividerInsetY,
+      w: tokens.dividerWidth,
+      h: Math.max(0.8, bulletsHeight - tokens.dividerInsetY * 2),
+      fill: { color: resolvePaletteColor(palette, tokens.dividerColorKey, "border") },
+      line: { color: resolvePaletteColor(palette, tokens.dividerColorKey, "border"), width: 1 }
     });
   }
 }
@@ -1474,13 +2700,15 @@ function splitItemsForColumns(items) {
 }
 
 function renderImageSlide(slide, slideSpec, deckSpec, metrics) {
-  const { palette } = getTheme(deckSpec.theme);
-  const margin = 0.75;
-  const gap = 0.38;
-  const contentTop = 1.3;
-  const contentHeight = 5.2;
+  const presetName = getDeckPresetName(deckSpec);
+  const { palette } = getPreset(presetName);
+  const tokens = getPresetLayoutTokens(presetName).image;
+  const margin = tokens.margin;
+  const gap = tokens.gap;
+  const contentTop = tokens.top;
+  const contentHeight = tokens.height;
   const contentWidth = metrics.width - margin * 2;
-  const imageWidth = metrics.width > 11 ? 7.45 : 5.55;
+  const imageWidth = pickByLayout(tokens, metrics, "imageWidthWide", "imageWidthStandard");
   const textWidth = contentWidth - gap - imageWidth;
   const isImageRight = slideSpec.variant === "image-right";
   const panelX = isImageRight ? margin : margin + imageWidth + gap;
@@ -1511,29 +2739,32 @@ function renderImageSlide(slide, slideSpec, deckSpec, metrics) {
     h: contentHeight
   }, deckSpec);
 
-  let cursorY = contentTop + 0.18;
+  let cursorY = contentTop + tokens.panelTopInset;
   if (slideSpec.caption) {
-    const captionHeight = slideSpec.bullets.length > 0 ? 1.15 : contentHeight - 0.32;
+    const captionHeight = slideSpec.bullets.length > 0
+      ? tokens.captionHeightWithBullets
+      : contentHeight - (cursorY - contentTop) - tokens.panelBottomPad;
     addFittedText(slide, slideSpec.caption, {
-      x: panelX + 0.16,
+      x: panelX + tokens.panelPaddingX,
       y: cursorY,
-      w: textWidth - 0.32,
+      w: textWidth - tokens.panelPaddingX * 2,
       h: captionHeight
     }, "body", metrics, deckSpec, {
-      color: palette.text
+      color: resolvePaletteColor(palette, tokens.captionColorKey, "text")
     });
     cursorY += captionHeight + 0.08;
   }
 
   if (slideSpec.bullets.length > 0) {
+    const bulletInsetX = tokens.panelBulletInsetX;
     addBulletList(slide, slideSpec.bullets, {
-      x: panelX + 0.1,
+      x: panelX + bulletInsetX,
       y: cursorY,
-      w: textWidth - 0.2,
-      h: Math.max(0.7, contentHeight - (cursorY - contentTop) - 0.12)
+      w: textWidth - bulletInsetX * 2,
+      h: Math.max(0.7, contentHeight - (cursorY - contentTop) - tokens.panelBottomPad)
     }, "body", metrics, deckSpec, {
-      color: palette.text,
-      bulletIndent: 16
+      color: resolvePaletteColor(palette, tokens.bulletsColorKey, "text"),
+      bulletIndent: tokens.panelBulletIndent
     });
   }
 }
@@ -1548,67 +2779,72 @@ function renderClosingSlide(slide, slideSpec, deckSpec, metrics) {
 }
 
 function renderClosingSlideCard(slide, slideSpec, deckSpec, metrics) {
-  const { palette } = getTheme(deckSpec.theme);
-  const blockWidth = metrics.width > 11 ? 8.9 : 7.4;
+  const presetName = getDeckPresetName(deckSpec);
+  const { palette } = getPreset(presetName);
+  const tokens = getPresetLayoutTokens(presetName).closing.card;
+  const blockWidth = pickByLayout(tokens, metrics, "blockWidthWide", "blockWidthStandard");
   const blockX = (metrics.width - blockWidth) / 2;
   const subtitle = getClosingSlideSubtitle(slideSpec);
 
   addFittedText(slide, slideSpec.title, {
     x: blockX,
-    y: 2.1,
+    y: tokens.titleY,
     w: blockWidth,
-    h: 1.15
+    h: tokens.titleHeight
   }, "closingTitle", metrics, deckSpec, {
     bold: true,
-    color: "FFFFFF",
+    color: tokens.titleColor,
     align: "center",
-    fill: { color: palette.accentDark }
+    fill: { color: resolvePaletteColor(palette, tokens.titleFillColorKey, "accentDark") }
   });
 
   addFittedText(slide, subtitle, {
     x: blockX,
-    y: 3.55,
+    y: tokens.subtitleY,
     w: blockWidth,
-    h: 0.9
+    h: tokens.subtitleHeight
   }, "closingSubtitle", metrics, deckSpec, {
-    color: palette.muted,
+    color: resolvePaletteColor(palette, tokens.subtitleColorKey, "muted"),
     align: "center"
   });
 }
 
 function renderClosingSlideMinimal(slide, slideSpec, deckSpec, metrics) {
-  const { palette } = getTheme(deckSpec.theme);
-  const blockWidth = metrics.width > 11 ? 8.7 : 7.1;
+  const presetName = getDeckPresetName(deckSpec);
+  const { palette } = getPreset(presetName);
+  const tokens = getPresetLayoutTokens(presetName).closing.minimal;
+  const barWidth = pickByLayout(tokens, metrics, "barWidthWide", "barWidthStandard");
+  const blockWidth = pickByLayout(tokens, metrics, "blockWidthWide", "blockWidthStandard");
   const blockX = (metrics.width - blockWidth) / 2;
   const subtitle = getClosingSlideSubtitle(slideSpec);
 
   slide.addShape("rect", {
-    x: (metrics.width - 1.6) / 2,
-    y: 2.18,
-    w: 1.6,
-    h: 0.06,
-    fill: { color: palette.accent },
-    line: { color: palette.accent, width: 1 }
+    x: (metrics.width - barWidth) / 2,
+    y: tokens.barY,
+    w: barWidth,
+    h: tokens.barHeight,
+    fill: { color: resolvePaletteColor(palette, tokens.barColorKey, "accent") },
+    line: { color: resolvePaletteColor(palette, tokens.barColorKey, "accent"), width: 1 }
   });
 
   addFittedText(slide, slideSpec.title, {
     x: blockX,
-    y: 2.55,
+    y: tokens.titleY,
     w: blockWidth,
-    h: 0.95
+    h: tokens.titleHeight
   }, "closingTitle", metrics, deckSpec, {
     bold: true,
-    color: palette.text,
+    color: resolvePaletteColor(palette, tokens.titleColorKey, "text"),
     align: "center"
   });
 
   addFittedText(slide, subtitle, {
-    x: blockX + 0.12,
-    y: 3.7,
-    w: blockWidth - 0.24,
-    h: 0.78
+    x: blockX + tokens.subtitleInset,
+    y: tokens.subtitleY,
+    w: blockWidth - tokens.subtitleInset * 2,
+    h: tokens.subtitleHeight
   }, "closingSubtitle", metrics, deckSpec, {
-    color: palette.muted,
+    color: resolvePaletteColor(palette, tokens.subtitleColorKey, "muted"),
     align: "center"
   });
 }
@@ -1617,26 +2853,85 @@ function getClosingSlideSubtitle(slideSpec) {
   return slideSpec.subtitle || "";
 }
 
-function addSlideTitle(slide, title, metrics, deckSpec, margin) {
-  const { palette } = getTheme(deckSpec.theme);
+function addSlideTitle(slide, title, metrics, deckSpec, marginOverride) {
+  const presetName = getDeckPresetName(deckSpec);
+  const { palette } = getPreset(presetName);
+  const tokens = getPresetLayoutTokens(presetName).content;
+  const margin = marginOverride ?? tokens.slideTitleMargin;
+
   addFittedText(slide, title, {
     x: margin,
-    y: 0.42,
+    y: tokens.slideTitleY,
     w: metrics.width - margin * 2,
-    h: 0.65
+    h: tokens.slideTitleHeight
   }, "slideTitle", metrics, deckSpec, {
     bold: true,
     color: palette.text
   });
+
+  if (tokens.slideTitleAccentHeight > 0) {
+    const accentWidth = pickByLayout(tokens, metrics, "slideTitleAccentWidthWide", "slideTitleAccentWidthStandard");
+    const accentX = tokens.slideTitleAccentAlign === "center"
+      ? (metrics.width - accentWidth) / 2
+      : margin + tokens.slideTitleAccentInset;
+
+    slide.addShape("rect", {
+      x: accentX,
+      y: tokens.slideTitleY + tokens.slideTitleHeight + tokens.slideTitleAccentGap,
+      w: accentWidth,
+      h: tokens.slideTitleAccentHeight,
+      fill: { color: resolvePaletteColor(palette, tokens.slideTitleAccentColorKey, "accent") },
+      line: { color: resolvePaletteColor(palette, tokens.slideTitleAccentColorKey, "accent"), width: 1 }
+    });
+  }
 }
 
 function addPanelFrame(slide, box, deckSpec) {
-  const { palette } = getTheme(deckSpec.theme);
+  const presetName = getDeckPresetName(deckSpec);
+  const { palette } = getPreset(presetName);
+  const panelTokens = getPresetLayoutTokens(presetName).panel;
+
   slide.addShape("rect", {
     ...box,
-    fill: { color: palette.surface },
-    line: { color: palette.border, width: 1 }
+    fill: { color: resolvePaletteColor(palette, panelTokens.fillColorKey, "surface") },
+    line: {
+      color: resolvePaletteColor(palette, panelTokens.lineColorKey, "border"),
+      width: panelTokens.lineWidth
+    }
   });
+
+  if (panelTokens.accentBarHeight > 0) {
+    const accentX = box.x + panelTokens.accentBarInset;
+    const accentWidth = Math.max(0.12, box.w - panelTokens.accentBarInset * 2);
+    const accentY = panelTokens.accentBarPosition === "bottom"
+      ? box.y + box.h - panelTokens.accentBarHeight
+      : box.y;
+
+    slide.addShape("rect", {
+      x: accentX,
+      y: accentY,
+      w: accentWidth,
+      h: panelTokens.accentBarHeight,
+      fill: { color: resolvePaletteColor(palette, panelTokens.accentBarColorKey, "accent") },
+      line: { color: resolvePaletteColor(palette, panelTokens.accentBarColorKey, "accent"), width: 1 }
+    });
+  }
+
+  if (panelTokens.edgeBarWidth > 0) {
+    const edgeX = panelTokens.edgeBarPosition === "right"
+      ? box.x + box.w - panelTokens.edgeBarInset - panelTokens.edgeBarWidth
+      : box.x + panelTokens.edgeBarInset;
+    const edgeHeight = box.h - panelTokens.edgeBarInset * 2;
+
+    slide.addShape("rect", {
+      x: edgeX,
+      y: box.y + panelTokens.edgeBarInset,
+      w: panelTokens.edgeBarWidth,
+      h: Math.max(0.12, edgeHeight),
+      fill: { color: resolvePaletteColor(palette, panelTokens.edgeBarColorKey, "accentDark") },
+      line: { color: resolvePaletteColor(palette, panelTokens.edgeBarColorKey, "accentDark"), width: 1 }
+    });
+  }
 }
 
 function addFittedText(slide, text, box, roleName, metrics, deckSpec, overrides = {}) {
@@ -1674,13 +2969,17 @@ function addBulletList(slide, items, box, roleName, metrics, deckSpec, overrides
 }
 
 function buildTextOptions(roleName, text, metrics, deckSpec, overrides = {}) {
-  const theme = getTheme(deckSpec.theme);
-  const role = TEXT_ROLES[roleName];
+  const presetName = getDeckPresetName(deckSpec);
+  const preset = getPreset(presetName);
+  const role = getTextRoleForPreset(presetName, roleName);
+  if (!role) {
+    throw new Error(`unknown text role: ${roleName}`);
+  }
   const { densityHint = 0, ...rest } = overrides;
   const fontSize = rest.fontSize || pickFontSize(text, role, metrics, densityHint);
 
   return {
-    fontFace: theme.fonts[role.fontKey] || theme.fonts.body,
+    fontFace: preset.fonts[role.fontKey] || preset.fonts.body,
     fontSize,
     fit: "shrink",
     wrap: true,
@@ -1709,6 +3008,26 @@ function pickFontSize(text, role, metrics, densityHint = 0) {
   return Math.max(role.min, fontSize);
 }
 
+function hasAsideContent(slideSpec = {}) {
+  return Boolean(slideSpec.aside_title || slideSpec.asideTitle || slideSpec.aside_body || slideSpec.asideBody)
+    || (Array.isArray(slideSpec.aside_bullets) && slideSpec.aside_bullets.length > 0)
+    || (Array.isArray(slideSpec.asideBullets) && slideSpec.asideBullets.length > 0);
+}
+
+function pickByLayout(tokens, metrics, wideKey, standardKey) {
+  return metrics.width > 11 ? tokens[wideKey] : tokens[standardKey];
+}
+
+function resolvePaletteColor(palette, keyOrValue, fallbackKey) {
+  if (!keyOrValue && fallbackKey) {
+    return palette[fallbackKey];
+  }
+  if (typeof keyOrValue === "string" && palette[keyOrValue]) {
+    return palette[keyOrValue];
+  }
+  return keyOrValue || palette[fallbackKey];
+}
+
 function handleFatalError(error) {
   const result = {
     ok: false,
@@ -1722,13 +3041,20 @@ function handleFatalError(error) {
 export const __test__ = {
   REPO_ROOT,
   WORKSPACE_ROOT,
+  TEMPLATE_PRESETS,
   buildPresentation,
   buildDensityWarnings,
   defineDefaultMaster,
+  getDefaultVariantForPreset,
+  getPreset,
+  getPresetLayoutTokens,
+  getPresetTextRoleOverrides,
   normalizeSpec,
+  normalizeTemplatePreset,
   renderBulletsSlide,
   renderImageSlide,
   renderClosingSlide,
   renderTitleSlide,
+  resolveActivePreset,
   resolveSafeOutputPath
 };

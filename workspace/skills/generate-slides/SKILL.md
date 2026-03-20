@@ -56,7 +56,7 @@ npm ci --prefix workspace/skills/generate-slides
 ```
 
 5. Include optional fields when they help:
-   `theme`, `variant`, `lang`, `notes`, `sources`, and for image slides `image_fit`.
+   `template_preset`, `theme`, `variant`, `lang`, `notes`, `sources`, and for image slides `image_fit`.
 6. Run the helper.
 
 Default output:
@@ -82,13 +82,22 @@ node workspace/skills/generate-slides/scripts/generate_slides.mjs \
   `title`, `section`, `bullets`, `image`, `closing`
 - Set a top-level `title`.
 - Use `layout: "wide"` unless the user explicitly wants a standard 4:3 deck.
-- Choose a top-level `theme` explicitly unless the user asks for the legacy default look.
-- Map theme choice to deck intent:
-  `classic` for formal updates and status decks,
-  `editorial` for product narratives and showcases,
-  `contrast` for keynotes, workshops, and high-emphasis decks.
+- Prefer a top-level `template_preset` for new decks.
+- `theme` remains supported as a legacy alias for `classic`, `editorial`, and `contrast`.
+- If both `template_preset` and `theme` are present, `template_preset` wins.
+- Map preset choice to deck intent:
+  `classic` for continuity with the existing house style.
+  `editorial` for narrative or product showcase decks.
+  `contrast` for keynote, workshop, or high-emphasis decks.
+  `academic` for lectures, classes, and research summaries.
+  `brand-design` for branding, creative reviews, and portfolio-like decks.
+  `consulting-proposal` for proposals, client updates, and business reviews.
+  `market-research` for research readouts, insight summaries, and trend decks.
+  `pitch-deck` for startup pitches, strategy narratives, and bold story decks.
+  `project-kickoff` for kickoffs, operating reviews, and project alignment decks.
 - Vary slide `variant` values across the deck when it improves pacing instead of reusing one layout everywhere.
-- Keep `classic` plus default variants when the user wants continuity with the existing house style.
+- Omit `variant` when the preset family should pick the default layout for that slide type.
+- Keep `classic` plus omitted variants when the user wants continuity with the existing house style.
 - Use `image_fit: "cover"` by default for image slides.
 - Use `image_fit: "contain"` for screenshots, charts, or UI mockups when cropping would hurt readability.
 - Use `lang` for non-English decks, especially CJK content.
@@ -104,8 +113,9 @@ node workspace/skills/generate-slides/scripts/generate_slides.mjs \
 
 ## Notes
 
-- The generator now supports multiple built-in themes and per-slide layout variants.
-- Omitted `theme` and `variant` fields fall back to the legacy `classic` look.
+- The generator now supports preset families, legacy themes, and per-slide layout variants.
+- Omitted `template_preset` falls back to `theme`; if both are omitted the deck uses the legacy `classic` family.
+- Omitted `variant` values use preset-aware defaults.
 - Save the generated deck locally; this skill does not return the file through chat channels.
 - If `node` is unavailable, explain that this skill must run in a Node-capable runtime.
 - Do not blame an LLM/API/timeout failure on missing `node` unless a runtime check or command failure has confirmed that separately.
