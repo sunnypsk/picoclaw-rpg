@@ -82,7 +82,7 @@ func TestSingleSystemMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msgs := cb.BuildMessages(tt.history, tt.summary, tt.message, nil, "test", "chat1")
+			msgs := cb.BuildMessages(tt.history, tt.summary, tt.message, nil, "test", "chat1", "")
 
 			systemCount := 0
 			for _, m := range msgs {
@@ -153,6 +153,27 @@ func TestSystemPromptIncludesSoftMemoryAndStateGuidance(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "avoid repetitive closing templates") {
 		t.Fatal("system prompt should discourage repetitive closing templates")
+	}
+}
+
+func TestBuildMessages_WhatsAppNativeReplyHintRequiresMessageID(t *testing.T) {
+	tmpDir := setupWorkspace(t, nil)
+	defer os.RemoveAll(tmpDir)
+
+	cb := NewContextBuilder(tmpDir)
+
+	withMessageID := cb.BuildMessages(nil, "", "hello", nil, "whatsapp_native", "130184887930990@lid", "wamid-1")
+	withHint := withMessageID[0].Content
+	if !strings.Contains(withHint, "automatically attach quote metadata for the current inbound message") {
+		t.Fatalf("expected WhatsApp reply hint in system prompt, got %q", withHint)
+	}
+	if !strings.Contains(withHint, "cross-chat sends are plain messages") {
+		t.Fatalf("expected same-chat limitation in system prompt, got %q", withHint)
+	}
+
+	withoutMessageID := cb.BuildMessages(nil, "", "hello", nil, "whatsapp_native", "130184887930990@lid", "")
+	if strings.Contains(withoutMessageID[0].Content, "automatically attach quote metadata for the current inbound message") {
+		t.Fatalf("did not expect WhatsApp reply hint without message ID, got %q", withoutMessageID[0].Content)
 	}
 }
 
@@ -608,7 +629,7 @@ func TestConcurrentBuildSystemPromptWithCache(t *testing.T) {
 				}
 
 				// Also exercise BuildMessages concurrently
-				msgs := cb.BuildMessages(nil, "", "hello", nil, "test", "chat")
+				msgs := cb.BuildMessages(nil, "", "hello", nil, "test", "chat", "")
 				if len(msgs) < 2 {
 					errs <- "BuildMessages returned fewer than 2 messages"
 					return
@@ -696,6 +717,6 @@ func BenchmarkBuildMessagesWithCache(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = cb.BuildMessages(history, "summary", "new message", nil, "cli", "test")
+		_ = cb.BuildMessages(history, "summary", "new message", nil, "cli", "test", "")
 	}
 }

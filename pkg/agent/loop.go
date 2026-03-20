@@ -752,6 +752,7 @@ func (al *AgentLoop) buildPromptMessages(
 		opts.Media,
 		opts.Channel,
 		opts.ChatID,
+		opts.MessageID,
 	)
 
 	autoRecallQuery := opts.UserMessage

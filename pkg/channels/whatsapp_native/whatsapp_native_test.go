@@ -312,6 +312,37 @@ func TestBuildWhatsAppTextMessage_ReplyUsesExtendedTextMessage(t *testing.T) {
 	}
 }
 
+func TestBuildWhatsAppTextMessage_LIDReplyUsesExtendedTextMessage(t *testing.T) {
+	to, err := parseJID("130184887930990@lid")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waMsg := buildWhatsAppTextMessage(bus.OutboundMessage{
+		ChatID:           "130184887930990@lid",
+		Content:          "hello lid",
+		ReplyToMessageID: "3EB04F67AAC3BC8A2D38D7",
+		ReplyToSenderID:  "whatsapp:130184887930990:59@lid",
+	}, to)
+
+	if waMsg.GetExtendedTextMessage() == nil {
+		t.Fatal("expected extended text message")
+	}
+	contextInfo := waMsg.GetExtendedTextMessage().GetContextInfo()
+	if contextInfo == nil {
+		t.Fatal("expected context info")
+	}
+	if contextInfo.GetRemoteJID() != "130184887930990@lid" {
+		t.Fatalf("remote JID = %q, want %q", contextInfo.GetRemoteJID(), "130184887930990@lid")
+	}
+	if contextInfo.GetStanzaID() != "3EB04F67AAC3BC8A2D38D7" {
+		t.Fatalf("stanza ID = %q, want %q", contextInfo.GetStanzaID(), "3EB04F67AAC3BC8A2D38D7")
+	}
+	if contextInfo.GetParticipant() != "" {
+		t.Fatalf("participant = %q, want empty", contextInfo.GetParticipant())
+	}
+}
+
 func TestBuildWhatsAppMediaMessage_AttachesReplyContext(t *testing.T) {
 	uploadResp := whatsmeow.UploadResponse{
 		URL:        "https://example.com/image",

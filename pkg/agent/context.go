@@ -432,7 +432,22 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 //
 // See: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
 // See: https://platform.openai.com/docs/guides/prompt-caching
-func (cb *ContextBuilder) buildDynamicContext(channel, chatID string) string {
+func buildChannelReplyHint(channel, messageID string) string {
+	if !strings.EqualFold(strings.TrimSpace(channel), "whatsapp_native") {
+		return ""
+	}
+	if strings.TrimSpace(messageID) == "" {
+		return ""
+	}
+
+	return "## Channel Hints\n" +
+		"When replying in the current WhatsApp native chat, outbound messages automatically attach quote metadata " +
+		"for the current inbound message. You do not need to specify a reply target. This only applies when you " +
+		"stay in the same chat; cross-chat sends are plain messages. Do not say quoting is unsupported unless a " +
+		"send actually fails."
+}
+
+func (cb *ContextBuilder) buildDynamicContext(channel, chatID, messageID string) string {
 	now := time.Now().Format("2006-01-02 15:04 (Monday)")
 	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
 
@@ -441,6 +456,9 @@ func (cb *ContextBuilder) buildDynamicContext(channel, chatID string) string {
 
 	if channel != "" && chatID != "" {
 		fmt.Fprintf(&sb, "\n\n## Current Session\nChannel: %s\nChat ID: %s", channel, chatID)
+	}
+	if hint := buildChannelReplyHint(channel, messageID); hint != "" {
+		fmt.Fprintf(&sb, "\n\n%s", hint)
 	}
 
 	return sb.String()
@@ -451,7 +469,7 @@ func (cb *ContextBuilder) BuildMessages(
 	summary string,
 	currentMessage string,
 	media []string,
-	channel, chatID string,
+	channel, chatID, messageID string,
 ) []providers.Message {
 	messages := []providers.Message{}
 
@@ -467,7 +485,7 @@ func (cb *ContextBuilder) BuildMessages(
 	staticPrompt := cb.BuildSystemPromptWithCache()
 
 	// Build short dynamic context (time, runtime, session) — changes per request
-	dynamicCtx := cb.buildDynamicContext(channel, chatID)
+	dynamicCtx := cb.buildDynamicContext(channel, chatID, messageID)
 
 	// Compose a single system message: static (cached) + dynamic + optional summary.
 	// Keeping all system content in one message ensures every provider adapter can

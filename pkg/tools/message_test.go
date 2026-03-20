@@ -3,10 +3,21 @@ package tools
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 )
+
+func TestMessageTool_Description_MentionsCurrentConversationAndAutoQuote(t *testing.T) {
+	desc := NewMessageTool().Description()
+	if !strings.Contains(desc, "omit channel/chat_id") {
+		t.Fatalf("expected description to mention current conversation defaults, got %q", desc)
+	}
+	if !strings.Contains(desc, "quote") {
+		t.Fatalf("expected description to mention quote behavior, got %q", desc)
+	}
+}
 
 func TestMessageTool_Execute_Success(t *testing.T) {
 	tool := NewMessageTool()

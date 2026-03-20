@@ -742,6 +742,7 @@ func (c *WhatsAppNativeChannel) Send(ctx context.Context, msg bus.OutboundMessag
 	}
 
 	waMsg := buildWhatsAppTextMessage(msg, to)
+	logWhatsAppOutboundPreparation("text", to, msg.ReplyToMessageID, whatsAppContextInfo(waMsg), nil)
 
 	if _, err = client.SendMessage(ctx, to, waMsg); err != nil {
 		return fmt.Errorf("whatsapp send: %w", channels.ErrTemporary)
@@ -781,6 +782,9 @@ func (c *WhatsAppNativeChannel) SendMedia(ctx context.Context, msg bus.OutboundM
 		return fmt.Errorf("invalid chat id %q: %w", msg.ChatID, err)
 	}
 	replyContext := buildWhatsAppReplyContext(to, msg.ReplyToMessageID, msg.ReplyToSenderID)
+	logWhatsAppOutboundPreparation("media", to, msg.ReplyToMessageID, replyContext, map[string]any{
+		"media_parts": len(msg.Parts),
+	})
 
 	for _, part := range msg.Parts {
 		localPath, meta, err := store.ResolveWithMeta(part.Ref)
@@ -891,6 +895,34 @@ func buildWhatsAppReplyContext(chatJID types.JID, replyToMessageID, replyToSende
 	}
 
 	return contextInfo
+}
+
+func logWhatsAppOutboundPreparation(
+	kind string,
+	to types.JID,
+	replyToMessageID string,
+	contextInfo *waE2E.ContextInfo,
+	extra map[string]any,
+) {
+	replyToMessageID = strings.TrimSpace(replyToMessageID)
+	quoteAttempted := replyToMessageID != ""
+	fields := map[string]any{
+		"message_kind":        kind,
+		"chat_id":             to.String(),
+		"quote_attempted":     quoteAttempted,
+		"reply_to_message_id": replyToMessageID,
+		"has_context_info":    contextInfo != nil,
+		"participant_set":     contextInfo != nil && strings.TrimSpace(contextInfo.GetParticipant()) != "",
+	}
+	for key, value := range extra {
+		fields[key] = value
+	}
+
+	if quoteAttempted {
+		logger.InfoCF("whatsapp", "WhatsApp outbound message prepared", fields)
+		return
+	}
+	logger.DebugCF("whatsapp", "WhatsApp outbound message prepared", fields)
 }
 
 func buildWhatsAppTextMessage(msg bus.OutboundMessage, to types.JID) *waE2E.Message {

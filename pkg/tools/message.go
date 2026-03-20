@@ -24,7 +24,10 @@ func (t *MessageTool) Name() string {
 }
 
 func (t *MessageTool) Description() string {
-	return "Send a message to user on a chat channel. Use this when you want to communicate something."
+	return "Send a message to the user on a chat channel. If you omit channel/chat_id, the current " +
+		"conversation is used. Same-chat replies may automatically attach native quote metadata on " +
+		"supported channels such as whatsapp_native, so do not claim quote reply is unsupported unless " +
+		"the send actually fails."
 }
 
 func (t *MessageTool) Parameters() map[string]any {

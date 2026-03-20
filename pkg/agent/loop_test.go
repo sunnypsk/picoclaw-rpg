@@ -1092,6 +1092,7 @@ func (m *mockMediaResultTool) Execute(ctx context.Context, args map[string]any) 
 
 type singleToolCallProvider struct {
 	toolName string
+	args     map[string]any
 	calls    int
 }
 
@@ -1104,11 +1105,15 @@ func (p *singleToolCallProvider) Chat(
 ) (*providers.LLMResponse, error) {
 	if p.calls == 0 {
 		p.calls++
+		args := map[string]any{}
+		for key, value := range p.args {
+			args[key] = value
+		}
 		return &providers.LLMResponse{
 			ToolCalls: []providers.ToolCall{{
 				ID:        "tool-call-1",
 				Name:      p.toolName,
-				Arguments: map[string]any{},
+				Arguments: args,
 			}},
 			FinishReason: "tool_calls",
 		}, nil
@@ -1384,6 +1389,63 @@ func TestProcessMessageAndSend_WhatsAppNativeReplyCarriesReplyTarget(t *testing.
 	}
 	if outbound[0].ReplyToSenderID != "987654321@s.whatsapp.net" {
 		t.Fatalf("ReplyToSenderID = %q, want %q", outbound[0].ReplyToSenderID, "987654321@s.whatsapp.net")
+	}
+}
+
+func TestProcessMessageAndSend_WhatsAppNativeMessageToolCarriesReplyTarget(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &singleToolCallProvider{
+		toolName: "message",
+		args: map[string]any{
+			"content": "replying via tool",
+		},
+	}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	response, err := al.processMessageAndSend(context.Background(), bus.InboundMessage{
+		Channel:   "whatsapp_native",
+		SenderID:  "whatsapp:130184887930990:59@lid",
+		ChatID:    "130184887930990@lid",
+		MessageID: "wamid-lid-1",
+		Content:   "can you try again?",
+		Sender: bus.SenderInfo{
+			Platform:   "whatsapp",
+			PlatformID: "130184887930990:59@lid",
+		},
+		Peer:       bus.Peer{Kind: "direct", ID: "130184887930990@lid"},
+		SessionKey: "test-session",
+	})
+	if err != nil {
+		t.Fatalf("processMessageAndSend failed: %v", err)
+	}
+	if response != "done" {
+		t.Fatalf("response = %q, want %q", response, "done")
+	}
+
+	outbound := drainOutboundMessages(msgBus, 50*time.Millisecond)
+	if len(outbound) != 1 {
+		t.Fatalf("expected 1 outbound message, got %d: %+v", len(outbound), outbound)
+	}
+	if outbound[0].Content != "replying via tool" {
+		t.Fatalf("Content = %q, want %q", outbound[0].Content, "replying via tool")
+	}
+	if outbound[0].ReplyToMessageID != "wamid-lid-1" {
+		t.Fatalf("ReplyToMessageID = %q, want %q", outbound[0].ReplyToMessageID, "wamid-lid-1")
+	}
+	if outbound[0].ReplyToSenderID != "130184887930990:59@lid" {
+		t.Fatalf("ReplyToSenderID = %q, want %q", outbound[0].ReplyToSenderID, "130184887930990:59@lid")
 	}
 }
 
