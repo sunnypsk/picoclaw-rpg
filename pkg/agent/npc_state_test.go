@@ -122,6 +122,31 @@ func TestNPCStateStore_LoadState_LegacyMovedAtMapsToStartAt(t *testing.T) {
 	}
 }
 
+func TestNormalizeNPCState_DropsPlaceholderRelationshipKeys(t *testing.T) {
+	state := defaultNPCState()
+	state.Relationships = map[string]NPCRelationship{
+		"channel:user_id":   {LastChannel: "telegram", LastChatID: "chat-placeholder"},
+		"<channel:user_id>": {LastChannel: "telegram", LastChatID: "chat-placeholder-2"},
+		"telegram:user1":    {LastChannel: "telegram", LastChatID: "chat1"},
+		" TELEGRAM:USER2 ":  {LastChannel: "telegram", LastChatID: "chat2"},
+	}
+
+	normalized := normalizeNPCState(state)
+
+	if _, ok := normalized.Relationships["channel:user_id"]; ok {
+		t.Fatal("placeholder relationship key channel:user_id should be removed")
+	}
+	if _, ok := normalized.Relationships["<channel:user_id>"]; ok {
+		t.Fatal("placeholder relationship key <channel:user_id> should be removed")
+	}
+	if _, ok := normalized.Relationships["telegram:user1"]; !ok {
+		t.Fatal("expected real relationship telegram:user1 to remain")
+	}
+	if _, ok := normalized.Relationships["telegram:user2"]; !ok {
+		t.Fatal("expected normalized real relationship telegram:user2 to remain")
+	}
+}
+
 func TestNPCStateStore_UpdateState_AppliesConcurrentMutationsAtomically(t *testing.T) {
 	workspace := t.TempDir()
 	store := NewNPCStateStore(workspace)

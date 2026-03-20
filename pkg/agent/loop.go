@@ -233,6 +233,14 @@ func registerSharedToolsForAgent(
 	// Message tool
 	messageTool := tools.NewMessageTool()
 	messageTool.SetSendCallback(func(ctx context.Context, msg bus.OutboundMessage) error {
+		if shouldSuppressDuplicateProactiveMessage(agent, ctx, msg.Content) {
+			logger.DebugCF("agent", "Suppressed duplicate proactive outbound tool message", map[string]any{
+				"agent_id": agent.ID,
+				"channel":  msg.Channel,
+				"chat_id":  msg.ChatID,
+			})
+			return nil
+		}
 		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer pubCancel()
 		err := msgBus.PublishOutbound(pubCtx, msg)

@@ -14,6 +14,7 @@ type proactiveContextKey string
 
 const proactiveOutputCaptureKey proactiveContextKey = "proactive_output_capture"
 const proactiveSessionKeyContextKey proactiveContextKey = "proactive_session_key"
+const proactiveHeartbeatContextKey proactiveContextKey = "proactive_heartbeat"
 const replyStateTrackerContextKey proactiveContextKey = "reply_state_tracker"
 const replyStateTrackerDisabledKey proactiveContextKey = "reply_state_tracker_disabled"
 
@@ -63,6 +64,21 @@ func proactiveSessionKeyFromContext(ctx context.Context) string {
 	}
 	sessionKey, _ := ctx.Value(proactiveSessionKeyContextKey).(string)
 	return strings.TrimSpace(sessionKey)
+}
+
+func withProactiveHeartbeat(ctx context.Context) context.Context {
+	if ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, proactiveHeartbeatContextKey, true)
+}
+
+func isProactiveHeartbeatContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	active, _ := ctx.Value(proactiveHeartbeatContextKey).(bool)
+	return active
 }
 
 func withMirroredSessionKey(ctx context.Context, sessionKey string) context.Context {
@@ -197,6 +213,15 @@ func (al *AgentLoop) publishAgentMessage(
 		return false
 	}
 	if strings.TrimSpace(channel) == "" || strings.TrimSpace(chatID) == "" || content == "" {
+		return false
+	}
+	if shouldSuppressDuplicateProactiveMessage(agent, ctx, content) {
+		logger.DebugCF("agent", "Suppressed duplicate proactive direct message", map[string]any{
+			"agent_id":          agentIDOrUnknown(agent),
+			"channel":           channel,
+			"chat_id":           chatID,
+			"mirror_to_session": mirrorToSession,
+		})
 		return false
 	}
 	outbound := bus.OutboundMessage{

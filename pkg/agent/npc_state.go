@@ -455,6 +455,9 @@ func normalizeNPCState(state NPCState) NPCState {
 		if normalizedKey == "" {
 			continue
 		}
+		if isPlaceholderRelationshipKey(normalizedKey) {
+			continue
+		}
 		rel.Affinity = normalizeNPCLevel(rel.Affinity, NPCLevelMid)
 		rel.Trust = normalizeNPCLevel(rel.Trust, NPCLevelMid)
 		rel.Familiarity = normalizeNPCLevel(rel.Familiarity, NPCLevelLow)
@@ -476,6 +479,15 @@ func normalizeNPCState(state NPCState) NPCState {
 	state.RecentEvents = normalizeRecentEvents(state.RecentEvents)
 
 	return state
+}
+
+func isPlaceholderRelationshipKey(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "channel:user_id", "<channel:user_id>":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeHabits(habits []string) []string {
@@ -1060,7 +1072,7 @@ Output shape:
   "emotion": {"name": "string", "intensity": "low|mid|high", "reason": "string"},
   "location": {"area": "string", "scene": "string", "activity": "string", "start_at": "local datetime text (e.g. 2026-03-05 22:00)", "end_at": "local datetime text (e.g. 2026-03-05 23:30)", "move_reason": "string"},
   "relationships": {
-    "<channel:user_id>": {"affinity": "low|mid|high", "trust": "low|mid|high", "familiarity": "low|mid|high", "last_interaction_at": "RFC3339 timestamp", "last_channel": "string", "last_chat_id": "string", "last_peer_kind": "string", "last_session_key": "string", "last_user_message_at": "RFC3339 timestamp", "last_agent_message_at": "RFC3339 timestamp", "last_proactive_attempt_at": "RFC3339 timestamp", "last_proactive_success_at": "RFC3339 timestamp", "notes": "string"}
+    %q: {"affinity": "low|mid|high", "trust": "low|mid|high", "familiarity": "low|mid|high", "last_interaction_at": "RFC3339 timestamp", "last_channel": "string", "last_chat_id": "string", "last_peer_kind": "string", "last_session_key": "string", "last_user_message_at": "RFC3339 timestamp", "last_agent_message_at": "RFC3339 timestamp", "last_proactive_attempt_at": "RFC3339 timestamp", "last_proactive_success_at": "RFC3339 timestamp", "notes": "string"}
   },
   "habits": ["string"],
   "recent_events": [{"at": "RFC3339", "type": "string", "summary": "string"}]
@@ -1068,7 +1080,7 @@ Output shape:
 
 Rules:
 %s
-- Return a valid JSON object only.`, npcStateUpdaterPromptTag, npcStateUpdateRules(relationshipKey))
+- Return a valid JSON object only.`, npcStateUpdaterPromptTag, relationshipKey, npcStateUpdateRules(relationshipKey))
 }
 
 func buildNPCStateAndMemorySystemPrompt(relationshipKey string) string {
@@ -1084,7 +1096,7 @@ Output shape:
     "emotion": {"name": "string", "intensity": "low|mid|high", "reason": "string"},
     "location": {"area": "string", "scene": "string", "activity": "string", "start_at": "local datetime text (e.g. 2026-03-05 22:00)", "end_at": "local datetime text (e.g. 2026-03-05 23:30)", "move_reason": "string"},
     "relationships": {
-      "<channel:user_id>": {"affinity": "low|mid|high", "trust": "low|mid|high", "familiarity": "low|mid|high", "last_interaction_at": "RFC3339 timestamp", "last_channel": "string", "last_chat_id": "string", "last_peer_kind": "string", "last_session_key": "string", "last_user_message_at": "RFC3339 timestamp", "last_agent_message_at": "RFC3339 timestamp", "last_proactive_attempt_at": "RFC3339 timestamp", "last_proactive_success_at": "RFC3339 timestamp", "notes": "string"}
+      %q: {"affinity": "low|mid|high", "trust": "low|mid|high", "familiarity": "low|mid|high", "last_interaction_at": "RFC3339 timestamp", "last_channel": "string", "last_chat_id": "string", "last_peer_kind": "string", "last_session_key": "string", "last_user_message_at": "RFC3339 timestamp", "last_agent_message_at": "RFC3339 timestamp", "last_proactive_attempt_at": "RFC3339 timestamp", "last_proactive_success_at": "RFC3339 timestamp", "notes": "string"}
     },
     "habits": ["string"],
     "recent_events": [{"at": "RFC3339", "type": "string", "summary": "string"}]
@@ -1096,7 +1108,7 @@ Rules:
 %s
 - Keep memory_notes concise, deduplicated, and <= %d.
 - Merge/edit existing notes when possible instead of blind append.
-- Return valid JSON object only.`, npcUpdaterPromptTag, npcStateUpdateRules(relationshipKey), maxNPCMemoryNotes)
+- Return valid JSON object only.`, npcUpdaterPromptTag, relationshipKey, npcStateUpdateRules(relationshipKey), maxNPCMemoryNotes)
 }
 
 func (al *AgentLoop) requestNPCStateOnlyUpdate(

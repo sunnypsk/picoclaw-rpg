@@ -13,8 +13,10 @@ import (
 )
 
 type proactiveCaptureProvider struct {
-	mode  string
-	calls [][]providers.Message
+	mode          string
+	toolContent   string
+	directContent string
+	calls         [][]providers.Message
 }
 
 func (p *proactiveCaptureProvider) Chat(
@@ -42,13 +44,21 @@ func (p *proactiveCaptureProvider) Chat(
 	if strings.Contains(current, "# Proactive Outreach Check") && !hasToolResult {
 		switch p.mode {
 		case "direct":
-			return &providers.LLMResponse{Content: "hey there direct"}, nil
+			content := p.directContent
+			if strings.TrimSpace(content) == "" {
+				content = "hey there direct"
+			}
+			return &providers.LLMResponse{Content: content}, nil
 		default:
+			content := p.toolContent
+			if strings.TrimSpace(content) == "" {
+				content = "hey there"
+			}
 			return &providers.LLMResponse{
 				ToolCalls: []providers.ToolCall{{
 					ID:        "call-proactive-1",
 					Name:      "message",
-					Arguments: map[string]any{"content": "hey there"},
+					Arguments: map[string]any{"content": content},
 				}},
 			}, nil
 		}
@@ -211,6 +221,13 @@ func TestEvaluateProactiveOpportunity_RampsAndCooldown(t *testing.T) {
 	if eval.Ready || eval.Triggered {
 		t.Fatalf("expected cooldown to suppress proactive outreach, got %+v", eval)
 	}
+
+	rel.LastProactiveSuccessAt = ""
+	rel.LastProactiveAttemptAt = now.Add(-10 * time.Minute).Format(time.RFC3339)
+	eval = evaluateProactiveOpportunity(rel, cfg, 30*time.Minute, now, 0.0)
+	if eval.Ready || eval.Triggered {
+		t.Fatalf("expected recent attempt to suppress proactive outreach, got %+v", eval)
+	}
 }
 
 func TestRunProactiveHeartbeat_UsesRoutedHistoryAndMirrorsMessageToolOutput(t *testing.T) {
@@ -285,6 +302,18 @@ func TestRunProactiveHeartbeat_UsesRoutedHistoryAndMirrorsMessageToolOutput(t *t
 	}
 	if !strings.Contains(firstCall[len(firstCall)-1].Content, "# Proactive Outreach Check") {
 		t.Fatalf("last proactive input missing proactive prompt: %q", firstCall[len(firstCall)-1].Content)
+	}
+	if !strings.Contains(firstCall[len(firstCall)-1].Content, "Current time:") {
+		t.Fatalf("proactive prompt missing current time: %q", firstCall[len(firstCall)-1].Content)
+	}
+	if !strings.Contains(firstCall[len(firstCall)-1].Content, "Last user message at:") {
+		t.Fatalf("proactive prompt missing user timestamp: %q", firstCall[len(firstCall)-1].Content)
+	}
+	if !strings.Contains(firstCall[len(firstCall)-1].Content, "Latest user turn preview: remember the green mug") {
+		t.Fatalf("proactive prompt missing latest user preview: %q", firstCall[len(firstCall)-1].Content)
+	}
+	if !strings.Contains(firstCall[len(firstCall)-1].Content, "Latest assistant turn preview: I remember the green mug") {
+		t.Fatalf("proactive prompt missing latest assistant preview: %q", firstCall[len(firstCall)-1].Content)
 	}
 
 	routedHistory := agent.Sessions.GetHistory(routedSessionKey)
@@ -370,5 +399,169 @@ func TestRunProactiveHeartbeat_MirrorsDirectResponseToRoutedSession(t *testing.T
 		if strings.Contains(historyMsg.Content, "# Proactive Outreach Check") {
 			t.Fatalf("synthetic proactive prompt leaked into routed history: %+v", routedHistory)
 		}
+	}
+}
+
+func TestBuildProactivePrompt_IncludesAbsoluteTimesAndRecentTurnContext(t *testing.T) {
+	now := time.Date(2026, 3, 20, 12, 31, 3, 0, time.FixedZone("HKT", 8*60*60))
+	rel := NPCRelationship{
+		LastChannel:            "whatsapp_native",
+		LastChatID:             "130184887930990@lid",
+		LastPeerKind:           "direct",
+		LastUserMessageAt:      "2026-03-20T04:00:00Z",
+		LastAgentMessageAt:     "2026-03-20T04:10:00Z",
+		LastProactiveSuccessAt: "2026-03-20T03:00:00Z",
+	}
+	eval := proactiveEvaluation{
+		Silence:     3*time.Hour + 15*time.Minute,
+		Tolerance:   2 * time.Hour,
+		Probability: 0.45,
+	}
+	snapshot := proactiveSessionSnapshot{
+		LatestRole:      "user",
+		LatestUser:      "我隔離位個同事係咁咳",
+		LatestAssistant: "早兩日你都講過佢勁煩",
+	}
+
+	prompt := buildProactivePrompt("whatsapp_native:user1", rel, eval, now, snapshot)
+
+	if !strings.Contains(prompt, "2026-03-20T12:31:03+08:00") {
+		t.Fatalf("prompt missing absolute current timestamp: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Last user message at: 2026-03-20T04:00:00Z") {
+		t.Fatalf("prompt missing last user timestamp: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Latest user turn preview: 我隔離位個同事係咁咳") {
+		t.Fatalf("prompt missing latest user preview: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Recalled memory can be stale.") {
+		t.Fatalf("prompt missing stale memory guidance: %q", prompt)
+	}
+}
+
+func TestProactiveAutoRecallQueryFromHistory_RequiresUserLatest(t *testing.T) {
+	history := []providers.Message{
+		{Role: "user", Content: "earlier complaint"},
+		{Role: "assistant", Content: "latest proactive follow-up"},
+	}
+	if got := proactiveAutoRecallQueryFromHistory(history); got != "" {
+		t.Fatalf("proactiveAutoRecallQueryFromHistory() = %q, want empty", got)
+	}
+
+	history = append(history, providers.Message{Role: "user", Content: "new update from user"})
+	if got := proactiveAutoRecallQueryFromHistory(history); got != "new update from user" {
+		t.Fatalf("proactiveAutoRecallQueryFromHistory() = %q, want latest user turn", got)
+	}
+}
+
+func TestRunProactiveHeartbeat_DedupesSameTargetAcrossRelationships(t *testing.T) {
+	provider := &proactiveCaptureProvider{mode: "tool"}
+	al, agent, msgBus := newProactiveHeartbeatLoop(t, provider)
+
+	routedSessionKey := strings.ToLower(routing.BuildAgentPeerSessionKey(routing.SessionKeyParams{
+		AgentID: agent.ID,
+		Channel: "whatsapp_native",
+		Peer:    &routing.RoutePeer{Kind: "direct", ID: "130184887930990:59@lid"},
+		DMScope: routing.DMScopePerChannelPeer,
+	}))
+	agent.Sessions.GetOrCreate(routedSessionKey)
+	agent.Sessions.AddMessage(routedSessionKey, "user", "latest unresolved thing")
+
+	state := defaultNPCState()
+	state.Relationships = map[string]NPCRelationship{
+		"whatsapp_native:user-a": {
+			Affinity:          NPCLevelHigh,
+			Trust:             NPCLevelHigh,
+			Familiarity:       NPCLevelHigh,
+			LastChannel:       "whatsapp_native",
+			LastChatID:        "130184887930990@lid",
+			LastPeerKind:      "direct",
+			LastSessionKey:    routedSessionKey,
+			LastUserMessageAt: time.Now().Add(-6 * time.Hour).UTC().Format(time.RFC3339),
+		},
+		"whatsapp_native:user-b": {
+			Affinity:          NPCLevelHigh,
+			Trust:             NPCLevelHigh,
+			Familiarity:       NPCLevelHigh,
+			LastChannel:       "whatsapp_native",
+			LastChatID:        "130184887930990@lid",
+			LastPeerKind:      "direct",
+			LastSessionKey:    routedSessionKey,
+			LastUserMessageAt: time.Now().Add(-6 * time.Hour).UTC().Format(time.RFC3339),
+		},
+	}
+	if err := agent.StateStore.SaveState(state); err != nil {
+		t.Fatalf("SaveState() error: %v", err)
+	}
+
+	al.RunProactiveHeartbeat(context.Background())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, ok := msgBus.SubscribeOutbound(ctx); !ok {
+		t.Fatal("expected one proactive outbound message")
+	}
+
+	ctx, cancel = context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if msg, ok := msgBus.SubscribeOutbound(ctx); ok {
+		t.Fatalf("expected only one proactive outbound message, got %+v", msg)
+	}
+	proactivePromptCalls := 0
+	for _, call := range provider.calls {
+		if len(call) == 0 {
+			continue
+		}
+		if strings.Contains(call[len(call)-1].Content, "# Proactive Outreach Check") {
+			proactivePromptCalls++
+		}
+	}
+	if proactivePromptCalls != 1 {
+		t.Fatalf("proactive prompt call count = %d, want 1", proactivePromptCalls)
+	}
+}
+
+func TestRunProactiveHeartbeat_SuppressesDuplicateContentWhenAssistantLatest(t *testing.T) {
+	provider := &proactiveCaptureProvider{mode: "direct", directContent: "hey there"}
+	al, agent, msgBus := newProactiveHeartbeatLoop(t, provider)
+
+	routedSessionKey := strings.ToLower(routing.BuildAgentPeerSessionKey(routing.SessionKeyParams{
+		AgentID: agent.ID,
+		Channel: "telegram",
+		Peer:    &routing.RoutePeer{Kind: "direct", ID: "user1"},
+		DMScope: routing.DMScopePerChannelPeer,
+	}))
+	agent.Sessions.GetOrCreate(routedSessionKey)
+	agent.Sessions.AddMessage(routedSessionKey, "user", "earlier context")
+	agent.Sessions.AddMessage(routedSessionKey, "assistant", "hey there")
+
+	state := defaultNPCState()
+	state.Relationships = map[string]NPCRelationship{
+		"telegram:user1": {
+			Affinity:          NPCLevelHigh,
+			Trust:             NPCLevelHigh,
+			Familiarity:       NPCLevelHigh,
+			LastChannel:       "telegram",
+			LastChatID:        "chat1",
+			LastPeerKind:      "direct",
+			LastSessionKey:    routedSessionKey,
+			LastUserMessageAt: time.Now().Add(-6 * time.Hour).UTC().Format(time.RFC3339),
+		},
+	}
+	if err := agent.StateStore.SaveState(state); err != nil {
+		t.Fatalf("SaveState() error: %v", err)
+	}
+
+	al.RunProactiveHeartbeat(context.Background())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if msg, ok := msgBus.SubscribeOutbound(ctx); ok {
+		t.Fatalf("expected duplicate proactive content to be suppressed, got %+v", msg)
+	}
+
+	routedHistory := agent.Sessions.GetHistory(routedSessionKey)
+	if len(routedHistory) != 2 {
+		t.Fatalf("expected routed history to stay unchanged, got %+v", routedHistory)
 	}
 }

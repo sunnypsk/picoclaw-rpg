@@ -12,6 +12,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 )
 
@@ -23,6 +24,12 @@ type proactiveEvaluation struct {
 	Probability float64
 	Tolerance   time.Duration
 	Silence     time.Duration
+}
+
+type proactiveSessionSnapshot struct {
+	LatestRole      string
+	LatestUser      string
+	LatestAssistant string
 }
 
 func (al *AgentLoop) RunProactiveHeartbeat(ctx context.Context) {
@@ -37,7 +44,8 @@ func (al *AgentLoop) RunProactiveHeartbeat(ctx context.Context) {
 		ctx = context.Background()
 	}
 	interval := heartbeatIntervalDuration(al.cfg.Heartbeat.Interval)
-	now := time.Now().UTC()
+	currentTime := time.Now()
+	now := currentTime.UTC()
 	agentIDs := al.registry.ListAgentIDs()
 	sort.Strings(agentIDs)
 
@@ -59,11 +67,24 @@ func (al *AgentLoop) RunProactiveHeartbeat(ctx context.Context) {
 			relationshipKeys = append(relationshipKeys, key)
 		}
 		sort.Strings(relationshipKeys)
+		attemptedTargets := make(map[string]struct{}, len(relationshipKeys))
 		for _, relationshipKey := range relationshipKeys {
 			rel := state.Relationships[relationshipKey]
+			routedSessionKey, targetKey := proactiveTargetKeys(al.cfg, agent.ID, relationshipKey, rel)
 			eval := evaluateProactiveOpportunity(rel, proactiveCfg, interval, now, rand.Float64())
 			if !eval.Triggered {
 				continue
+			}
+			if targetKey != "" {
+				if _, exists := attemptedTargets[targetKey]; exists {
+					logger.DebugCF("agent", "Skipped duplicate proactive target in heartbeat", map[string]any{
+						"agent_id":         agent.ID,
+						"relationship_key": relationshipKey,
+						"target_key":       targetKey,
+					})
+					continue
+				}
+				attemptedTargets[targetKey] = struct{}{}
 			}
 			if err := recordProactiveAttempt(agent, relationshipKey, now); err != nil {
 				logger.WarnCF("agent", "Failed to record proactive attempt", map[string]any{
@@ -72,7 +93,7 @@ func (al *AgentLoop) RunProactiveHeartbeat(ctx context.Context) {
 					"error":            err.Error(),
 				})
 			}
-			sent, err := al.runProactiveOutreach(ctx, agent, relationshipKey, rel, eval)
+			sent, err := al.runProactiveOutreach(ctx, agent, relationshipKey, rel, eval, currentTime, routedSessionKey)
 			if err != nil {
 				logger.WarnCF("agent", "Proactive outreach failed", map[string]any{
 					"agent_id":         agent.ID,
@@ -101,11 +122,18 @@ func (al *AgentLoop) runProactiveOutreach(
 	relationshipKey string,
 	rel NPCRelationship,
 	eval proactiveEvaluation,
+	currentTime time.Time,
+	routedSessionKey string,
 ) (bool, error) {
 	if agent == nil {
 		return false, nil
 	}
-	routedSessionKey := proactiveContextSessionKey(al.cfg, agent.ID, relationshipKey, rel)
+	if currentTime.IsZero() {
+		currentTime = time.Now()
+	}
+	if strings.TrimSpace(routedSessionKey) == "" {
+		routedSessionKey = proactiveContextSessionKey(al.cfg, agent.ID, relationshipKey, rel)
+	}
 	if routedSessionKey == "" {
 		logger.DebugCF("agent", "Skipped proactive outreach without routed session key", map[string]any{
 			"agent_id":         agent.ID,
@@ -119,14 +147,18 @@ func (al *AgentLoop) runProactiveOutreach(
 		}
 	}
 	capture := &proactiveOutputCapture{}
-	proactiveCtx := withProactiveOutputCapture(withProactiveSessionKey(ctx, routedSessionKey), capture)
+	history := agent.Sessions.GetHistory(routedSessionKey)
+	snapshot := proactiveSessionSnapshotFromHistory(history)
+	proactiveCtx := withProactiveHeartbeat(
+		withProactiveOutputCapture(withProactiveSessionKey(ctx, routedSessionKey), capture),
+	)
 	response, err := al.runAgentLoop(proactiveCtx, agent, processOptions{
 		SessionKey:        proactiveSessionKey(agent.ID, relationshipKey),
 		ContextSessionKey: routedSessionKey,
 		Channel:           rel.LastChannel,
 		ChatID:            rel.LastChatID,
-		UserMessage:       buildProactivePrompt(relationshipKey, rel, eval),
-		AutoRecallQuery:   proactiveAutoRecallQuery(agent, routedSessionKey),
+		UserMessage:       buildProactivePrompt(relationshipKey, rel, eval, currentTime, snapshot),
+		AutoRecallQuery:   proactiveAutoRecallQueryFromHistory(history),
 		DefaultResponse:   proactiveNoopToken,
 		EnableSummary:     false,
 		SendResponse:      false,
@@ -142,8 +174,9 @@ func (al *AgentLoop) runProactiveOutreach(
 		return true, nil
 	}
 	if strings.TrimSpace(response) != "" && strings.TrimSpace(response) != proactiveNoopToken {
-		al.publishAgentMessage(proactiveCtx, agent, rel.LastChannel, rel.LastChatID, response, true)
-		return true, nil
+		if ok := al.publishAgentMessage(proactiveCtx, agent, rel.LastChannel, rel.LastChatID, response, true); ok {
+			return true, nil
+		}
 	}
 	return false, nil
 }
@@ -183,6 +216,23 @@ func proactiveContextSessionKey(
 	}))
 }
 
+func proactiveTargetKeys(
+	cfg *config.Config,
+	agentID, relationshipKey string,
+	rel NPCRelationship,
+) (string, string) {
+	routedSessionKey := proactiveContextSessionKey(cfg, agentID, relationshipKey, rel)
+	if routedSessionKey != "" {
+		return routedSessionKey, "session:" + routedSessionKey
+	}
+	channel := normalizeRelationshipChannel(rel.LastChannel)
+	chatID := strings.ToLower(strings.TrimSpace(rel.LastChatID))
+	if channel != "" && chatID != "" {
+		return "", "chat:" + channel + ":" + chatID
+	}
+	return "", ""
+}
+
 func proactivePeerID(relationshipKey string, rel NPCRelationship) string {
 	peerKind := normalizeRelationshipPeerKind(rel.LastPeerKind)
 	peerID := relationshipPeerID(relationshipKey)
@@ -211,24 +261,59 @@ func proactiveAutoRecallQuery(agent *AgentInstance, sessionKey string) string {
 	if agent == nil || agent.Sessions == nil || strings.TrimSpace(sessionKey) == "" {
 		return ""
 	}
-	history := agent.Sessions.GetHistory(sessionKey)
+	return proactiveAutoRecallQueryFromHistory(agent.Sessions.GetHistory(sessionKey))
+}
+
+func proactiveAutoRecallQueryFromHistory(history []providers.Message) string {
+	snapshot := proactiveSessionSnapshotFromHistory(history)
+	if snapshot.LatestRole != "user" {
+		return ""
+	}
+	return strings.TrimSpace(snapshot.LatestUser)
+}
+
+func proactiveSessionSnapshotFromHistory(history []providers.Message) proactiveSessionSnapshot {
+	snapshot := proactiveSessionSnapshot{}
 	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Role != "user" {
+		role := strings.TrimSpace(history[i].Role)
+		if role != "user" && role != "assistant" {
 			continue
 		}
 		content := strings.TrimSpace(history[i].Content)
 		if content == "" {
 			continue
 		}
-		return content
+		if snapshot.LatestRole == "" {
+			snapshot.LatestRole = role
+		}
+		switch role {
+		case "user":
+			if snapshot.LatestUser == "" {
+				snapshot.LatestUser = content
+			}
+		case "assistant":
+			if snapshot.LatestAssistant == "" {
+				snapshot.LatestAssistant = content
+			}
+		}
+		if snapshot.LatestRole != "" && snapshot.LatestUser != "" && snapshot.LatestAssistant != "" {
+			break
+		}
 	}
-	return ""
+	return snapshot
 }
 
-func buildProactivePrompt(relationshipKey string, rel NPCRelationship, eval proactiveEvaluation) string {
+func buildProactivePrompt(
+	relationshipKey string,
+	rel NPCRelationship,
+	eval proactiveEvaluation,
+	currentTime time.Time,
+	snapshot proactiveSessionSnapshot,
+) string {
 	relationshipJSON, _ := json.MarshalIndent(rel, "", "  ")
 	return fmt.Sprintf(`# Proactive Outreach Check
 
+Current time: %s
 Relationship key: %s
 Target channel: %s
 Target chat ID: %s
@@ -236,6 +321,12 @@ Target chat kind: %s
 Silence since last conversation activity: %s
 Effective silence tolerance: %s
 Current outreach probability on this heartbeat: %.2f
+Last user message at: %s
+Last agent message at: %s
+Last proactive success at: %s
+Latest visible session turn role: %s
+Latest user turn preview: %s
+Latest assistant turn preview: %s
 
 Relationship snapshot:
 %s
@@ -245,10 +336,108 @@ Decide whether you should proactively say something now.
 Rules:
 - It is completely acceptable to stay silent.
 - Prefer silence if the user may be working, sleeping, focused, socially tired, or simply seems to want space.
+- Treat the latest visible routed-session turn and the exact timestamps above as the ground truth for whether a topic is still current.
+- Recalled memory can be stale. Do not talk about an old issue as if it is happening right now unless the latest visible session context shows it is still ongoing.
 - If you decide to send something, use the message tool with a short, natural message. You can omit channel/chat_id and use the current target.
 - If you decide not to send anything, respond ONLY with: %s
 - Do not mention probabilities, timers, heartbeat checks, or internal state.
-`, relationshipKey, rel.LastChannel, rel.LastChatID, rel.LastPeerKind, eval.Silence.Round(time.Minute), eval.Tolerance.Round(time.Minute), eval.Probability, string(relationshipJSON), proactiveNoopToken)
+`, formatProactiveCurrentTime(currentTime), relationshipKey, rel.LastChannel, rel.LastChatID, rel.LastPeerKind,
+		eval.Silence.Round(time.Minute), eval.Tolerance.Round(time.Minute), eval.Probability,
+		formatProactiveTimestamp(rel.LastUserMessageAt, currentTime),
+		formatProactiveTimestamp(rel.LastAgentMessageAt, currentTime),
+		formatProactiveTimestamp(rel.LastProactiveSuccessAt, currentTime),
+		proactiveValueOrDefault(snapshot.LatestRole),
+		proactivePreviewOrDefault(snapshot.LatestUser),
+		proactivePreviewOrDefault(snapshot.LatestAssistant),
+		string(relationshipJSON), proactiveNoopToken)
+}
+
+func formatProactiveCurrentTime(currentTime time.Time) string {
+	if currentTime.IsZero() {
+		currentTime = time.Now()
+	}
+	return fmt.Sprintf("%s (%s)", currentTime.Format(time.RFC3339), currentTime.Location())
+}
+
+func formatProactiveTimestamp(raw string, currentTime time.Time) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "not recorded"
+	}
+	parsed, ok := parseRFC3339(raw)
+	if !ok {
+		return raw
+	}
+	return fmt.Sprintf("%s (%s)", parsed.Format(time.RFC3339), formatProactiveRelativeAge(currentTime.Sub(parsed)))
+}
+
+func formatProactiveRelativeAge(delta time.Duration) string {
+	if delta < 0 {
+		return "in the future"
+	}
+	if delta < time.Minute {
+		return "less than 1m ago"
+	}
+	return delta.Round(time.Minute).String() + " ago"
+}
+
+func proactivePreviewOrDefault(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return "none"
+	}
+	return autoRecallPreviewForLog(content, 120)
+}
+
+func proactiveValueOrDefault(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "none"
+	}
+	return value
+}
+
+func normalizeProactiveComparableContent(content string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(content)), " "))
+}
+
+func shouldSuppressDuplicateProactiveMessage(agent *AgentInstance, ctx context.Context, content string) bool {
+	if !isProactiveHeartbeatContext(ctx) || agent == nil || agent.Sessions == nil {
+		return false
+	}
+	sessionKey := strings.TrimSpace(mirroredSessionKeyFromContext(ctx))
+	if sessionKey == "" {
+		return false
+	}
+	if proactiveMessageMatchesLatestAssistant(agent.Sessions.GetHistory(sessionKey), content) {
+		return true
+	}
+	capture := mirroredOutboundCaptureFromContext(ctx)
+	if capture == nil {
+		return false
+	}
+	messages := capture.Messages()
+	for i := len(messages) - 1; i >= 0; i-- {
+		if normalizeProactiveComparableContent(messages[i]) == normalizeProactiveComparableContent(content) {
+			return true
+		}
+		if strings.TrimSpace(messages[i]) != "" {
+			break
+		}
+	}
+	return false
+}
+
+func proactiveMessageMatchesLatestAssistant(history []providers.Message, candidate string) bool {
+	snapshot := proactiveSessionSnapshotFromHistory(history)
+	if snapshot.LatestRole != "assistant" {
+		return false
+	}
+	if strings.TrimSpace(snapshot.LatestAssistant) == "" {
+		return false
+	}
+	return normalizeProactiveComparableContent(snapshot.LatestAssistant) ==
+		normalizeProactiveComparableContent(candidate)
 }
 
 func normalizeHeartbeatProactiveConfig(cfg config.HeartbeatProactiveConfig) config.HeartbeatProactiveConfig {
@@ -306,6 +495,9 @@ func evaluateProactiveOpportunity(
 		return eval
 	}
 	if cooldownActive(rel, cfg, now) {
+		return eval
+	}
+	if proactiveAttemptActive(rel, interval, now) {
 		return eval
 	}
 	eval.Ready = true
@@ -384,4 +576,15 @@ func cooldownActive(rel NPCRelationship, cfg config.HeartbeatProactiveConfig, no
 		return false
 	}
 	return now.Sub(lastSuccess) < time.Duration(cfg.CooldownMinutes)*time.Minute
+}
+
+func proactiveAttemptActive(rel NPCRelationship, interval time.Duration, now time.Time) bool {
+	if interval <= 0 {
+		interval = 30 * time.Minute
+	}
+	lastAttempt, ok := parseRFC3339(rel.LastProactiveAttemptAt)
+	if !ok {
+		return false
+	}
+	return now.Sub(lastAttempt) < interval
 }

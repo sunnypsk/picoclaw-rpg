@@ -22,15 +22,7 @@
     "end_at": "",
     "move_reason": ""
   },
-  "relationships": {
-    "channel:user_id": {
-      "affinity": "mid",
-      "trust": "mid",
-      "familiarity": "low",
-      "last_interaction_at": "",
-      "notes": ""
-    }
-  },
+  "relationships": {},
   "habits": [],
   "recent_events": []
 }
