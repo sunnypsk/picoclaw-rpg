@@ -163,12 +163,27 @@ Notes:
 }
 ```
 
+Generated image example:
+
+```json
+{
+  "type": "image",
+  "title": "Future State",
+  "image_prompt": "An editorial-style illustration of a connected factory floor at sunrise",
+  "caption": "Target operating model"
+}
+```
+
 - `title`: required
 - `variant`: optional `"image-left"` or `"image-right"`
-- `image_path`: required local file path
+- Provide exactly one of:
+  - `image_path`: local file path to an existing image
+  - `image_prompt`: text prompt used to generate a new local image asset for this slide
 - `image_fit`: optional `"cover"` or `"contain"`; defaults to `"cover"`
 - `caption`: optional string
 - `bullets`: optional array of strings
+
+Generated `image_prompt` assets are written beside the final deck in `<deck-stem>.assets/`.
 
 Common defaults:
 - `image-left`: `classic`, `editorial`, `contrast`, `academic`

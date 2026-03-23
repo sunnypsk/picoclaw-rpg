@@ -4,9 +4,11 @@ import argparse
 import base64
 import json
 import os
+import shutil
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -48,6 +50,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate or edit images with CPA chat completions.")
     parser.add_argument("--payload-file", required=True, help="Path to a JSON payload file")
     parser.add_argument("--timeout", type=float, default=300.0, help="HTTP timeout in seconds")
+    parser.add_argument("--output-dir", help="Optional directory to save generated images into")
+    parser.add_argument("--output-prefix", default="generated-image", help="Filename prefix used with --output-dir")
     return parser.parse_args()
 
 
@@ -230,6 +234,109 @@ def write_temp_image(data: bytes, suffix: str) -> str:
     return handle.name
 
 
+def decode_data_url(value: str) -> tuple[bytes, str]:
+    head, separator, payload = value.partition(",")
+    if not separator:
+        raise RuntimeError("invalid data URL")
+    if not head.lower().endswith(";base64"):
+        raise RuntimeError("unsupported data URL encoding")
+
+    content_type = head[5:-7] or "image/png"
+    try:
+        data = base64.b64decode(payload)
+    except ValueError as exc:
+        raise RuntimeError("invalid base64 image payload") from exc
+    return data, content_type
+
+
+def mimetype_to_suffix(content_type: str) -> str:
+    if "/" not in content_type:
+        return ""
+    subtype = content_type.split("/", 1)[1].split(";", 1)[0].strip()
+    if subtype == "jpeg":
+        return ".jpg"
+    if subtype == "svg+xml":
+        return ".svg"
+    return f".{subtype}" if subtype else ""
+
+
+def suffix_for_content_type(content_type: str) -> str:
+    normalized = content_type.strip().lower()
+    guessed = mimetype_to_suffix(normalized)
+    return guessed or ".png"
+
+
+def suffix_for_url(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    return Path(parsed.path).suffix or ".png"
+
+
+def sanitize_output_prefix(value: str) -> str:
+    cleaned = "".join(char if char.isalnum() or char in ("-", "_") else "-" for char in value.strip())
+    cleaned = cleaned.strip("-_")
+    return cleaned or "generated-image"
+
+
+def build_output_path(output_dir: Path, output_prefix: str, index: int, total: int, suffix: str) -> Path:
+    name = output_prefix if total == 1 else f"{output_prefix}-{index + 1}"
+    return output_dir / f"{name}{suffix}"
+
+
+def download_remote_image(url: str, destination: Path, timeout: float) -> None:
+    request = urllib.request.Request(
+        url=url,
+        headers={"User-Agent": DEFAULT_USER_AGENT},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            destination.write_bytes(response.read())
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"failed to download generated image {url}: HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"failed to download generated image {url}: {exc.reason}") from exc
+
+
+def materialize_images(images: list[str], output_dir: str | None, output_prefix: str, timeout: float) -> list[str]:
+    if not output_dir:
+        return images
+
+    directory = Path(output_dir).expanduser().resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    prefix = sanitize_output_prefix(output_prefix)
+    total = len(images)
+    materialized: list[str] = []
+
+    for index, item in enumerate(images):
+        value = item.strip()
+        lower = value.lower()
+
+        if lower.startswith("data:image/"):
+            data, content_type = decode_data_url(value)
+            destination = build_output_path(directory, prefix, index, total, suffix_for_content_type(content_type))
+            destination.write_bytes(data)
+            materialized.append(str(destination))
+            continue
+
+        if lower.startswith("http://") or lower.startswith("https://"):
+            destination = build_output_path(directory, prefix, index, total, suffix_for_url(value))
+            download_remote_image(value, destination, timeout)
+            materialized.append(str(destination))
+            continue
+
+        source = Path(value).expanduser().resolve()
+        if not source.is_file():
+            raise RuntimeError(f"generated image not found: {source}")
+
+        destination = build_output_path(directory, prefix, index, total, source.suffix or ".png")
+        if source != destination:
+            shutil.copy2(source, destination)
+        materialized.append(str(destination))
+
+    return materialized
+
+
 def main() -> int:
     args = parse_args()
 
@@ -243,6 +350,7 @@ def main() -> int:
         images = collect_images(response_data)
         if not images:
             raise RuntimeError("CPA image response did not include any usable image output")
+        images = materialize_images(images, args.output_dir, args.output_prefix, args.timeout)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -258,10 +366,9 @@ def main() -> int:
         indent=2,
         ensure_ascii=False,
     )
-    sys.stdout.write("\\n")
+    sys.stdout.write("\n")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

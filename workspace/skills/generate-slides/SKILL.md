@@ -1,7 +1,7 @@
 ---
 name: generate-slides
 description: Generate new PowerPoint slide decks (.pptx) from a prompt, outline, or structured slide spec using bundled Node.js helpers powered by PptxGenJS. Use when the user asks to create a presentation, turn notes into slides, make a slide deck, or generate a local PowerPoint file.
-metadata: {"nanobot":{"requires":{"bins":["node","npm"]}}}
+metadata: {"nanobot":{"requires":{"bins":["node","npm","python3"]}}}
 ---
 
 # Generate Slides
@@ -21,8 +21,10 @@ Do not use this skill to edit an existing `.pptx` file. This skill generates new
 ## Runtime
 
 - This skill requires Node.js 18+ and `npm`.
-- In Docker images built from this repo's standard runtime, `node` and `npm` should already be available.
-- On older deployments or host machines, verify availability with `node -v` and `npm -v` or quote the exact command error before saying the environment is missing them.
+- If any slide uses `image_prompt`, it also requires `python3`; on Windows, `python` or `py -3` are also supported fallbacks.
+- In Docker images built from this repo's standard runtime, `node`, `npm`, and `python3` should already be available.
+- On older deployments or host machines, verify availability with `node -v` and `npm -v`.
+- If `image_prompt` is used, also verify `python3 --version`; on Windows, `python --version` or `py -3 --version` are valid fallbacks, or quote the exact command error before saying the environment is missing them.
 
 ## Setup
 
@@ -47,8 +49,9 @@ npm ci --prefix .\workspace\skills\generate-slides
    Prefer 3-10 slides unless the user asks for more.
    Prefer one idea per slide.
    Use short bullets instead of dense paragraphs.
-   Use local image paths only.
+   Use an existing local `image_path`, or use `image_prompt` on image slides when the deck should generate new art.
 3. Verify the runtime with `node -v` and `npm -v` when the environment is uncertain.
+   If any image slide uses `image_prompt`, also verify `python3 --version`; on Windows, `python --version` or `py -3 --version` are valid fallbacks.
 4. If `workspace/skills/generate-slides/node_modules/pptxgenjs` is missing, run:
 
 ```bash
@@ -56,7 +59,7 @@ npm ci --prefix workspace/skills/generate-slides
 ```
 
 5. Include optional fields when they help:
-   `template_preset`, `theme`, `variant`, `lang`, `notes`, `sources`, and for image slides `image_fit`.
+   `template_preset`, `theme`, `variant`, `lang`, `notes`, `sources`, and for image slides `image_fit` or `image_prompt`.
 6. Run the helper.
 
 Default output:
@@ -98,6 +101,7 @@ node workspace/skills/generate-slides/scripts/generate_slides.mjs \
 - Vary slide `variant` values across the deck when it improves pacing instead of reusing one layout everywhere.
 - Omit `variant` when the preset family should pick the default layout for that slide type.
 - Keep `classic` plus omitted variants when the user wants continuity with the existing house style.
+- For `type: "image"`, provide exactly one of `image_path` or `image_prompt`.
 - Use `image_fit: "cover"` by default for image slides.
 - Use `image_fit: "contain"` for screenshots, charts, or UI mockups when cropping would hurt readability.
 - Use `lang` for non-English decks, especially CJK content.
@@ -106,6 +110,7 @@ node workspace/skills/generate-slides/scripts/generate_slides.mjs \
 ## Output
 
 - The helper writes a local `.pptx` file.
+- When `image_prompt` is used, the helper saves generated slide images beside the deck in `<deck-stem>.assets/` and embeds them silently into the deck.
 - Deck-level and slide-level `notes`/`sources` are written into speaker notes.
 - The helper prints normalized JSON to stdout with:
   `ok`, `title`, `slide_count`, `output_path`, and `warnings`

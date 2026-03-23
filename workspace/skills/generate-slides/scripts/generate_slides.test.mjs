@@ -333,6 +333,127 @@ test("explicit variants still override preset defaults", async t => {
   );
 });
 
+test("normalizeSpec materializes image_prompt slides into deck asset files", async t => {
+  const outputDir = path.join(WORKSPACE_ROOT, "generated-slides", `prompt-image-${process.pid}-${Date.now()}`);
+  const outputPath = path.join(outputDir, "deck.pptx");
+  const generatedCalls = [];
+
+  t.after(async () => {
+    await fs.rm(outputDir, { force: true, recursive: true });
+  });
+
+  const spec = await normalizeSpec(
+    {
+      title: "Prompt Deck",
+      slides: [
+        {
+          type: "image",
+          title: "Concept",
+          image_prompt: "A clay render of a connected factory"
+        }
+      ]
+    },
+    outputPath,
+    {
+      generatePromptImage: async ({ prompt, outputDir: assetDir, outputPrefix, slideIndex }) => {
+        generatedCalls.push({ prompt, outputDir: assetDir, outputPrefix, slideIndex });
+        const filePath = path.join(assetDir, `${outputPrefix}.png`);
+        await writeTinyPng(filePath);
+        return filePath;
+      }
+    }
+  );
+
+  assert.equal(generatedCalls.length, 1);
+  assert.deepEqual(generatedCalls[0], {
+    prompt: "A clay render of a connected factory",
+    outputDir: path.join(outputDir, "deck.assets"),
+    outputPrefix: "slide-01",
+    slideIndex: 0
+  });
+  assert.equal(spec.slides[0].imagePath, path.join(outputDir, "deck.assets", "slide-01.png"));
+});
+
+test("normalizeSpec rejects image slides that include both image_path and image_prompt", async t => {
+  const tempDir = path.join(WORKSPACE_ROOT, "generated-slides", `image-source-conflict-${process.pid}-${Date.now()}`);
+  const imagePath = path.join(tempDir, "existing.png");
+  await writeTinyPng(imagePath);
+
+  t.after(async () => {
+    await fs.rm(tempDir, { force: true, recursive: true });
+  });
+
+  await assert.rejects(
+    normalizeSpec({
+      title: "Deck",
+      slides: [
+        {
+          type: "image",
+          title: "Concept",
+          image_path: imagePath,
+          image_prompt: "A cinematic concept frame"
+        }
+      ]
+    }),
+    /exactly one of image_path or image_prompt/
+  );
+});
+
+test("normalizeSpec rejects image slides without image_path or image_prompt", async () => {
+  await assert.rejects(
+    normalizeSpec({
+      title: "Deck",
+      slides: [
+        {
+          type: "image",
+          title: "Concept"
+        }
+      ]
+    }),
+    /exactly one of image_path or image_prompt/
+  );
+});
+
+test("normalizeSpec supports mixed existing and generated image slides", async t => {
+  const outputDir = path.join(WORKSPACE_ROOT, "generated-slides", `mixed-image-slides-${process.pid}-${Date.now()}`);
+  const outputPath = path.join(outputDir, "deck.pptx");
+  const existingImagePath = path.join(outputDir, "existing.png");
+  await writeTinyPng(existingImagePath);
+
+  t.after(async () => {
+    await fs.rm(outputDir, { force: true, recursive: true });
+  });
+
+  const spec = await normalizeSpec(
+    {
+      title: "Mixed Deck",
+      slides: [
+        {
+          type: "image",
+          title: "Existing",
+          image_path: existingImagePath
+        },
+        {
+          type: "image",
+          title: "Generated",
+          image_prompt: "An illustrated operations war room"
+        }
+      ]
+    },
+    outputPath,
+    {
+      generatePromptImage: async ({ outputDir: assetDir, outputPrefix }) => {
+        const filePath = path.join(assetDir, `${outputPrefix}.png`);
+        await writeTinyPng(filePath);
+        return filePath;
+      }
+    }
+  );
+
+  assert.equal(spec.slides[0].imagePath, existingImagePath);
+  assert.equal(spec.slides[1].imagePath, path.join(outputDir, "deck.assets", "slide-02.png"));
+});
+
 test("defineDefaultMaster applies distinct preset styling", () => {
   const classic = { defineSlideMaster(config) { this.master = config; } };
   const consulting = { defineSlideMaster(config) { this.master = config; } };

@@ -4,6 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -12,6 +13,7 @@ const SKILL_DIR = path.resolve(SCRIPT_DIR, "..");
 const WORKSPACE_ROOT = path.resolve(SKILL_DIR, "..", "..");
 const REPO_ROOT = path.resolve(WORKSPACE_ROOT, "..");
 const GENERATED_SLIDES_DIR = path.join(WORKSPACE_ROOT, "generated-slides");
+const GENERATE_IMAGE_SCRIPT = path.join(WORKSPACE_ROOT, "skills", "generate-image", "scripts", "generate_image.py");
 
 const MASTER_NAME = "PICOCLAW_DEFAULT";
 const DEFAULT_THEME = "classic";
@@ -1681,7 +1683,7 @@ function stripBom(value) {
   return String(value || "").replace(/^\uFEFF/, "");
 }
 
-async function normalizeSpec(rawSpec, outputOverride) {
+async function normalizeSpec(rawSpec, outputOverride, options = {}) {
   if (!rawSpec || typeof rawSpec !== "object" || Array.isArray(rawSpec)) {
     throw new Error("slide spec must be a JSON object");
   }
@@ -1696,15 +1698,15 @@ async function normalizeSpec(rawSpec, outputOverride) {
   const lang = normalizeLang(rawSpec.lang, "lang");
   const notes = normalizeOptionalNotes(rawSpec.notes, "notes");
   const sources = normalizeOptionalSources(rawSpec.sources, "sources");
-  const slides = await Promise.all(
-    normalizeArray(rawSpec.slides, "slides").map((slide, index) => normalizeSlide(slide, index, activePreset))
-  );
+  const { outputPath, fallbackUsed } = resolveSafeOutputPath(outputOverride, filename, title);
+  const rawSlides = normalizeArray(rawSpec.slides, "slides");
+  const preparedSlides = await materializeGeneratedSlideImages(rawSlides, { outputPath }, options);
+  const slides = await Promise.all(preparedSlides.map((slide, index) => normalizeSlide(slide, index, activePreset)));
 
   if (slides.length === 0) {
     throw new Error("slides must contain at least one item");
   }
 
-  const { outputPath, fallbackUsed } = resolveSafeOutputPath(outputOverride, filename, title);
   const warnings = buildDensityWarnings({
     title,
     subtitle,
@@ -1735,6 +1737,186 @@ async function normalizeSpec(rawSpec, outputOverride) {
   };
 }
 
+async function materializeGeneratedSlideImages(rawSlides, context, options = {}) {
+  const slides = [];
+  const slideNumberWidth = Math.max(2, String(rawSlides.length).length);
+  const generatePromptImage = options.generatePromptImage || generatePromptImageAsset;
+  let assetsDir = "";
+
+  for (let index = 0; index < rawSlides.length; index += 1) {
+    const rawSlide = rawSlides[index];
+    if (!rawSlide || typeof rawSlide !== "object" || Array.isArray(rawSlide) || rawSlide.type !== "image") {
+      slides.push(rawSlide);
+      continue;
+    }
+
+    const imagePath = normalizeOptionalString(rawSlide.image_path, `slides[${index}].image_path`);
+    const imagePrompt = normalizeOptionalString(rawSlide.image_prompt, `slides[${index}].image_prompt`);
+
+    if (Boolean(imagePath) === Boolean(imagePrompt)) {
+      throw new Error(`slides[${index}] must include exactly one of image_path or image_prompt`);
+    }
+
+    if (!imagePrompt) {
+      slides.push(rawSlide);
+      continue;
+    }
+
+    if (!assetsDir) {
+      assetsDir = resolveDeckAssetDir(context.outputPath);
+      await fs.mkdir(assetsDir, { recursive: true });
+    }
+
+    const outputPrefix = `slide-${String(index + 1).padStart(slideNumberWidth, "0")}`;
+    let generatedImagePath = "";
+    try {
+      generatedImagePath = await generatePromptImage({
+        prompt: imagePrompt,
+        outputDir: assetsDir,
+        outputPrefix,
+        outputPath: context.outputPath,
+        slideIndex: index,
+        slide: rawSlide
+      });
+    } catch (error) {
+      throw new Error(`slides[${index}].image_prompt failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    const { image_prompt: _discardedImagePrompt, ...slideWithoutPrompt } = rawSlide;
+    slides.push({
+      ...slideWithoutPrompt,
+      image_path: generatedImagePath
+    });
+  }
+
+  return slides;
+}
+
+function resolveDeckAssetDir(outputPath) {
+  const stem = path.basename(outputPath, path.extname(outputPath));
+  return path.join(path.dirname(outputPath), `${stem}.assets`);
+}
+
+async function generatePromptImageAsset({ prompt, outputDir, outputPrefix }) {
+  await assertReadableFile(GENERATE_IMAGE_SCRIPT, "generate-image helper script");
+  await fs.mkdir(outputDir, { recursive: true });
+
+  const tempDir = await fs.mkdtemp(path.join(path.dirname(outputDir), ".generate-slide-image-"));
+  const payloadPath = path.join(tempDir, "payload.json");
+  await fs.writeFile(payloadPath, JSON.stringify({ prompt }, null, 2), "utf8");
+
+  try {
+    const { stdout } = await runGenerateImageHelper({
+      payloadFile: payloadPath,
+      outputDir,
+      outputPrefix
+    });
+
+    let parsed;
+    try {
+      parsed = JSON.parse(stripBom(stdout));
+    } catch (error) {
+      throw new Error(`generate-image helper returned invalid JSON: ${error.message}`);
+    }
+
+    const images = normalizeStringList(parsed.images, "generate-image output images");
+    if (images.length === 0) {
+      throw new Error("generate-image helper returned no images");
+    }
+
+    const imagePath = resolveAgainstRepo(images[0]);
+    await assertReadableFile(imagePath, "generated slide image");
+    return imagePath;
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function runGenerateImageHelper({ payloadFile, outputDir, outputPrefix }) {
+  let missingRuntimeError = null;
+
+  for (const candidate of getPythonCommandCandidates()) {
+    try {
+      return await runProcess(candidate.command, [
+        ...candidate.args,
+        GENERATE_IMAGE_SCRIPT,
+        "--payload-file",
+        payloadFile,
+        "--output-dir",
+        outputDir,
+        "--output-prefix",
+        outputPrefix
+      ]);
+    } catch (error) {
+      if (isMissingPythonRuntime(error)) {
+        missingRuntimeError = error;
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  const error = new Error("python runtime not found; install python3 or use python / py -3 on Windows");
+  if (missingRuntimeError) {
+    error.cause = missingRuntimeError;
+  }
+  throw error;
+}
+
+function isMissingPythonRuntime(error) {
+  const detail = `${error?.message || ""}\n${error?.stderr || ""}\n${error?.stdout || ""}`.toLowerCase();
+  return error?.code === "ENOENT"
+    || detail.includes("no installed python found")
+    || detail.includes("the file cannot be accessed by the system");
+}
+
+function getPythonCommandCandidates() {
+  if (process.platform === "win32") {
+    return [
+      { command: "python3", args: [] },
+      { command: "python", args: [] },
+      { command: "py", args: ["-3"] }
+    ];
+  }
+
+  return [{ command: "python3", args: [] }];
+}
+
+function runProcess(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: REPO_ROOT,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", chunk => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", chunk => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", code => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+
+      const detail = stderr.trim() || stdout.trim() || `${command} exited with code ${code}`;
+      const error = new Error(`${command} exited with code ${code}: ${detail}`);
+      error.code = code;
+      error.stdout = stdout;
+      error.stderr = stderr;
+      reject(error);
+    });
+  });
+}
 async function normalizeSlide(rawSlide, index, activePreset) {
   if (!rawSlide || typeof rawSlide !== "object" || Array.isArray(rawSlide)) {
     throw new Error(`slides[${index}] must be an object`);
