@@ -29,7 +29,7 @@ func (t *EditFileTool) Name() string {
 }
 
 func (t *EditFileTool) Description() string {
-	return "Edit a file by replacing old_text with new_text. The old_text must exist exactly in the file."
+	return "Edit a file by replacing old_text with new_text. The old_text must exist exactly in the file. If the path is readable with read_file, re-read it before claiming success to the user."
 }
 
 func (t *EditFileTool) Parameters() map[string]any {
@@ -92,7 +92,7 @@ func (t *AppendFileTool) Name() string {
 }
 
 func (t *AppendFileTool) Description() string {
-	return "Append content to the end of a file"
+	return "Append content to the end of a file. If the path is readable with read_file, re-read it before claiming success to the user."
 }
 
 func (t *AppendFileTool) Parameters() map[string]any {

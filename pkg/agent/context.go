@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -39,6 +40,9 @@ type ContextBuilder struct {
 	// build time. This catches nested file creations/deletions/mtime changes
 	// that may not update the top-level skill root directory mtime.
 	skillFilesAtCache map[string]time.Time
+
+	webSearchAvailable atomic.Bool
+	webFetchAvailable  atomic.Bool
 }
 
 func getGlobalConfigDir() string {
@@ -90,17 +94,21 @@ Your workspace is at: %s
 
 1. **ALWAYS use tools** - When you need to perform an action (schedule reminders, send messages, execute commands, etc.), you MUST call the appropriate tool. Do NOT just say you'll do it or pretend to do it. Treat explicit or implied reminder intent as actionable: if timing is clear, schedule it; if timing is ambiguous, ask one quick clarification. For cancel requests like "cancel that reminder", remove directly only when there is one clear match; otherwise ask the user which one.
 
-2. **Be playful but useful** - Keep responses practical and accurate, with natural playful energy.
+2. **Fresh facts** - For latest/current/today/recent/news/prices/schedules/releases/rules or other likely-to-change external facts, verify with the available web tools before answering. If the needed verification tools are unavailable or verification fails, say so clearly and do not guess. When freshness matters, include the exact verification date and brief sources.
 
-3. **Memory** - When interacting with me if something seems memorable, update %s/memory/MEMORY.md
+3. **Verify actions before claiming success** - Do not say an action is done until you have tool evidence. After file edits or writes, re-read with read_file when that path is readable. For cron add/remove/enable/disable, use the tool result itself as evidence instead of listing jobs from other conversations. Confirm installed skills exist and their SKILL.md is readable before saying they are ready. For sent messages or returned media, treat tool success or returned refs as evidence; if the tool fails, say it failed.
 
-4. **Workspace hygiene** - Keep STATE.md and memory/MEMORY.md concise working documents. Aim to keep each within about 10000 tokens when practical. This is a soft limit, not a hard cap. If either file grows too large, summarize older content and remove outdated or redundant details while preserving important current context.
+4. **Be playful and useful** - Keep responses practical and accurate, with natural playful energy.
 
-5. **Response style** - Default to short IM-style replies (usually 1-3 short sentences). Lead with the direct answer and avoid repetitive closing templates like "如果你想，我可以…" or "If you want, I can…".
+5. **Memory** - When interacting with me if something seems memorable, update %s/memory/MEMORY.md
 
-6. **Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.
+6. **Workspace hygiene** - Keep STATE.md and memory/MEMORY.md concise working documents. Aim to keep each within about 10000 tokens when practical. This is a soft limit, not a hard cap. If either file grows too large, summarize older content and remove outdated or redundant details while preserving important current context.
 
-7. **State and memory perspective** - When reading existing STATE.md or MEMORY.md notes, treat old third-person references to the assistant or helper as referring to yourself unless they are clearly quoted or contrasted with another assistant. When writing new state or managed memory notes, use first-person self-reference and prefer display names or neutral contact labels over raw channel:user_id text.`,
+7. **Response style** - Default to short IM-style replies (usually 1-3 short sentences). Lead with the direct answer and avoid repetitive closing templates like "如果你想，我可以…" or "If you want, I can…".
+
+8. **Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.
+
+9. **State and memory perspective** - When reading existing STATE.md or MEMORY.md notes, treat old third-person references to the assistant or helper as referring to yourself unless they are clearly quoted or contrasted with another assistant. When writing new state or managed memory notes, use first-person self-reference and prefer display names or neutral contact labels over raw channel:user_id text.`,
 		workspacePath, workspacePath, workspacePath, workspacePath, workspacePath, workspacePath)
 }
 
@@ -449,9 +457,45 @@ func buildChannelReplyHint(channel, messageID string) string {
 		"send actually fails."
 }
 
+func (cb *ContextBuilder) SetWebToolAvailability(hasWebSearch, hasWebFetch bool) {
+	cb.webSearchAvailable.Store(hasWebSearch)
+	cb.webFetchAvailable.Store(hasWebFetch)
+}
+
+func (cb *ContextBuilder) webToolAvailability() (bool, bool) {
+	return cb.webSearchAvailable.Load(), cb.webFetchAvailable.Load()
+}
+
+func buildFreshFactsToolHint(hasWebSearch, hasWebFetch bool) string {
+	switch {
+	case hasWebSearch && hasWebFetch:
+		return "## Web Verification\n" +
+			"web_search and web_fetch are available. For freshness-sensitive external facts, search first and " +
+			"usually fetch the cited pages before answering. Include the exact verification date and brief sources. " +
+			"If verification fails, say so clearly and do not guess."
+	case hasWebSearch:
+		return "## Web Verification\n" +
+			"web_search is available and web_fetch is not. For freshness-sensitive external facts, verify with " +
+			"web_search and cite the results you used. Do not claim you fetched a page. Include the exact " +
+			"verification date and brief sources. If search results are not enough to verify the answer, say so " +
+			"clearly and do not guess."
+	case hasWebFetch:
+		return "## Web Verification\n" +
+			"web_fetch is available and web_search is not. Use web_fetch only for URLs or pages the user already " +
+			"provided or explicitly referenced. If fresh search is needed and unavailable here, say so clearly and " +
+			"do not guess. Include the exact verification date and brief sources when you can verify from the " +
+			"provided pages."
+	default:
+		return "## Web Verification\n" +
+			"No web verification tools are currently available. If a freshness-sensitive answer depends on current " +
+			"external facts, say you cannot verify here and do not guess."
+	}
+}
+
 func (cb *ContextBuilder) buildDynamicContext(channel, chatID, messageID string) string {
 	now := time.Now().Format("2006-01-02 15:04 (Monday)")
 	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
+	hasWebSearch, hasWebFetch := cb.webToolAvailability()
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "## Current Time\n%s\n\n## Runtime\n%s", now, rt)
@@ -459,6 +503,7 @@ func (cb *ContextBuilder) buildDynamicContext(channel, chatID, messageID string)
 	if channel != "" && chatID != "" {
 		fmt.Fprintf(&sb, "\n\n## Current Session\nChannel: %s\nChat ID: %s", channel, chatID)
 	}
+	fmt.Fprintf(&sb, "\n\n%s", buildFreshFactsToolHint(hasWebSearch, hasWebFetch))
 	if hint := buildChannelReplyHint(channel, messageID); hint != "" {
 		fmt.Fprintf(&sb, "\n\n%s", hint)
 	}

@@ -9,6 +9,73 @@ import (
 	"github.com/sipeed/picoclaw/pkg/cron"
 )
 
+func TestCronToolDescriptionMentionsScopedListAndToolResults(t *testing.T) {
+	tool, _ := newTestCronTool(t)
+	desc := tool.Description()
+	if !strings.Contains(desc, "inspect enabled reminders for the current conversation") {
+		t.Fatalf("expected cron description to scope list to the current conversation, got %q", desc)
+	}
+	if !strings.Contains(desc, "tool result itself as confirmation") {
+		t.Fatalf("expected cron description to use tool results as confirmation, got %q", desc)
+	}
+	if strings.Contains(desc, "Re-check with list") {
+		t.Fatalf("cron description should not recommend re-checking with list, got %q", desc)
+	}
+}
+
+func TestCronTool_ListJob_IsScopedToCurrentConversation(t *testing.T) {
+	tool, service := newTestCronTool(t)
+
+	addEveryJob(t, service, "stretch in chat 1", "telegram", "chat-1")
+	addEveryJob(t, service, "stretch in chat 2", "telegram", "chat-2")
+
+	ctx := WithToolContext(context.Background(), "telegram", "chat-1")
+	result := tool.Execute(ctx, map[string]any{
+		"action": "list",
+	})
+
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "stretch in chat 1") {
+		t.Fatalf("expected current chat job to appear in list, got %q", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "stretch in chat 2") {
+		t.Fatalf("did not expect other chat job in list, got %q", result.ForLLM)
+	}
+}
+
+func TestCronTool_ListJob_OmitsDisabledJobs(t *testing.T) {
+	tool, service := newTestCronTool(t)
+
+	addEveryJob(t, service, "stretch in chat 1", "telegram", "chat-1")
+	jobs := service.ListJobs(true)
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(jobs))
+	}
+
+	disableResult := tool.Execute(context.Background(), map[string]any{
+		"action": "disable",
+		"job_id": jobs[0].ID,
+	})
+	if disableResult.IsError {
+		t.Fatalf("expected disable success, got error: %s", disableResult.ForLLM)
+	}
+
+	listResult := tool.Execute(WithToolContext(context.Background(), "telegram", "chat-1"), map[string]any{
+		"action": "list",
+	})
+	if listResult.IsError {
+		t.Fatalf("expected list success, got error: %s", listResult.ForLLM)
+	}
+	if strings.Contains(listResult.ForLLM, "stretch in chat 1") {
+		t.Fatalf("expected disabled job to be omitted from list, got %q", listResult.ForLLM)
+	}
+	if listResult.ForLLM != "No scheduled jobs" {
+		t.Fatalf("expected no enabled jobs after disable, got %q", listResult.ForLLM)
+	}
+}
+
 func TestCronTool_AddJob_WithNaturalRequest(t *testing.T) {
 	tool, service := newTestCronTool(t)
 

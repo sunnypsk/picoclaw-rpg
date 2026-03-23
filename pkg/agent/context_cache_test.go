@@ -156,6 +156,88 @@ func TestSystemPromptIncludesSoftMemoryAndStateGuidance(t *testing.T) {
 	}
 }
 
+func TestSystemPromptIncludesFreshFactAndActionVerificationGuidance(t *testing.T) {
+	tmpDir := setupWorkspace(t, nil)
+	defer os.RemoveAll(tmpDir)
+
+	cb := NewContextBuilder(tmpDir)
+	prompt := cb.BuildSystemPrompt()
+
+	if !strings.Contains(prompt, "verify with the available web tools before answering") {
+		t.Fatal("system prompt should require using available web tools for fresh facts")
+	}
+	if !strings.Contains(prompt, "needed verification tools are unavailable or verification fails") {
+		t.Fatal("system prompt should explain what to do when web verification is unavailable")
+	}
+	if !strings.Contains(prompt, "exact verification date and brief sources") {
+		t.Fatal("system prompt should require exact dates and sources for freshness-sensitive answers")
+	}
+	if !strings.Contains(prompt, "Do not say an action is done until you have tool evidence") {
+		t.Fatal("system prompt should require evidence before claiming action success")
+	}
+	if !strings.Contains(prompt, "re-read with read_file when that path is readable") {
+		t.Fatal("system prompt should only require file read-back when the path is readable")
+	}
+	if !strings.Contains(prompt, "use the tool result itself as evidence") {
+		t.Fatal("system prompt should use cron tool results as evidence")
+	}
+	if strings.Contains(prompt, "check the job list after cron changes") {
+		t.Fatal("system prompt should not tell the agent to list cron jobs after changes")
+	}
+	if !strings.Contains(prompt, "their SKILL.md is readable") {
+		t.Fatal("system prompt should require installed skill verification before claiming success")
+	}
+}
+
+func TestBuildMessages_IncludesToolAwareWebVerificationHint(t *testing.T) {
+	tmpDir := setupWorkspace(t, nil)
+	defer os.RemoveAll(tmpDir)
+
+	tests := []struct {
+		name         string
+		hasWebSearch bool
+		hasWebFetch  bool
+		want         string
+	}{
+		{
+			name:         "search and fetch",
+			hasWebSearch: true,
+			hasWebFetch:  true,
+			want:         "web_search and web_fetch are available",
+		},
+		{
+			name:         "search only",
+			hasWebSearch: true,
+			hasWebFetch:  false,
+			want:         "web_search is available and web_fetch is not",
+		},
+		{
+			name:         "fetch only",
+			hasWebSearch: false,
+			hasWebFetch:  true,
+			want:         "web_fetch is available and web_search is not",
+		},
+		{
+			name:         "no web tools",
+			hasWebSearch: false,
+			hasWebFetch:  false,
+			want:         "No web verification tools are currently available",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cb := NewContextBuilder(tmpDir)
+			cb.SetWebToolAvailability(tt.hasWebSearch, tt.hasWebFetch)
+
+			msgs := cb.BuildMessages(nil, "", "hello", nil, "telegram", "chat-1", "")
+			if !strings.Contains(msgs[0].Content, tt.want) {
+				t.Fatalf("expected system prompt to contain %q, got %q", tt.want, msgs[0].Content)
+			}
+		})
+	}
+}
+
 func TestBuildMessages_WhatsAppNativeReplyHintRequiresMessageID(t *testing.T) {
 	tmpDir := setupWorkspace(t, nil)
 	defer os.RemoveAll(tmpDir)

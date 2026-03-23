@@ -421,6 +421,25 @@ func TestDefaultWorkspaceBootstrapContent_ProactiveGuidanceIncludesAntiRepeatAnd
 	}
 }
 
+func TestDefaultWorkspaceBootstrapContent_IncludesVerificationGuidance(t *testing.T) {
+	agents := defaultWorkspaceBootstrapContent["AGENTS.md"]
+	if !strings.Contains(agents, "verify with available web tools before answering") {
+		t.Fatalf("expected fresh-fact verification guidance in fallback AGENTS.md template")
+	}
+	if !strings.Contains(agents, "Do not claim a mutating action succeeded until you have checked the result") {
+		t.Fatalf("expected action verification guidance in fallback AGENTS.md template")
+	}
+	if !strings.Contains(agents, "tool's own success or error result as evidence for add/remove/enable/disable") {
+		t.Fatalf("expected cron tool-result guidance in fallback AGENTS.md template")
+	}
+	if !strings.Contains(agents, "path is readable via read_file") {
+		t.Fatalf("expected conditional read-back guidance in fallback AGENTS.md template")
+	}
+	if strings.Contains(agents, "re-check cron after reminder changes") {
+		t.Fatalf("fallback AGENTS.md template should not tell the agent to re-check cron via list")
+	}
+}
+
 func TestNewAgentInstance_DoesNotOverwriteExistingBootstrapFile(t *testing.T) {
 	root := t.TempDir()
 	defaultWorkspace := filepath.Join(root, "workspace-main")

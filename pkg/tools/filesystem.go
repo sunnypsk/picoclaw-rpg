@@ -298,7 +298,7 @@ func (t *WriteFileTool) Name() string {
 }
 
 func (t *WriteFileTool) Description() string {
-	return "Write content to a file"
+	return "Write content to a file. If the path is readable with read_file, re-read it before claiming success to the user."
 }
 
 func (t *WriteFileTool) Parameters() map[string]any {

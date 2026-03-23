@@ -12,6 +12,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestWriteFileToolDescriptionMentionsReadBackVerification(t *testing.T) {
+	desc := NewWriteFileTool(t.TempDir(), true).Description()
+	if !strings.Contains(desc, "If the path is readable with read_file") {
+		t.Fatalf("expected write_file description to mention read-back verification, got %q", desc)
+	}
+}
+
 // TestFilesystemTool_ReadFile_Success verifies successful file reading
 func TestFilesystemTool_ReadFile_Success(t *testing.T) {
 	tmpDir := t.TempDir()

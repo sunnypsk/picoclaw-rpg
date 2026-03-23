@@ -10,6 +10,18 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestEditAndAppendToolDescriptions_MentionReadBackVerification(t *testing.T) {
+	editDesc := NewEditFileTool(t.TempDir(), true).Description()
+	if !strings.Contains(editDesc, "If the path is readable with read_file") {
+		t.Fatalf("expected edit_file description to mention read-back verification, got %q", editDesc)
+	}
+
+	appendDesc := NewAppendFileTool(t.TempDir(), true).Description()
+	if !strings.Contains(appendDesc, "If the path is readable with read_file") {
+		t.Fatalf("expected append_file description to mention read-back verification, got %q", appendDesc)
+	}
+}
+
 // TestEditTool_EditFile_Success verifies successful file editing
 func TestEditTool_EditFile_Success(t *testing.T) {
 	tmpDir := t.TempDir()

@@ -76,7 +76,7 @@ func (t *CronTool) Name() string {
 
 // Description returns the tool description
 func (t *CronTool) Description() string {
-	return "Schedule reminders, tasks, or system commands. Use this for explicit or implied reminder intent (e.g. future obligations). For add: provide at_seconds/every_seconds/cron_expr, or natural_request when the user gives a clear natural phrase. For remove: prefer job_id, but query or natural_request can remove by semantic match; auto-remove only when exactly one match."
+	return "Schedule reminders, tasks, or system commands. Use this for explicit or implied reminder intent (e.g. future obligations). For add: provide at_seconds/every_seconds/cron_expr, or natural_request when the user gives a clear natural phrase. For remove: prefer job_id, but query or natural_request can remove by semantic match; auto-remove only when exactly one match. Use list to inspect enabled reminders for the current conversation. For add/remove/enable/disable, treat the tool result itself as confirmation before telling the user it succeeded."
 }
 
 // Parameters returns the tool parameters schema
@@ -141,7 +141,7 @@ func (t *CronTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	case "add":
 		return t.addJob(ctx, args)
 	case "list":
-		return t.listJobs()
+		return t.listJobs(ctx)
 	case "remove":
 		return t.removeJob(ctx, args)
 	case "enable":
@@ -229,15 +229,21 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 	return SilentResult(fmt.Sprintf("Cron job added: %s (id: %s)", job.Name, job.ID))
 }
 
-func (t *CronTool) listJobs() *ToolResult {
-	jobs := t.cronService.ListJobs(false)
+func (t *CronTool) listJobs(ctx context.Context) *ToolResult {
+	channel := ToolChannel(ctx)
+	chatID := ToolChatID(ctx)
+	if channel == "" || chatID == "" {
+		return ErrorResult("no session context (channel/chat_id not set). Use this tool in an active conversation.")
+	}
+
+	jobs := t.listScopedJobs(ctx, false)
 
 	if len(jobs) == 0 {
 		return SilentResult("No scheduled jobs")
 	}
 
 	var result strings.Builder
-	result.WriteString("Scheduled jobs:\n")
+	result.WriteString("Scheduled jobs in this conversation:\n")
 	for _, j := range jobs {
 		result.WriteString(fmt.Sprintf("- %s (id: %s, %s)\n", j.Name, j.ID, formatScheduleInfo(j.Schedule)))
 	}
@@ -254,7 +260,7 @@ func (t *CronTool) removeJob(ctx context.Context, args map[string]any) *ToolResu
 		return ErrorResult(fmt.Sprintf("Job %s not found", jobID))
 	}
 
-	jobs := t.listScopedJobs(ctx)
+	jobs := t.listScopedJobs(ctx, true)
 	if len(jobs) == 0 {
 		return ErrorResult("No scheduled jobs found")
 	}
@@ -464,8 +470,8 @@ func resolveNaturalMessage(request, fallback string) string {
 	return message
 }
 
-func (t *CronTool) listScopedJobs(ctx context.Context) []cron.CronJob {
-	jobs := t.cronService.ListJobs(true)
+func (t *CronTool) listScopedJobs(ctx context.Context, includeDisabled bool) []cron.CronJob {
+	jobs := t.cronService.ListJobs(includeDisabled)
 	channel := ToolChannel(ctx)
 	chatID := ToolChatID(ctx)
 

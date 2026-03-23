@@ -198,6 +198,7 @@ func registerSharedToolsForAgent(
 	}
 
 	// Web tools
+	hasWebSearch := false
 	searchTool, err := tools.NewWebSearchTool(tools.WebSearchToolOptions{
 		BraveAPIKey:             cfg.Tools.Web.Brave.APIKey,
 		BraveMaxResults:         cfg.Tools.Web.Brave.MaxResults,
@@ -218,12 +219,18 @@ func registerSharedToolsForAgent(
 		logger.ErrorCF("agent", "Failed to create web search tool", map[string]any{"error": err.Error()})
 	} else if searchTool != nil {
 		agent.Tools.Register(searchTool)
+		hasWebSearch = true
 	}
+	hasWebFetch := false
 	fetchTool, err := tools.NewWebFetchToolWithProxy(50000, cfg.Tools.Web.Proxy, cfg.Tools.Web.FetchLimitBytes, cfg.Tools.Web.HideIntermediateResults)
 	if err != nil {
 		logger.ErrorCF("agent", "Failed to create web fetch tool", map[string]any{"error": err.Error()})
 	} else {
 		agent.Tools.Register(fetchTool)
+		hasWebFetch = true
+	}
+	if agent.ContextBuilder != nil {
+		agent.ContextBuilder.SetWebToolAvailability(hasWebSearch, hasWebFetch)
 	}
 
 	// Hardware tools (I2C, SPI) - Linux only, returns error on other platforms
