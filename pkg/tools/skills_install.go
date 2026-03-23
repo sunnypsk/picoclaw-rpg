@@ -40,7 +40,7 @@ func (t *InstallSkillTool) Name() string {
 }
 
 func (t *InstallSkillTool) Description() string {
-	return "Install a skill from a registry by slug. Downloads and extracts the skill into the workspace. Use find_skills first to discover available skills."
+	return "Install a skill from a registry by slug. Downloads and extracts the skill into the workspace. Use find_skills first to discover available skills. After installing, confirm the skill path exists and SKILL.md is readable before claiming success."
 }
 
 func (t *InstallSkillTool) Parameters() map[string]any {

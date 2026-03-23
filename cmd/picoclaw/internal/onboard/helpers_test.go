@@ -49,6 +49,27 @@ func TestCopyEmbeddedWorkspaceTemplates_ProactiveGuidanceIncludesAntiRepeatAndWa
 	}
 }
 
+func TestCopyEmbeddedWorkspaceTemplates_IncludesVerificationGuidance(t *testing.T) {
+	targetDir := t.TempDir()
+
+	if err := CopyEmbeddedWorkspaceTemplates(targetDir); err != nil {
+		t.Fatalf("CopyEmbeddedWorkspaceTemplates() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(targetDir, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+
+	text := string(data)
+	if !strings.Contains(text, "verify with `web_search` and usually `web_fetch` before answering") {
+		t.Fatalf("expected fresh-fact verification guidance in embedded AGENTS.md")
+	}
+	if !strings.Contains(text, "Do not claim a mutating action succeeded until you have checked the result") {
+		t.Fatalf("expected action verification guidance in embedded AGENTS.md")
+	}
+}
+
 func TestGeneratedWorkspaceMatchesCanonicalWorkspace(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {

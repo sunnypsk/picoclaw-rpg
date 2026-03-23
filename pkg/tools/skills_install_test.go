@@ -17,6 +17,12 @@ func TestInstallSkillToolName(t *testing.T) {
 	assert.Equal(t, "install_skill", tool.Name())
 }
 
+func TestInstallSkillToolDescriptionMentionsVerification(t *testing.T) {
+	tool := NewInstallSkillTool(skills.NewRegistryManager(), t.TempDir())
+	assert.Contains(t, tool.Description(), "confirm the skill path exists")
+	assert.Contains(t, tool.Description(), "SKILL.md is readable")
+}
+
 func TestInstallSkillToolMissingSlug(t *testing.T) {
 	tool := NewInstallSkillTool(skills.NewRegistryManager(), t.TempDir())
 	result := tool.Execute(context.Background(), map[string]any{})

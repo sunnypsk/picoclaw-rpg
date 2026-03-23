@@ -24,6 +24,18 @@ func (s *stubSearchProvider) Search(_ context.Context, _ string, _ int) (string,
 	return s.output, nil
 }
 
+func TestWebToolDescriptions_MentionVerification(t *testing.T) {
+	searchDesc := (&WebSearchTool{}).Description()
+	if !strings.Contains(searchDesc, "verify latest/current/recent facts") {
+		t.Fatalf("expected web_search description to mention freshness verification, got %q", searchDesc)
+	}
+
+	fetchDesc := (&WebFetchTool{}).Description()
+	if !strings.Contains(fetchDesc, "verify source content") {
+		t.Fatalf("expected web_fetch description to mention source verification, got %q", fetchDesc)
+	}
+}
+
 func TestWebSearchTool_HideIntermediateResultsSuppressesForUser(t *testing.T) {
 	tool := &WebSearchTool{
 		provider:                &stubSearchProvider{output: "search output"},

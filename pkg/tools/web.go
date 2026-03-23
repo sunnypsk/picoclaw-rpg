@@ -480,7 +480,7 @@ func (t *WebSearchTool) Name() string {
 }
 
 func (t *WebSearchTool) Description() string {
-	return "Search the web for current information. Returns titles, URLs, and snippets from search results."
+	return "Search the web for current information. Use this to verify latest/current/recent facts before answering. Returns titles, URLs, and snippets from search results."
 }
 
 func (t *WebSearchTool) Parameters() map[string]any {
@@ -575,7 +575,7 @@ func (t *WebFetchTool) Name() string {
 }
 
 func (t *WebFetchTool) Description() string {
-	return "Fetch a URL and extract readable content (HTML to text). Use this to get weather info, news, articles, or any web content."
+	return "Fetch a URL and extract readable content (HTML to text). Use this to verify source content for news, schedules, weather, articles, or other current facts."
 }
 
 func (t *WebFetchTool) Parameters() map[string]any {
