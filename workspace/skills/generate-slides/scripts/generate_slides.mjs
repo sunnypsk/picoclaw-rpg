@@ -195,6 +195,17 @@ const DEFAULT_VARIANTS = Object.freeze({
   image: "image-left",
   closing: "card"
 });
+const LOCALIZED_SECTION_LABELS = Object.freeze({
+  de: "ABSCHNITT",
+  es: "SECCI\u00d3N",
+  fr: "SECTION",
+  it: "SEZIONE",
+  ja: "\u30bb\u30af\u30b7\u30e7\u30f3",
+  ko: "\uc139\uc158",
+  nl: "SECTIE",
+  pt: "SE\u00c7\u00c3O",
+  zh: "\u7ae0\u7bc0"
+});
 const SLIDE_VARIANTS = Object.freeze({
   title: ["hero-left", "hero-center"],
   section: ["divider", "statement"],
@@ -1753,6 +1764,7 @@ async function normalizeSlide(rawSlide, index, activePreset) {
         type,
         variant,
         title: normalizeRequiredString(rawSlide.title, `slides[${index}].title`),
+        label: normalizeOptionalString(rawSlide.label, `slides[${index}].label`),
         subtitle: normalizeOptionalString(rawSlide.subtitle, `slides[${index}].subtitle`)
       };
     case "bullets":
@@ -2329,18 +2341,21 @@ function renderTitleSlideHeroLeft(slide, slideSpec, deckSpec, metrics) {
   const contentWidth = metrics.width - margin * 2;
   const subtitle = slideSpec.subtitle || deckSpec.subtitle || "";
   const kickerWidth = pickByLayout(tokens, metrics, "kickerWidthWide", "kickerWidthStandard");
+  const kicker = slideSpec.kicker || "";
 
-  addFittedText(slide, (slideSpec.kicker || "Presentation").toUpperCase(), {
-    x: margin,
-    y: tokens.kickerY,
-    w: kickerWidth,
-    h: tokens.kickerHeight
-  }, "kicker", metrics, deckSpec, {
-    bold: true,
-    color: tokens.kickerTextColor,
-    align: "center",
-    fill: { color: resolvePaletteColor(palette, tokens.kickerFillColorKey, "accentDark") }
-  });
+  if (kicker) {
+    addFittedText(slide, kicker, {
+      x: margin,
+      y: tokens.kickerY,
+      w: kickerWidth,
+      h: tokens.kickerHeight
+    }, "kicker", metrics, deckSpec, {
+      bold: true,
+      color: tokens.kickerTextColor,
+      align: "center",
+      fill: { color: resolvePaletteColor(palette, tokens.kickerFillColorKey, "accentDark") }
+    });
+  }
 
   addFittedText(slide, slideSpec.title, {
     x: margin,
@@ -2379,18 +2394,21 @@ function renderTitleSlideHeroCenter(slide, slideSpec, deckSpec, metrics) {
   const pillWidth = pickByLayout(tokens, metrics, "pillWidthWide", "pillWidthStandard");
   const blockWidth = pickByLayout(tokens, metrics, "blockWidthWide", "blockWidthStandard");
   const blockX = (metrics.width - blockWidth) / 2;
+  const kicker = slideSpec.kicker || "";
 
-  addFittedText(slide, (slideSpec.kicker || "Presentation").toUpperCase(), {
-    x: (metrics.width - pillWidth) / 2,
-    y: tokens.kickerY,
-    w: pillWidth,
-    h: tokens.kickerHeight
-  }, "kicker", metrics, deckSpec, {
-    bold: true,
-    color: tokens.kickerTextColor,
-    align: "center",
-    fill: { color: resolvePaletteColor(palette, tokens.kickerFillColorKey, "accentDark") }
-  });
+  if (kicker) {
+    addFittedText(slide, kicker, {
+      x: (metrics.width - pillWidth) / 2,
+      y: tokens.kickerY,
+      w: pillWidth,
+      h: tokens.kickerHeight
+    }, "kicker", metrics, deckSpec, {
+      bold: true,
+      color: tokens.kickerTextColor,
+      align: "center",
+      fill: { color: resolvePaletteColor(palette, tokens.kickerFillColorKey, "accentDark") }
+    });
+  }
 
   addFittedText(slide, slideSpec.title, {
     x: blockX,
@@ -2439,8 +2457,9 @@ function renderSectionSlideDivider(slide, slideSpec, deckSpec, metrics) {
   const tokens = getPresetLayoutTokens(presetName).section.divider;
   const margin = tokens.margin;
   const contentWidth = metrics.width - margin * 2;
+  const label = getSectionLabelText(slideSpec, deckSpec, tokens.labelText);
 
-  addFittedText(slide, tokens.labelText, {
+  addFittedText(slide, label, {
     x: margin,
     y: tokens.labelY,
     w: tokens.labelWidth,
@@ -2572,7 +2591,7 @@ function renderBulletsSlideAside(slide, slideSpec, deckSpec, metrics) {
   }, deckSpec);
 
   if (slideSpec.asideTitle) {
-    addFittedText(slide, slideSpec.asideTitle.toUpperCase(), {
+    addFittedText(slide, slideSpec.asideTitle, {
       x: asideX + panelPaddingX,
       y: cursorY,
       w: rightWidth - panelPaddingX * 2,
@@ -3014,6 +3033,20 @@ function hasAsideContent(slideSpec = {}) {
     || (Array.isArray(slideSpec.asideBullets) && slideSpec.asideBullets.length > 0);
 }
 
+function getSectionLabelText(slideSpec = {}, deckSpec = {}, fallbackLabel = "SECTION") {
+  return slideSpec.label || localizeSectionLabel(deckSpec.lang, fallbackLabel);
+}
+
+function localizeSectionLabel(lang, fallbackLabel) {
+  const languageTag = String(lang || "").trim().toLowerCase();
+  if (!languageTag) {
+    return fallbackLabel;
+  }
+
+  const baseLanguage = languageTag.split(/[-_]/, 1)[0];
+  return LOCALIZED_SECTION_LABELS[baseLanguage] || fallbackLabel;
+}
+
 function pickByLayout(tokens, metrics, wideKey, standardKey) {
   return metrics.width > 11 ? tokens[wideKey] : tokens[standardKey];
 }
@@ -3049,11 +3082,14 @@ export const __test__ = {
   getPreset,
   getPresetLayoutTokens,
   getPresetTextRoleOverrides,
+  getSectionLabelText,
+  localizeSectionLabel,
   normalizeSpec,
   normalizeTemplatePreset,
   renderBulletsSlide,
   renderImageSlide,
   renderClosingSlide,
+  renderSectionSlide,
   renderTitleSlide,
   resolveActivePreset,
   resolveSafeOutputPath

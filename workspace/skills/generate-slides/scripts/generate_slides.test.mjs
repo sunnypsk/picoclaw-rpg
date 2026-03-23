@@ -14,10 +14,12 @@ const {
   defineDefaultMaster,
   getDefaultVariantForPreset,
   getPreset,
+  getSectionLabelText,
   normalizeSpec,
   renderBulletsSlide,
   renderClosingSlide,
   renderImageSlide,
+  renderSectionSlide,
   renderTitleSlide,
   resolveActivePreset,
   resolveSafeOutputPath
@@ -386,6 +388,79 @@ test("renderTitleSlide changes geometry for hero-center", () => {
   assert.notEqual(centerTitle.options.x, leftTitle.options.x);
 });
 
+test("renderTitleSlide omits the kicker pill when kicker is blank", () => {
+  for (const variant of ["hero-left", "hero-center"]) {
+    const slide = createRecordingSlide();
+    const deckSpec = createDeckSpec({ subtitle: "" });
+
+    renderTitleSlide(
+      slide,
+      createSlide("title", {
+        variant,
+        title: "Deck",
+        subtitle: "",
+        kicker: "",
+        byline: ""
+      }),
+      deckSpec,
+      WIDE_METRICS
+    );
+
+    assert.deepEqual(slide.texts.map(entry => entry.text), ["Deck"]);
+  }
+});
+
+test("renderTitleSlide preserves provided kicker casing", () => {
+  const slide = createRecordingSlide();
+
+  renderTitleSlide(
+    slide,
+    createSlide("title", {
+      variant: "hero-left",
+      title: "Deck",
+      subtitle: "",
+      kicker: "Board Review",
+      byline: ""
+    }),
+    createDeckSpec({ subtitle: "" }),
+    WIDE_METRICS
+  );
+
+  assert.equal(slide.texts[0].text, "Board Review");
+});
+
+test("renderSectionSlide localizes the divider label and accepts explicit overrides", () => {
+  const localizedSlide = createRecordingSlide();
+  const explicitSlide = createRecordingSlide();
+
+  renderSectionSlide(
+    localizedSlide,
+    createSlide("section", {
+      variant: "divider",
+      title: "Agenda",
+      subtitle: ""
+    }),
+    createDeckSpec({ lang: "zh-TW" }),
+    WIDE_METRICS
+  );
+
+  renderSectionSlide(
+    explicitSlide,
+    createSlide("section", {
+      variant: "divider",
+      title: "Agenda",
+      subtitle: "",
+      label: "Milestones"
+    }),
+    createDeckSpec({ lang: "zh-TW" }),
+    WIDE_METRICS
+  );
+
+  assert.equal(localizedSlide.texts[0].text, "\u7ae0\u7bc0");
+  assert.equal(explicitSlide.texts[0].text, "Milestones");
+  assert.equal(getSectionLabelText({}, { lang: "en-US" }, "SECTION"), "SECTION");
+});
+
 test("renderBulletsSlide splits lists into two columns when requested", () => {
   const asideSlide = createRecordingSlide();
   const twoColumnSlide = createRecordingSlide();
@@ -429,6 +504,27 @@ test("renderBulletsSlide splits lists into two columns when requested", () => {
   assert.equal(asideSlide.shapes[0].options.w, 3.55);
   assert.equal(twoColumnSlide.shapes[0].options.w, 0.02);
   assert.notEqual(twoColumnBulletCalls[0].options.x, twoColumnBulletCalls[1].options.x);
+});
+
+test("renderBulletsSlide preserves aside title casing", () => {
+  const slide = createRecordingSlide();
+
+  renderBulletsSlide(
+    slide,
+    createSlide("bullets", {
+      variant: "content-aside",
+      title: "Highlights",
+      body: "",
+      bullets: ["Revenue up 22%", "Activation improved"],
+      asideTitle: "Watchouts",
+      asideBody: "",
+      asideBullets: []
+    }),
+    createDeckSpec(),
+    WIDE_METRICS
+  );
+
+  assert.equal(slide.texts.find(entry => entry.text === "Watchouts")?.text, "Watchouts");
 });
 
 test("renderImageSlide mirrors the image panel for image-right", () => {

@@ -81,6 +81,8 @@ families, those defaults remain the same as before.
 - `variant`: optional `"hero-left"` or `"hero-center"`
 - `subtitle`, `kicker`, `byline`: optional
 
+If `kicker` is omitted, the title slide renders without the kicker pill.
+
 Common defaults:
 - `hero-left`: `classic`, `editorial`, `contrast`, `academic`, `consulting-proposal`, `project-kickoff`
 - `hero-center`: `brand-design`, `pitch-deck`
@@ -90,7 +92,8 @@ Common defaults:
 ```json
 {
   "type": "section",
-  "variant": "statement",
+  "variant": "divider",
+  "label": "SECTION",
   "title": "Wins and Risks",
   "subtitle": "What changed this quarter"
 }
@@ -98,11 +101,16 @@ Common defaults:
 
 - `title`: required
 - `variant`: optional `"divider"` or `"statement"`
+- `label`: optional short divider label; overrides the localized default used by divider sections
 - `subtitle`: optional
 
 Common defaults:
 - `divider`: most families
 - `statement`: `brand-design`, `pitch-deck`
+
+If `label` is omitted on divider sections, the generator uses a localized default
+based on the deck `lang` when it recognizes the language, otherwise it falls back
+to `SECTION`.
 
 ### `bullets`
 
