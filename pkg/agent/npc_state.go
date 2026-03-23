@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -19,7 +20,7 @@ import (
 )
 
 const (
-	npcStateVersion      = 1
+	npcStateVersion      = 2
 	npcStateFileName     = "STATE.md"
 	npcMemoryBeginMarker = "<!-- NPC_MEMORY_BEGIN -->"
 	npcMemoryEndMarker   = "<!-- NPC_MEMORY_END -->"
@@ -28,8 +29,8 @@ const (
 	maxNPCMemoryNotes        = 50
 	npcUpdaterEveryTurns     = 5
 	npcUpdaterTimeout        = 5 * time.Minute
-	npcStateUpdaterPromptTag = "NPC_STATE_UPDATER_V2"
-	npcUpdaterPromptTag      = "NPC_STATE_MEMORY_UPDATER_V1"
+	npcStateUpdaterPromptTag = "NPC_STATE_UPDATER_V3"
+	npcUpdaterPromptTag      = "NPC_STATE_MEMORY_UPDATER_V2"
 
 	npcLocationTimeLayout                   = "2006-01-02 15:04"
 	npcHeartbeatDefaultIdleThresholdMinutes = 60
@@ -42,6 +43,8 @@ const (
 
 	defaultNPCEmotionName = "calm"
 )
+
+const npcPersonRefPrefix = "person_"
 
 type npcHeartbeatOuting struct {
 	Area     string
@@ -193,6 +196,10 @@ type NPCRelationship struct {
 	Notes                  string   `json:"notes,omitempty"`
 }
 
+type NPCPerson struct {
+	DisplayName string `json:"display_name,omitempty"`
+}
+
 type NPCRecentEvent struct {
 	At      string `json:"at,omitempty"`
 	Type    string `json:"type,omitempty"`
@@ -205,6 +212,8 @@ type NPCState struct {
 	TrackedTurns  int                        `json:"tracked_turns,omitempty"`
 	Emotion       NPCEmotion                 `json:"emotion,omitempty"`
 	Location      NPCLocation                `json:"location,omitempty"`
+	People        map[string]NPCPerson       `json:"people,omitempty"`
+	IdentifierMap map[string]string          `json:"identifier_map,omitempty"`
 	Relationships map[string]NPCRelationship `json:"relationships,omitempty"`
 	Habits        []string                   `json:"habits,omitempty"`
 	RecentEvents  []NPCRecentEvent           `json:"recent_events,omitempty"`
@@ -301,7 +310,7 @@ func (s *NPCStateStore) UpdateState(update func(state *NPCState) (bool, error)) 
 func (s *NPCStateStore) saveStateLocked(state NPCState) error {
 	start := time.Now()
 	state = normalizeNPCState(state)
-	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	state.UpdatedAt = stateTimestampString(time.Now())
 
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
@@ -378,6 +387,7 @@ func (s *NPCStateStore) SaveMemoryNotes(notes []string) error {
 		return err
 	}
 
+	normalized = filterManagedMemoryNotesAgainstManualContent(normalized, existing)
 	updated := upsertManagedMemoryBlock(existing, normalized)
 	if err := fileutil.WriteFileAtomic(s.memoryPath, []byte(updated), 0o600); err != nil {
 		logger.WarnCF("agent", "Memory notes update failed", map[string]any{
@@ -404,7 +414,7 @@ func (s *NPCStateStore) SaveMemoryNotes(notes []string) error {
 func defaultNPCState() NPCState {
 	return normalizeNPCState(NPCState{
 		Version:   npcStateVersion,
-		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt: stateTimestampString(time.Now()),
 		Emotion: NPCEmotion{
 			Name:      defaultNPCEmotionName,
 			Intensity: NPCEmotionIntensityMid,
@@ -414,17 +424,18 @@ func defaultNPCState() NPCState {
 			Scene:    "workspace",
 			Activity: "observing",
 		},
+		People:        map[string]NPCPerson{},
+		IdentifierMap: map[string]string{},
 		Relationships: map[string]NPCRelationship{},
 	})
 }
 
 func normalizeNPCState(state NPCState) NPCState {
-	if state.Version == 0 {
-		state.Version = npcStateVersion
-	}
+	state.Version = npcStateVersion
 	if strings.TrimSpace(state.UpdatedAt) == "" {
-		state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		state.UpdatedAt = stateTimestampString(time.Now())
 	}
+	state.UpdatedAt = normalizeStateTimestamp(state.UpdatedAt)
 
 	state.Emotion.Name = normalizeEmotionName(state.Emotion.Name)
 	state.Emotion.Intensity = normalizeEmotionIntensity(state.Emotion.Intensity)
@@ -442,15 +453,24 @@ func normalizeNPCState(state NPCState) NPCState {
 	if state.Location.Activity == "" {
 		state.Location.Activity = "observing"
 	}
-	state.Location.StartAt = strings.TrimSpace(state.Location.StartAt)
-	state.Location.EndAt = strings.TrimSpace(state.Location.EndAt)
+	state.Location.StartAt = normalizeLocationTimestamp(state.Location.StartAt)
+	state.Location.EndAt = normalizeLocationTimestamp(state.Location.EndAt)
 	state.Location.MoveReason = strings.TrimSpace(state.Location.MoveReason)
 
+	state.People = normalizePeopleMap(state.People)
+	state.IdentifierMap = normalizeIdentifierMap(state.IdentifierMap)
 	if state.Relationships == nil {
 		state.Relationships = make(map[string]NPCRelationship)
 	}
+	relationshipKeys := make([]string, 0, len(state.Relationships))
+	for key := range state.Relationships {
+		relationshipKeys = append(relationshipKeys, key)
+	}
+	sort.Strings(relationshipKeys)
+	reservedRefs := reservedPersonRefs(state.People, state.IdentifierMap, state.Relationships)
 	normalizedRelationships := make(map[string]NPCRelationship, len(state.Relationships))
-	for key, rel := range state.Relationships {
+	for _, key := range relationshipKeys {
+		rel := state.Relationships[key]
 		normalizedKey := strings.ToLower(strings.TrimSpace(key))
 		if normalizedKey == "" {
 			continue
@@ -458,22 +478,43 @@ func normalizeNPCState(state NPCState) NPCState {
 		if isPlaceholderRelationshipKey(normalizedKey) {
 			continue
 		}
-		rel.Affinity = normalizeNPCLevel(rel.Affinity, NPCLevelMid)
-		rel.Trust = normalizeNPCLevel(rel.Trust, NPCLevelMid)
-		rel.Familiarity = normalizeNPCLevel(rel.Familiarity, NPCLevelLow)
-		rel.LastInteractionAt = strings.TrimSpace(rel.LastInteractionAt)
-		rel.LastChannel = normalizeRelationshipChannel(rel.LastChannel)
-		rel.LastChatID = strings.TrimSpace(rel.LastChatID)
-		rel.LastPeerKind = normalizeRelationshipPeerKind(rel.LastPeerKind)
-		rel.LastSessionKey = strings.TrimSpace(rel.LastSessionKey)
-		rel.LastUserMessageAt = strings.TrimSpace(rel.LastUserMessageAt)
-		rel.LastAgentMessageAt = strings.TrimSpace(rel.LastAgentMessageAt)
-		rel.LastProactiveAttemptAt = strings.TrimSpace(rel.LastProactiveAttemptAt)
-		rel.LastProactiveSuccessAt = strings.TrimSpace(rel.LastProactiveSuccessAt)
-		rel.Notes = strings.TrimSpace(rel.Notes)
-		normalizedRelationships[normalizedKey] = rel
+		var personRef string
+		if identifierKey := normalizeIdentifierKey(normalizedKey); identifierKey != "" {
+			mappedRef := normalizePersonRef(state.IdentifierMap[identifierKey])
+			if !isPersonRefKey(mappedRef) {
+				mappedRef = nextAvailablePersonRefFromReserved("", reservedRefs)
+			}
+			state.IdentifierMap[identifierKey] = mappedRef
+			personRef = mappedRef
+		} else {
+			personRef = normalizePersonRef(normalizedKey)
+		}
+		if !isPersonRefKey(personRef) {
+			personRef = nextAvailablePersonRefFromReserved("", reservedRefs)
+		}
+		reservedRefs[personRef] = struct{}{}
+		rel = normalizeNPCRelationship(rel)
+		normalizedRelationships[personRef] = mergeNPCRelationship(normalizedRelationships[personRef], rel)
+		if _, ok := state.People[personRef]; !ok {
+			state.People[personRef] = NPCPerson{}
+		}
 	}
 	state.Relationships = normalizedRelationships
+	for identifierKey, personRef := range state.IdentifierMap {
+		personRef = normalizePersonRef(personRef)
+		if !isPersonRefKey(personRef) {
+			delete(state.IdentifierMap, identifierKey)
+			continue
+		}
+		state.IdentifierMap[identifierKey] = personRef
+		if _, ok := state.People[personRef]; !ok {
+			state.People[personRef] = NPCPerson{}
+		}
+	}
+	for personRef, person := range state.People {
+		person.DisplayName = normalizePersonDisplayName(person.DisplayName, personRef)
+		state.People[personRef] = person
+	}
 
 	state.Habits = normalizeHabits(state.Habits)
 	state.RecentEvents = normalizeRecentEvents(state.RecentEvents)
@@ -488,6 +529,280 @@ func isPlaceholderRelationshipKey(key string) bool {
 	default:
 		return false
 	}
+}
+
+func stateTimestampString(at time.Time) string {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	return at.In(time.Local).Format(time.RFC3339)
+}
+
+func normalizeStateTimestamp(value string) string {
+	if parsed, ok := parseStateTimestamp(value); ok {
+		return stateTimestampString(parsed)
+	}
+	return stateTimestampString(time.Now())
+}
+
+func normalizeLocationTimestamp(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if parsed, ok := parseStateTimestamp(trimmed); ok {
+		return stateTimestampString(parsed)
+	}
+	return trimmed
+}
+
+func normalizeNPCRelationship(rel NPCRelationship) NPCRelationship {
+	rel.Affinity = normalizeNPCLevel(rel.Affinity, NPCLevelMid)
+	rel.Trust = normalizeNPCLevel(rel.Trust, NPCLevelMid)
+	rel.Familiarity = normalizeNPCLevel(rel.Familiarity, NPCLevelLow)
+	rel.LastInteractionAt = normalizeOptionalStateTimestamp(rel.LastInteractionAt)
+	rel.LastChannel = normalizeRelationshipChannel(rel.LastChannel)
+	rel.LastChatID = strings.TrimSpace(rel.LastChatID)
+	rel.LastPeerKind = normalizeRelationshipPeerKind(rel.LastPeerKind)
+	rel.LastSessionKey = strings.TrimSpace(rel.LastSessionKey)
+	rel.LastUserMessageAt = normalizeOptionalStateTimestamp(rel.LastUserMessageAt)
+	rel.LastAgentMessageAt = normalizeOptionalStateTimestamp(rel.LastAgentMessageAt)
+	rel.LastProactiveAttemptAt = normalizeOptionalStateTimestamp(rel.LastProactiveAttemptAt)
+	rel.LastProactiveSuccessAt = normalizeOptionalStateTimestamp(rel.LastProactiveSuccessAt)
+	rel.Notes = strings.TrimSpace(rel.Notes)
+	return rel
+}
+
+func normalizeOptionalStateTimestamp(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if parsed, ok := parseStateTimestamp(trimmed); ok {
+		return stateTimestampString(parsed)
+	}
+	return trimmed
+}
+
+func normalizePeopleMap(people map[string]NPCPerson) map[string]NPCPerson {
+	if people == nil {
+		return make(map[string]NPCPerson)
+	}
+
+	keys := make([]string, 0, len(people))
+	reservedRefs := make(map[string]struct{}, len(people))
+	for key := range people {
+		keys = append(keys, key)
+		if personRef := normalizePersonRef(key); isPersonRefKey(personRef) {
+			reservedRefs[personRef] = struct{}{}
+		}
+	}
+	sort.Strings(keys)
+
+	normalized := make(map[string]NPCPerson, len(people))
+	for _, key := range keys {
+		person := people[key]
+		personRef := normalizePersonRef(key)
+		if !isPersonRefKey(personRef) {
+			personRef = nextAvailablePersonRefFromReserved("", reservedRefs)
+		}
+		reservedRefs[personRef] = struct{}{}
+		existing := normalized[personRef]
+		if existing.DisplayName == "" {
+			existing.DisplayName = strings.TrimSpace(person.DisplayName)
+		}
+		normalized[personRef] = existing
+	}
+	if normalized == nil {
+		return make(map[string]NPCPerson)
+	}
+	return normalized
+}
+
+func normalizeIdentifierMap(identifierMap map[string]string) map[string]string {
+	if identifierMap == nil {
+		return make(map[string]string)
+	}
+
+	normalized := make(map[string]string, len(identifierMap))
+	for key, personRef := range identifierMap {
+		identifierKey := normalizeIdentifierKey(key)
+		personRef = normalizePersonRef(personRef)
+		if identifierKey == "" || !isPersonRefKey(personRef) {
+			continue
+		}
+		normalized[identifierKey] = personRef
+	}
+	if normalized == nil {
+		return make(map[string]string)
+	}
+	return normalized
+}
+
+func normalizePersonDisplayName(name string, personRef string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed != "" {
+		return trimmed
+	}
+
+	label := strings.TrimPrefix(strings.TrimSpace(personRef), npcPersonRefPrefix)
+	label = strings.Trim(label, "_")
+	if label == "" || label == "person" {
+		return "Contact"
+	}
+	label = strings.ReplaceAll(label, "_", " ")
+	if strings.HasPrefix(label, "person ") {
+		suffix := strings.TrimSpace(strings.TrimPrefix(label, "person "))
+		if suffix == "" {
+			return "Contact"
+		}
+		if isDigitsOnly(strings.ReplaceAll(suffix, " ", "")) {
+			return "Contact " + strings.ReplaceAll(suffix, " ", "")
+		}
+		label = suffix
+	}
+	parts := strings.Fields(label)
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+	}
+	return strings.Join(parts, " ")
+}
+
+func isDigitsOnly(value string) bool {
+	if strings.TrimSpace(value) == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizePersonRef(value string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(value))
+	if trimmed == "" {
+		return ""
+	}
+
+	trimmed = strings.ReplaceAll(trimmed, "-", "_")
+	trimmed = strings.ReplaceAll(trimmed, " ", "_")
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range trimmed {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+			lastUnderscore = false
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastUnderscore = false
+		default:
+			if !lastUnderscore {
+				b.WriteByte('_')
+				lastUnderscore = true
+			}
+		}
+	}
+
+	result := strings.Trim(b.String(), "_")
+	if result == "" {
+		return ""
+	}
+	if !strings.HasPrefix(result, npcPersonRefPrefix) {
+		result = npcPersonRefPrefix + result
+	}
+	return result
+}
+
+func isPersonRefKey(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return strings.HasPrefix(trimmed, npcPersonRefPrefix)
+}
+
+func nextAvailablePersonRef(label string, people map[string]NPCPerson, relationships map[string]NPCRelationship) string {
+	base := normalizePersonRef(label)
+	if !isPersonRefKey(base) {
+		base = npcPersonRefPrefix + "contact"
+	}
+	if !personRefExists(base, people, relationships) {
+		return base
+	}
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s_%d", base, i)
+		if !personRefExists(candidate, people, relationships) {
+			return candidate
+		}
+	}
+}
+
+func nextAvailablePersonRefFromReserved(label string, reserved map[string]struct{}) string {
+	base := normalizePersonRef(label)
+	if !isPersonRefKey(base) {
+		base = npcPersonRefPrefix + "contact"
+	}
+	if _, exists := reserved[base]; !exists {
+		return base
+	}
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s_%d", base, i)
+		if _, exists := reserved[candidate]; !exists {
+			return candidate
+		}
+	}
+}
+
+func reservedPersonRefs(
+	people map[string]NPCPerson,
+	identifierMap map[string]string,
+	relationships map[string]NPCRelationship,
+) map[string]struct{} {
+	reserved := make(map[string]struct{}, len(people)+len(identifierMap)+len(relationships))
+	for personRef := range people {
+		personRef = normalizePersonRef(personRef)
+		if isPersonRefKey(personRef) {
+			reserved[personRef] = struct{}{}
+		}
+	}
+	for _, personRef := range identifierMap {
+		personRef = normalizePersonRef(personRef)
+		if isPersonRefKey(personRef) {
+			reserved[personRef] = struct{}{}
+		}
+	}
+	for key := range relationships {
+		normalizedKey := strings.ToLower(strings.TrimSpace(key))
+		if normalizedKey == "" || isPlaceholderRelationshipKey(normalizedKey) {
+			continue
+		}
+		if identifierKey := normalizeIdentifierKey(normalizedKey); identifierKey != "" {
+			personRef := normalizePersonRef(identifierMap[identifierKey])
+			if isPersonRefKey(personRef) {
+				reserved[personRef] = struct{}{}
+			}
+			continue
+		}
+		personRef := normalizePersonRef(normalizedKey)
+		if isPersonRefKey(personRef) {
+			reserved[personRef] = struct{}{}
+		}
+	}
+	return reserved
+}
+
+func personRefExists(ref string, people map[string]NPCPerson, relationships map[string]NPCRelationship) bool {
+	if _, ok := people[ref]; ok {
+		return true
+	}
+	if relationships == nil {
+		return false
+	}
+	_, ok := relationships[ref]
+	return ok
 }
 
 func normalizeHabits(habits []string) []string {
@@ -533,7 +848,9 @@ func normalizeRecentEvents(events []NPCRecentEvent) []NPCRecentEvent {
 		}
 		e.At = strings.TrimSpace(e.At)
 		if e.At == "" {
-			e.At = time.Now().UTC().Format(time.RFC3339)
+			e.At = stateTimestampString(time.Now())
+		} else {
+			e.At = normalizeOptionalStateTimestamp(e.At)
 		}
 		trimmed = append(trimmed, e)
 	}
@@ -579,6 +896,42 @@ func normalizeMemoryNote(note string) string {
 	n = strings.TrimPrefix(n, "*")
 	n = strings.TrimSpace(n)
 	return n
+}
+
+func filterStateOwnedMemoryNotes(notes []string, state NPCState) []string {
+	if len(notes) == 0 {
+		return nil
+	}
+
+	transient := make(map[string]struct{})
+	addTransient := func(value string) {
+		normalized := strings.ToLower(normalizeMemoryNote(value))
+		if normalized == "" {
+			return
+		}
+		transient[normalized] = struct{}{}
+	}
+
+	addTransient(state.Emotion.Reason)
+	addTransient(state.Location.Activity)
+	addTransient(state.Location.MoveReason)
+	for _, event := range state.RecentEvents {
+		addTransient(event.Summary)
+	}
+
+	filtered := make([]string, 0, len(notes))
+	for _, note := range normalizeMemoryNotes(notes) {
+		key := strings.ToLower(normalizeMemoryNote(note))
+		if key == "" {
+			continue
+		}
+		if _, exists := transient[key]; exists {
+			continue
+		}
+		filtered = append(filtered, note)
+	}
+
+	return normalizeMemoryNotes(filtered)
 }
 
 func normalizeEmotionName(name string) string {
@@ -630,12 +983,128 @@ func intensityFromNumeric(value float64) NPCEmotionIntensity {
 }
 
 func buildRelationshipKey(channel, senderID string) string {
+	return buildIdentifierKey(channel, senderID)
+}
+
+func buildIdentifierKey(channel, senderID string) string {
 	ch := strings.ToLower(strings.TrimSpace(channel))
 	sender := strings.ToLower(strings.TrimSpace(senderID))
 	if ch == "" || sender == "" {
 		return ""
 	}
 	return ch + ":" + sender
+}
+
+func normalizeIdentifierKey(key string) string {
+	parts := strings.SplitN(strings.ToLower(strings.TrimSpace(key)), ":", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	return buildIdentifierKey(parts[0], parts[1])
+}
+
+func bestKnownSenderDisplayName(msg bus.InboundMessage) string {
+	candidates := []string{
+		msg.Sender.DisplayName,
+		msg.Sender.Username,
+		msg.Metadata["sender_name"],
+		msg.Metadata["display_name"],
+		msg.Metadata["user_name"],
+		msg.Metadata["username"],
+		msg.Metadata["nickname"],
+	}
+	rawSenderID := strings.ToLower(strings.TrimSpace(msg.SenderID))
+	rawPlatformID := strings.ToLower(strings.TrimSpace(msg.Sender.PlatformID))
+	for _, candidate := range candidates {
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		if lower == rawSenderID || lower == rawPlatformID {
+			continue
+		}
+		return trimmed
+	}
+	return ""
+}
+
+func ensurePersonRef(state *NPCState, msg bus.InboundMessage) string {
+	if state == nil {
+		return ""
+	}
+	return ensurePersonRefForIdentifier(state, msg.Channel, msg.SenderID, bestKnownSenderDisplayName(msg))
+}
+
+func ensurePersonRefForIdentifier(state *NPCState, channel, senderID, displayName string) string {
+	if state == nil {
+		return ""
+	}
+	if state.People == nil {
+		state.People = make(map[string]NPCPerson)
+	}
+	if state.IdentifierMap == nil {
+		state.IdentifierMap = make(map[string]string)
+	}
+
+	identifierKey := buildIdentifierKey(channel, senderID)
+	if identifierKey == "" {
+		return ""
+	}
+
+	personRef := normalizePersonRef(state.IdentifierMap[identifierKey])
+	if !isPersonRefKey(personRef) {
+		personRef = nextAvailablePersonRef(displayName, state.People, state.Relationships)
+		state.IdentifierMap[identifierKey] = personRef
+	}
+
+	person := state.People[personRef]
+	if trimmed := strings.TrimSpace(displayName); trimmed != "" {
+		person.DisplayName = trimmed
+	}
+	person.DisplayName = normalizePersonDisplayName(person.DisplayName, personRef)
+	state.People[personRef] = person
+
+	return personRef
+}
+
+func displayNameForPerson(state NPCState, personRef string) string {
+	personRef = normalizePersonRef(personRef)
+	if person, ok := state.People[personRef]; ok {
+		if display := strings.TrimSpace(person.DisplayName); display != "" {
+			return display
+		}
+	}
+	return normalizePersonDisplayName("", personRef)
+}
+
+func senderIDForPerson(state NPCState, channel, personRef string) string {
+	targetRef := normalizePersonRef(personRef)
+	targetChannel := normalizeRelationshipChannel(channel)
+	for identifierKey, mappedRef := range state.IdentifierMap {
+		if normalizePersonRef(mappedRef) != targetRef {
+			continue
+		}
+		parts := strings.SplitN(identifierKey, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if targetChannel != "" && parts[0] != targetChannel {
+			continue
+		}
+		return strings.TrimSpace(parts[1])
+	}
+	return ""
+}
+
+func personRefForIdentifier(state NPCState, channel, senderID string) string {
+	return normalizePersonRef(state.IdentifierMap[buildIdentifierKey(channel, senderID)])
+}
+
+func stateForPrompt(state NPCState) NPCState {
+	sanitized := normalizeNPCState(state)
+	sanitized.IdentifierMap = nil
+	return sanitized
 }
 
 func clamp(v, min, max int) int {
@@ -712,6 +1181,59 @@ func extractManagedMemoryNotes(content string) []string {
 		notes = append(notes, note)
 	}
 	return normalizeMemoryNotes(notes)
+}
+
+func filterManagedMemoryNotesAgainstManualContent(notes []string, existing string) []string {
+	if len(notes) == 0 {
+		return nil
+	}
+	manualLines := extractComparableMemoryLines(removeManagedMemoryBlock(existing))
+	if len(manualLines) == 0 {
+		return normalizeMemoryNotes(notes)
+	}
+
+	filtered := make([]string, 0, len(notes))
+	for _, note := range normalizeMemoryNotes(notes) {
+		key := strings.ToLower(normalizeMemoryNote(note))
+		if key == "" {
+			continue
+		}
+		if _, exists := manualLines[key]; exists {
+			continue
+		}
+		filtered = append(filtered, note)
+	}
+	return normalizeMemoryNotes(filtered)
+}
+
+func removeManagedMemoryBlock(content string) string {
+	start := strings.Index(content, npcMemoryBeginMarker)
+	end := strings.Index(content, npcMemoryEndMarker)
+	if start < 0 || end <= start {
+		return content
+	}
+
+	replaceEnd := end + len(npcMemoryEndMarker)
+	if replaceEnd < len(content) && content[replaceEnd] == '\r' {
+		replaceEnd++
+	}
+	if replaceEnd < len(content) && content[replaceEnd] == '\n' {
+		replaceEnd++
+	}
+	return content[:start] + content[replaceEnd:]
+}
+
+func extractComparableMemoryLines(content string) map[string]struct{} {
+	lines := strings.Split(content, "\n")
+	result := make(map[string]struct{}, len(lines))
+	for _, line := range lines {
+		normalized := normalizeMemoryNote(line)
+		if normalized == "" {
+			continue
+		}
+		result[strings.ToLower(normalized)] = struct{}{}
+	}
+	return result
 }
 
 func renderManagedMemoryBlock(notes []string) string {
@@ -876,6 +1398,7 @@ func (al *AgentLoop) updateNPCStateAndMemory(
 	if len(notesToSave) == 0 {
 		notesToSave = normalizeMemoryNotes(memoryNotes)
 	}
+	notesToSave = filterStateOwnedMemoryNotes(notesToSave, update.State)
 	if err := agent.StateStore.SaveMemoryNotes(notesToSave); err != nil {
 		return fmt.Errorf("save memory notes: %w", err)
 	}
@@ -1009,20 +1532,24 @@ func buildNPCStateUpdatePayload(
 	sessionKey string,
 	assistantReply string,
 ) ([]byte, string, error) {
-	relationshipKey := buildRelationshipKey(msg.Channel, msg.SenderID)
+	stateForPayload := normalizeNPCState(state)
+	personRef := ensurePersonRef(&stateForPayload, msg)
+	identifierKey := buildIdentifierKey(msg.Channel, msg.SenderID)
 	payload := map[string]any{
-		"previous_state": state,
+		"previous_state": stateForPrompt(stateForPayload),
 		"interaction": map[string]any{
-			"timestamp":        time.Now().UTC().Format(time.RFC3339),
-			"channel":          msg.Channel,
-			"chat_id":          msg.ChatID,
-			"sender_id":        msg.SenderID,
-			"peer_kind":        msg.Peer.Kind,
-			"peer_id":          msg.Peer.ID,
-			"relationship_key": relationshipKey,
-			"session_key":      strings.TrimSpace(sessionKey),
-			"user_message":     msg.Content,
-			"assistant_reply":  assistantReply,
+			"timestamp":           stateTimestampString(time.Now()),
+			"channel":             msg.Channel,
+			"chat_id":             msg.ChatID,
+			"sender_id":           msg.SenderID,
+			"peer_kind":           msg.Peer.Kind,
+			"peer_id":             msg.Peer.ID,
+			"identifier_key":      identifierKey,
+			"person_ref":          personRef,
+			"sender_display_name": displayNameForPerson(stateForPayload, personRef),
+			"session_key":         strings.TrimSpace(sessionKey),
+			"user_message":        msg.Content,
+			"assistant_reply":     assistantReply,
 		},
 	}
 	if memoryNotes != nil {
@@ -1033,10 +1560,10 @@ func buildNPCStateUpdatePayload(
 	if err != nil {
 		return nil, "", err
 	}
-	return inputJSON, relationshipKey, nil
+	return inputJSON, personRef, nil
 }
 
-func npcStateUpdateRules(relationshipKey string) string {
+func npcStateUpdateRules(personRef string) string {
 	return fmt.Sprintf(`- Keep continuity from previous state unless interaction indicates change.
 - emotion.name must be one of: %s.
 - emotion.intensity must be one of: low, mid, high.
@@ -1044,9 +1571,14 @@ func npcStateUpdateRules(relationshipKey string) string {
 - Emotion transition rule: emotion.name may change only when previous_state.emotion.intensity is low.
 - If previous_state.emotion.intensity is mid or high, keep emotion.name the same as previous_state.emotion.name.
 - Example: previous_state angry/high cannot become calm in one update; lower intensity first.
-- location tracks off-chat activity and whereabouts; use start_at/end_at as local datetime text when available.
+- location tracks off-chat activity and whereabouts; use start_at/end_at as RFC3339 timestamps with timezone offset.
 - If previous_state.location indicates an active outing window (between start_at and end_at), keep the outing location/activity and add a multitasking cue for chatting remotely.
 - Do not invent spontaneous location moves during replied-turn updates; heartbeat/autonomous policies handle unprompted outings. Only change location when the interaction clearly implies movement or when continuing an active outing.
+- previous_state.people stores stable person refs and human-readable display names. Keep person refs stable.
+- Ensure person ref %q exists in both people and relationships.
+- Use display names or neutral contact labels in notes and summaries. Never use raw channel:user_id text in habits, relationship notes, recent event summaries, or memory notes.
+- Existing notes may mention 助手 in third person. Interpret that as referring to this agent unless it is clearly quoted user speech or contrasted with another assistant.
+- Write new emotion.reason, relationship notes, recent event summaries, and memory_notes from the agent's own perspective. Do not refer to self as 助手 in new text.
 - Preserve relationship contact/session/timestamp fields unless the current interaction updates them.
 - affinity = emotional warmth and liking toward the user.
 - trust = willingness to rely on the user, believe them, or be vulnerable with them.
@@ -1057,20 +1589,24 @@ func npcStateUpdateRules(relationshipKey string) string {
 - Increase trust after reliability, honesty, discretion, respect, or supportive behavior; decrease it after deception, broken expectations, coercion, or disrespect.
 - Increase familiarity mainly through repeated interactions, callbacks, routines, or shared history, not from one emotional spike alone.
 - Do not decrease affinity, trust, or familiarity because of silence, delayed replies, or neutral small talk alone.
-- Ensure relationship key %q exists and is updated.`, strings.Join(npcAllowedEmotionNames, ", "), relationshipKey)
+- Keep transient logistics, trip-progress beats, and very recent chat moments in state recent_events instead of memory_notes.
+- memory_notes should only keep durable preferences, identity mappings, stable interaction rules, and long-lived plans that matter across sessions.`, strings.Join(npcAllowedEmotionNames, ", "), personRef)
 }
 
-func buildNPCStateOnlySystemPrompt(relationshipKey string) string {
+func buildNPCStateOnlySystemPrompt(personRef string) string {
 	return fmt.Sprintf(`%s
 You update internal roleplay state for one dedicated NPC agent.
 Return JSON only, no markdown, no explanations.
 
 Output shape:
 {
-  "version": 1,
+  "version": 2,
   "updated_at": "RFC3339 timestamp",
   "emotion": {"name": "string", "intensity": "low|mid|high", "reason": "string"},
-  "location": {"area": "string", "scene": "string", "activity": "string", "start_at": "local datetime text (e.g. 2026-03-05 22:00)", "end_at": "local datetime text (e.g. 2026-03-05 23:30)", "move_reason": "string"},
+  "location": {"area": "string", "scene": "string", "activity": "string", "start_at": "RFC3339 timestamp with timezone offset", "end_at": "RFC3339 timestamp with timezone offset", "move_reason": "string"},
+  "people": {
+    %q: {"display_name": "string"}
+  },
   "relationships": {
     %q: {"affinity": "low|mid|high", "trust": "low|mid|high", "familiarity": "low|mid|high", "last_interaction_at": "RFC3339 timestamp", "last_channel": "string", "last_chat_id": "string", "last_peer_kind": "string", "last_session_key": "string", "last_user_message_at": "RFC3339 timestamp", "last_agent_message_at": "RFC3339 timestamp", "last_proactive_attempt_at": "RFC3339 timestamp", "last_proactive_success_at": "RFC3339 timestamp", "notes": "string"}
   },
@@ -1080,10 +1616,10 @@ Output shape:
 
 Rules:
 %s
-- Return a valid JSON object only.`, npcStateUpdaterPromptTag, relationshipKey, npcStateUpdateRules(relationshipKey))
+- Return a valid JSON object only.`, npcStateUpdaterPromptTag, personRef, personRef, npcStateUpdateRules(personRef))
 }
 
-func buildNPCStateAndMemorySystemPrompt(relationshipKey string) string {
+func buildNPCStateAndMemorySystemPrompt(personRef string) string {
 	return fmt.Sprintf(`%s
 You update internal roleplay state and long-term memory notes for one dedicated NPC agent.
 Return JSON only, no markdown, no explanations.
@@ -1091,10 +1627,13 @@ Return JSON only, no markdown, no explanations.
 Output shape:
 {
   "state": {
-    "version": 1,
+    "version": 2,
     "updated_at": "RFC3339 timestamp",
     "emotion": {"name": "string", "intensity": "low|mid|high", "reason": "string"},
-    "location": {"area": "string", "scene": "string", "activity": "string", "start_at": "local datetime text (e.g. 2026-03-05 22:00)", "end_at": "local datetime text (e.g. 2026-03-05 23:30)", "move_reason": "string"},
+    "location": {"area": "string", "scene": "string", "activity": "string", "start_at": "RFC3339 timestamp with timezone offset", "end_at": "RFC3339 timestamp with timezone offset", "move_reason": "string"},
+    "people": {
+      %q: {"display_name": "string"}
+    },
     "relationships": {
       %q: {"affinity": "low|mid|high", "trust": "low|mid|high", "familiarity": "low|mid|high", "last_interaction_at": "RFC3339 timestamp", "last_channel": "string", "last_chat_id": "string", "last_peer_kind": "string", "last_session_key": "string", "last_user_message_at": "RFC3339 timestamp", "last_agent_message_at": "RFC3339 timestamp", "last_proactive_attempt_at": "RFC3339 timestamp", "last_proactive_success_at": "RFC3339 timestamp", "notes": "string"}
     },
@@ -1108,7 +1647,7 @@ Rules:
 %s
 - Keep memory_notes concise, deduplicated, and <= %d.
 - Merge/edit existing notes when possible instead of blind append.
-- Return valid JSON object only.`, npcUpdaterPromptTag, relationshipKey, npcStateUpdateRules(relationshipKey), maxNPCMemoryNotes)
+- Return valid JSON object only.`, npcUpdaterPromptTag, personRef, personRef, npcStateUpdateRules(personRef), maxNPCMemoryNotes)
 }
 
 func (al *AgentLoop) requestNPCStateOnlyUpdate(
@@ -1230,16 +1769,17 @@ func ensureRelationshipPresent(state *NPCState, msg bus.InboundMessage) {
 	if !shouldTrackRelationshipMessage(msg) {
 		return
 	}
+	*state = normalizeNPCState(*state)
 	if state.Relationships == nil {
 		state.Relationships = make(map[string]NPCRelationship)
 	}
-	relationshipKey := buildRelationshipKey(msg.Channel, msg.SenderID)
-	if relationshipKey == "" {
+	personRef := ensurePersonRef(state, msg)
+	if personRef == "" {
 		return
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
-	rel, ok := state.Relationships[relationshipKey]
+	now := stateTimestampString(time.Now())
+	rel, ok := state.Relationships[personRef]
 	if !ok {
 		rel = NPCRelationship{
 			Affinity:    NPCLevelMid,
@@ -1252,7 +1792,7 @@ func ensureRelationshipPresent(state *NPCState, msg bus.InboundMessage) {
 	rel.LastPeerKind = normalizeRelationshipPeerKind(msg.Peer.Kind)
 	rel.LastUserMessageAt = now
 	rel.LastInteractionAt = now
-	state.Relationships[relationshipKey] = rel
+	state.Relationships[personRef] = rel
 }
 
 func applyReplyRelationshipMetadata(
@@ -1267,16 +1807,17 @@ func applyReplyRelationshipMetadata(
 	if !shouldTrackRelationshipMessage(msg) {
 		return
 	}
+	*state = normalizeNPCState(*state)
 	if state.Relationships == nil {
 		state.Relationships = make(map[string]NPCRelationship)
 	}
-	relationshipKey := buildRelationshipKey(msg.Channel, msg.SenderID)
-	if relationshipKey == "" {
+	personRef := ensurePersonRef(state, msg)
+	if personRef == "" {
 		return
 	}
 
-	timestamp := replyAt.UTC().Format(time.RFC3339)
-	rel, ok := state.Relationships[relationshipKey]
+	timestamp := stateTimestampString(replyAt)
+	rel, ok := state.Relationships[personRef]
 	if !ok {
 		rel = NPCRelationship{
 			Affinity:    NPCLevelMid,
@@ -1291,7 +1832,7 @@ func applyReplyRelationshipMetadata(
 	rel.LastUserMessageAt = timestamp
 	rel.LastAgentMessageAt = timestamp
 	rel.LastInteractionAt = timestamp
-	state.Relationships[relationshipKey] = rel
+	state.Relationships[personRef] = rel
 }
 
 func applyMinimalTurnUpdate(state *NPCState, msg bus.InboundMessage, assistantReply string) {
@@ -1313,13 +1854,13 @@ func applyMinimalTurnUpdate(state *NPCState, msg bus.InboundMessage, assistantRe
 	}
 
 	event := NPCRecentEvent{
-		At:      time.Now().UTC().Format(time.RFC3339),
+		At:      stateTimestampString(time.Now()),
 		Type:    "chat",
 		Summary: summary,
 	}
 	state.RecentEvents = append(state.RecentEvents, event)
 	state.RecentEvents = normalizeRecentEvents(state.RecentEvents)
-	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	state.UpdatedAt = stateTimestampString(time.Now())
 }
 
 func mergeNPCState(latest NPCState, next NPCState) NPCState {
@@ -1328,6 +1869,22 @@ func mergeNPCState(latest NPCState, next NPCState) NPCState {
 
 	merged := next
 	merged.TrackedTurns = max(latest.TrackedTurns, next.TrackedTurns)
+	merged.People = make(map[string]NPCPerson, len(latest.People)+len(next.People))
+	for key, person := range latest.People {
+		merged.People[key] = person
+	}
+	for key, person := range next.People {
+		merged.People[key] = mergeNPCPerson(merged.People[key], person, key)
+	}
+	merged.IdentifierMap = make(map[string]string, len(latest.IdentifierMap)+len(next.IdentifierMap))
+	for key, personRef := range latest.IdentifierMap {
+		merged.IdentifierMap[key] = personRef
+	}
+	for key, personRef := range next.IdentifierMap {
+		if normalized := normalizePersonRef(personRef); isPersonRefKey(normalized) {
+			merged.IdentifierMap[key] = normalized
+		}
+	}
 	merged.Relationships = make(map[string]NPCRelationship, len(latest.Relationships)+len(next.Relationships))
 
 	for key, rel := range latest.Relationships {
@@ -1338,6 +1895,15 @@ func mergeNPCState(latest NPCState, next NPCState) NPCState {
 	}
 
 	return normalizeNPCState(merged)
+}
+
+func mergeNPCPerson(latest NPCPerson, next NPCPerson, personRef string) NPCPerson {
+	merged := latest
+	if display := strings.TrimSpace(next.DisplayName); display != "" {
+		merged.DisplayName = display
+	}
+	merged.DisplayName = normalizePersonDisplayName(merged.DisplayName, personRef)
+	return merged
 }
 
 func mergeNPCRelationship(latest NPCRelationship, next NPCRelationship) NPCRelationship {
@@ -1351,6 +1917,7 @@ func mergeNPCRelationship(latest NPCRelationship, next NPCRelationship) NPCRelat
 	merged.LastAgentMessageAt = laterRFC3339String(latest.LastAgentMessageAt, next.LastAgentMessageAt)
 	merged.LastProactiveAttemptAt = laterRFC3339String(latest.LastProactiveAttemptAt, next.LastProactiveAttemptAt)
 	merged.LastProactiveSuccessAt = laterRFC3339String(latest.LastProactiveSuccessAt, next.LastProactiveSuccessAt)
+	merged.Notes = preferNextNonEmptyString(latest.Notes, next.Notes)
 	return merged
 }
 
@@ -1360,6 +1927,14 @@ func preferLatestNonEmptyString(latest string, next string) string {
 		return latest
 	}
 	return strings.TrimSpace(next)
+}
+
+func preferNextNonEmptyString(latest string, next string) string {
+	next = strings.TrimSpace(next)
+	if next != "" {
+		return next
+	}
+	return strings.TrimSpace(latest)
 }
 
 func laterRFC3339String(left string, right string) string {
@@ -1372,18 +1947,18 @@ func laterRFC3339String(left string, right string) string {
 		return left
 	}
 
-	leftAt, leftErr := time.Parse(time.RFC3339, left)
-	rightAt, rightErr := time.Parse(time.RFC3339, right)
+	leftAt, leftOK := parseStateTimestamp(left)
+	rightAt, rightOK := parseStateTimestamp(right)
 	switch {
-	case leftErr == nil && rightErr == nil:
+	case leftOK && rightOK:
 		if rightAt.After(leftAt) {
-			return right
+			return stateTimestampString(rightAt)
 		}
-		return left
-	case leftErr == nil:
-		return left
-	case rightErr == nil:
-		return right
+		return stateTimestampString(leftAt)
+	case leftOK:
+		return stateTimestampString(leftAt)
+	case rightOK:
+		return stateTimestampString(rightAt)
 	case right > left:
 		return right
 	default:
@@ -1433,10 +2008,14 @@ func ensureRemoteChatSuffix(activity string) string {
 	return trimmed + npcActivityRemoteChatSuffix
 }
 
-func parseLocationLocalTime(value string) (time.Time, bool) {
+func parseStateTimestamp(value string) (time.Time, bool) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return time.Time{}, false
+	}
+
+	if parsed, err := time.Parse(time.RFC3339, trimmed); err == nil {
+		return parsed, true
 	}
 
 	parsed, err := time.ParseInLocation(npcLocationTimeLayout, trimmed, time.Local)
@@ -1448,17 +2027,16 @@ func parseLocationLocalTime(value string) (time.Time, bool) {
 }
 
 func isActiveOutingWindow(location NPCLocation, now time.Time) bool {
-	nowLocal := now.In(time.Local)
-	startAt, hasStart := parseLocationLocalTime(location.StartAt)
-	endAt, hasEnd := parseLocationLocalTime(location.EndAt)
+	startAt, hasStart := parseStateTimestamp(location.StartAt)
+	endAt, hasEnd := parseStateTimestamp(location.EndAt)
 
 	if !hasStart && !hasEnd {
 		return false
 	}
-	if hasStart && nowLocal.Before(startAt) {
+	if hasStart && now.Before(startAt) {
 		return false
 	}
-	if hasEnd && !nowLocal.Before(endAt) {
+	if hasEnd && !now.Before(endAt) {
 		return false
 	}
 
@@ -1466,17 +2044,7 @@ func isActiveOutingWindow(location NPCLocation, now time.Time) bool {
 }
 
 func parseRFC3339(value string) (time.Time, bool) {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return time.Time{}, false
-	}
-
-	parsed, err := time.Parse(time.RFC3339, trimmed)
-	if err != nil {
-		return time.Time{}, false
-	}
-
-	return parsed, true
+	return parseStateTimestamp(value)
 }
 
 func latestInteractionAt(state NPCState) (time.Time, bool) {
@@ -1529,7 +2097,7 @@ func appendLocationEvent(state *NPCState, at time.Time, summary string) {
 	}
 
 	state.RecentEvents = append(state.RecentEvents, NPCRecentEvent{
-		At:      at.UTC().Format(time.RFC3339),
+		At:      stateTimestampString(at),
 		Type:    "location",
 		Summary: trimmed,
 	})
@@ -1546,9 +2114,8 @@ func applyHeartbeatLocationPolicy(
 ) (NPCState, bool) {
 	next := normalizeNPCState(state)
 	locationCfg = normalizeHeartbeatLocationConfig(locationCfg)
-	nowLocal := now.In(time.Local)
 
-	if endAt, hasEnd := parseLocationLocalTime(next.Location.EndAt); hasEnd && !nowLocal.Before(endAt) {
+	if endAt, hasEnd := parseStateTimestamp(next.Location.EndAt); hasEnd && !now.Before(endAt) {
 		previousActivity := strings.TrimSpace(next.Location.Activity)
 		moveReason := "returned from outing"
 		if previousActivity != "" && strings.ToLower(previousActivity) != "observing" {
@@ -1562,11 +2129,11 @@ func applyHeartbeatLocationPolicy(
 			MoveReason: moveReason,
 		}
 		appendLocationEvent(&next, now, moveReason)
-		next.UpdatedAt = now.UTC().Format(time.RFC3339)
+		next.UpdatedAt = stateTimestampString(now)
 		return next, true
 	}
 
-	if isActiveOutingWindow(next.Location, nowLocal) {
+	if isActiveOutingWindow(next.Location, now) {
 		return next, false
 	}
 	if !locationCfg.Enabled {
@@ -1578,7 +2145,7 @@ func applyHeartbeatLocationPolicy(
 		return next, false
 	}
 	idleThreshold := time.Duration(locationCfg.IdleThresholdMinutes) * time.Minute
-	if now.UTC().Sub(lastInteraction) < idleThreshold {
+	if now.Sub(lastInteraction) < idleThreshold {
 		return next, false
 	}
 	if roll >= locationCfg.OutingProbability {
@@ -1598,8 +2165,8 @@ func applyHeartbeatLocationPolicy(
 	}
 
 	plan := npcHeartbeatOutings[outingIndex]
-	startAt := nowLocal.Format(npcLocationTimeLayout)
-	endAt := nowLocal.Add(time.Duration(durationMinutes) * time.Minute).Format(npcLocationTimeLayout)
+	startAt := stateTimestampString(now)
+	endAt := stateTimestampString(now.Add(time.Duration(durationMinutes) * time.Minute))
 
 	next.Location = NPCLocation{
 		Area:       plan.Area,
@@ -1610,7 +2177,7 @@ func applyHeartbeatLocationPolicy(
 		MoveReason: npcHeartbeatMoveReason,
 	}
 	appendLocationEvent(&next, now, fmt.Sprintf("went out: %s", plan.Activity))
-	next.UpdatedAt = now.UTC().Format(time.RFC3339)
+	next.UpdatedAt = stateTimestampString(now)
 
 	return next, true
 }

@@ -19,6 +19,24 @@ import (
 	"github.com/sipeed/picoclaw/pkg/routing"
 )
 
+func requireRelationshipForIdentifier(
+	t *testing.T,
+	state NPCState,
+	channel, senderID string,
+) (string, NPCRelationship) {
+	t.Helper()
+
+	personRef := personRefForIdentifier(state, channel, senderID)
+	if personRef == "" {
+		t.Fatalf("missing person_ref for %s:%s", channel, senderID)
+	}
+	rel, ok := state.Relationships[personRef]
+	if !ok {
+		t.Fatalf("missing relationship for person_ref %q", personRef)
+	}
+	return personRef, rel
+}
+
 func TestNPCStateStore_SaveLoadRoundTrip(t *testing.T) {
 	workspace := t.TempDir()
 	store := NewNPCStateStore(workspace)
@@ -56,16 +74,17 @@ func TestNPCStateStore_SaveLoadRoundTrip(t *testing.T) {
 	if loaded.Location.Area != "harbor" {
 		t.Fatalf("Location.Area = %q, want %q", loaded.Location.Area, "harbor")
 	}
-	if loaded.Location.StartAt != "2026-03-05 18:30" {
-		t.Fatalf("Location.StartAt = %q, want %q", loaded.Location.StartAt, "2026-03-05 18:30")
+	if startAt, ok := parseStateTimestamp(loaded.Location.StartAt); !ok || startAt.In(time.Local).Format(npcLocationTimeLayout) != "2026-03-05 18:30" {
+		t.Fatalf("Location.StartAt = %q, want local time %q", loaded.Location.StartAt, "2026-03-05 18:30")
 	}
-	if loaded.Location.EndAt != "2026-03-05 20:00" {
-		t.Fatalf("Location.EndAt = %q, want %q", loaded.Location.EndAt, "2026-03-05 20:00")
+	if endAt, ok := parseStateTimestamp(loaded.Location.EndAt); !ok || endAt.In(time.Local).Format(npcLocationTimeLayout) != "2026-03-05 20:00" {
+		t.Fatalf("Location.EndAt = %q, want local time %q", loaded.Location.EndAt, "2026-03-05 20:00")
 	}
-	if _, ok := loaded.Relationships["telegram:user1"]; !ok {
-		t.Fatalf("expected relationship key telegram:user1")
+	personRef, rel := requireRelationshipForIdentifier(t, loaded, "telegram", "user1")
+	if personRef == "" {
+		t.Fatal("expected person_ref for telegram:user1")
 	}
-	if rel := loaded.Relationships["telegram:user1"]; rel.Affinity != NPCLevelHigh || rel.Trust != NPCLevelMid || rel.Familiarity != NPCLevelLow {
+	if rel.Affinity != NPCLevelHigh || rel.Trust != NPCLevelMid || rel.Familiarity != NPCLevelLow {
 		t.Fatalf("unexpected relationship levels: %+v", rel)
 	}
 }
@@ -102,8 +121,8 @@ func TestNPCStateStore_LoadState_LegacyMovedAtMapsToStartAt(t *testing.T) {
 		t.Fatalf("LoadState() error: %v", err)
 	}
 
-	if loaded.Location.StartAt != "2026-03-05 18:30" {
-		t.Fatalf("Location.StartAt = %q, want %q", loaded.Location.StartAt, "2026-03-05 18:30")
+	if startAt, ok := parseStateTimestamp(loaded.Location.StartAt); !ok || startAt.In(time.Local).Format(npcLocationTimeLayout) != "2026-03-05 18:30" {
+		t.Fatalf("Location.StartAt = %q, want local time %q", loaded.Location.StartAt, "2026-03-05 18:30")
 	}
 	if loaded.Location.MoveReason != "daily stroll" {
 		t.Fatalf("Location.MoveReason = %q, want %q", loaded.Location.MoveReason, "daily stroll")
@@ -139,11 +158,106 @@ func TestNormalizeNPCState_DropsPlaceholderRelationshipKeys(t *testing.T) {
 	if _, ok := normalized.Relationships["<channel:user_id>"]; ok {
 		t.Fatal("placeholder relationship key <channel:user_id> should be removed")
 	}
-	if _, ok := normalized.Relationships["telegram:user1"]; !ok {
-		t.Fatal("expected real relationship telegram:user1 to remain")
+	if personRef := personRefForIdentifier(normalized, "telegram", "user1"); personRef == "" {
+		t.Fatal("expected person_ref for telegram:user1 to be created")
+	} else if _, ok := normalized.Relationships[personRef]; !ok {
+		t.Fatalf("expected normalized relationship for %q", personRef)
 	}
-	if _, ok := normalized.Relationships["telegram:user2"]; !ok {
-		t.Fatal("expected normalized real relationship telegram:user2 to remain")
+	if personRef := personRefForIdentifier(normalized, "telegram", "user2"); personRef == "" {
+		t.Fatal("expected person_ref for telegram:user2 to be created")
+	} else if _, ok := normalized.Relationships[personRef]; !ok {
+		t.Fatalf("expected normalized relationship for %q", personRef)
+	}
+}
+
+func TestNPCStateStore_LoadState_LegacyRelationshipMigrationIsStableAcrossLoads(t *testing.T) {
+	workspace := t.TempDir()
+	store := NewNPCStateStore(workspace)
+
+	legacy := "# NPC State\n\n```json\n{\n  \"version\": 1,\n  \"relationships\": {\n    \"telegram:user4\": {\"notes\": \"user4\"},\n    \"telegram:user2\": {\"notes\": \"user2\"},\n    \"telegram:user5\": {\"notes\": \"user5\"},\n    \"telegram:user1\": {\"notes\": \"user1\"},\n    \"telegram:user3\": {\"notes\": \"user3\"}\n  }\n}\n```\n"
+	if err := os.WriteFile(store.StatePath(), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	senderIDs := []string{"user1", "user2", "user3", "user4", "user5"}
+	expectedRefs := make(map[string]string, len(senderIDs))
+
+	for load := 0; load < 12; load++ {
+		state, err := store.LoadState()
+		if err != nil {
+			t.Fatalf("LoadState() error: %v", err)
+		}
+
+		seenRefs := make(map[string]string, len(senderIDs))
+		for _, senderID := range senderIDs {
+			personRef, _ := requireRelationshipForIdentifier(t, state, "telegram", senderID)
+			if priorSenderID, exists := seenRefs[personRef]; exists {
+				t.Fatalf("person_ref %q reused for %s and %s", personRef, priorSenderID, senderID)
+			}
+			seenRefs[personRef] = senderID
+
+			if load == 0 {
+				expectedRefs[senderID] = personRef
+				continue
+			}
+			if personRef != expectedRefs[senderID] {
+				t.Fatalf("load %d remapped %s from %q to %q", load+1, senderID, expectedRefs[senderID], personRef)
+			}
+		}
+	}
+}
+
+func TestNPCStateStore_UpdateState_KeepsLegacyRelationshipMigrationTargetStable(t *testing.T) {
+	workspace := t.TempDir()
+	store := NewNPCStateStore(workspace)
+
+	legacy := "# NPC State\n\n```json\n{\n  \"version\": 1,\n  \"relationships\": {\n    \"telegram:user2\": {\"notes\": \"user2\"},\n    \"telegram:user1\": {\"notes\": \"user1\"}\n  }\n}\n```\n"
+	if err := os.WriteFile(store.StatePath(), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	previousState, err := store.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState() error: %v", err)
+	}
+
+	user1Ref, user1Rel := requireRelationshipForIdentifier(t, previousState, "telegram", "user1")
+	user1Rel.Notes = "updated only for user1"
+
+	update := defaultNPCState()
+	update.People = map[string]NPCPerson{
+		user1Ref: previousState.People[user1Ref],
+	}
+	update.IdentifierMap = map[string]string{
+		buildIdentifierKey("telegram", "user1"): user1Ref,
+	}
+	update.Relationships = map[string]NPCRelationship{
+		user1Ref: user1Rel,
+	}
+
+	if err := store.UpdateState(func(state *NPCState) (bool, error) {
+		*state = mergeNPCState(*state, update)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("UpdateState() error: %v", err)
+	}
+
+	mergedState, err := store.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState() error: %v", err)
+	}
+
+	mergedUser1Ref, mergedUser1Rel := requireRelationshipForIdentifier(t, mergedState, "telegram", "user1")
+	if mergedUser1Ref != user1Ref {
+		t.Fatalf("person_ref for user1 = %q, want %q", mergedUser1Ref, user1Ref)
+	}
+	if mergedUser1Rel.Notes != "updated only for user1" {
+		t.Fatalf("user1 notes = %q, want %q", mergedUser1Rel.Notes, "updated only for user1")
+	}
+
+	_, mergedUser2Rel := requireRelationshipForIdentifier(t, mergedState, "telegram", "user2")
+	if mergedUser2Rel.Notes == "updated only for user1" {
+		t.Fatalf("user2 notes should not receive user1 update: %+v", mergedUser2Rel)
 	}
 }
 
@@ -215,10 +329,7 @@ func TestNPCStateStore_UpdateState_AppliesConcurrentMutationsAtomically(t *testi
 	if state.TrackedTurns != workers {
 		t.Fatalf("TrackedTurns = %d, want %d", state.TrackedTurns, workers)
 	}
-	rel, ok := state.Relationships["telegram:user1"]
-	if !ok {
-		t.Fatal("expected relationship telegram:user1")
-	}
+	_, rel := requireRelationshipForIdentifier(t, state, "telegram", "user1")
 	if rel.LastSessionKey == "" {
 		t.Fatal("expected LastSessionKey to survive concurrent updates")
 	}
@@ -270,10 +381,7 @@ func TestNPCStateStore_UpdateState_PreservesLatestRelationshipWhileBumpingTracke
 	if trackedTurns != wantTrackedTurns {
 		t.Fatalf("trackedTurns = %d, want %d", trackedTurns, wantTrackedTurns)
 	}
-	rel, ok := state.Relationships["telegram:user1"]
-	if !ok {
-		t.Fatal("expected relationship telegram:user1")
-	}
+	_, rel := requireRelationshipForIdentifier(t, state, "telegram", "user1")
 	if rel.LastSessionKey != "session-new" {
 		t.Fatalf("LastSessionKey = %q, want %q", rel.LastSessionKey, "session-new")
 	}
@@ -322,7 +430,7 @@ func TestMergeNPCState_PreservesLatestRelationshipSessionFields(t *testing.T) {
 	if merged.Emotion.Name != "cheerful" {
 		t.Fatalf("Emotion.Name = %q, want cheerful", merged.Emotion.Name)
 	}
-	rel := merged.Relationships["telegram:user1"]
+	_, rel := requireRelationshipForIdentifier(t, merged, "telegram", "user1")
 	if rel.Affinity != NPCLevelHigh || rel.Trust != NPCLevelHigh || rel.Familiarity != NPCLevelHigh {
 		t.Fatalf("expected computed relationship levels to win, got %+v", rel)
 	}
@@ -332,10 +440,10 @@ func TestMergeNPCState_PreservesLatestRelationshipSessionFields(t *testing.T) {
 	if rel.LastChatID != "chat-new" {
 		t.Fatalf("LastChatID = %q, want chat-new", rel.LastChatID)
 	}
-	if rel.LastUserMessageAt != "2026-03-05T12:05:00Z" {
+	if lastUserAt, ok := parseStateTimestamp(rel.LastUserMessageAt); !ok || lastUserAt.UTC().Format(time.RFC3339) != "2026-03-05T12:05:00Z" {
 		t.Fatalf("LastUserMessageAt = %q, want latest timestamp", rel.LastUserMessageAt)
 	}
-	if rel.LastAgentMessageAt != "2026-03-05T12:06:00Z" {
+	if lastAgentAt, ok := parseStateTimestamp(rel.LastAgentMessageAt); !ok || lastAgentAt.UTC().Format(time.RFC3339) != "2026-03-05T12:06:00Z" {
 		t.Fatalf("LastAgentMessageAt = %q, want latest timestamp", rel.LastAgentMessageAt)
 	}
 	if rel.Notes != "updated notes" {
@@ -516,8 +624,8 @@ func TestNPCStateUpdaterPrompts_IncludeRelationshipAndLocationGuidance(t *testin
 		name   string
 		prompt string
 	}{
-		{name: "state only", prompt: buildNPCStateOnlySystemPrompt("telegram:user1")},
-		{name: "state and memory", prompt: buildNPCStateAndMemorySystemPrompt("telegram:user1")},
+		{name: "state only", prompt: buildNPCStateOnlySystemPrompt("person_sunny")},
+		{name: "state and memory", prompt: buildNPCStateAndMemorySystemPrompt("person_sunny")},
 	}
 
 	required := []string{
@@ -527,6 +635,8 @@ func TestNPCStateUpdaterPrompts_IncludeRelationshipAndLocationGuidance(t *testin
 		"Change each of affinity, trust, and familiarity by at most one step per interaction.",
 		"Do not decrease affinity, trust, or familiarity because of silence, delayed replies, or neutral small talk alone.",
 		"Do not invent spontaneous location moves during replied-turn updates; heartbeat/autonomous policies handle unprompted outings.",
+		"Do not refer to self as 助手 in new text.",
+		"Never use raw channel:user_id text in habits, relationship notes, recent event summaries, or memory notes.",
 	}
 
 	for _, tc := range tests {
@@ -557,7 +667,7 @@ func TestApplyReplyRelationshipMetadata_DoesNotPromoteFamiliarity(t *testing.T) 
 
 	applyReplyRelationshipMetadata(&state, msg, "session-1", time.Date(2026, 3, 5, 12, 0, 0, 0, time.UTC))
 
-	rel := state.Relationships["telegram:user1"]
+	_, rel := requireRelationshipForIdentifier(t, normalizeNPCState(state), "telegram", "user1")
 	if rel.Familiarity != NPCLevelLow {
 		t.Fatalf("Familiarity = %q, want %q", rel.Familiarity, NPCLevelLow)
 	}
@@ -721,10 +831,7 @@ func TestAgentLoop_PostReplyStateUpdate_RequiresPublishedReply(t *testing.T) {
 		if state.Emotion.Name != "cheerful" {
 			return false, fmt.Sprintf("Emotion.Name = %q, want cheerful", state.Emotion.Name)
 		}
-		rel, ok := state.Relationships["telegram:user-default"]
-		if !ok {
-			return false, "missing relationship for telegram:user-default"
-		}
+		_, rel := requireRelationshipForIdentifier(t, state, "telegram", "user-default")
 		if rel.Familiarity != NPCLevelLow {
 			return false, fmt.Sprintf("Familiarity = %q, want %q", rel.Familiarity, NPCLevelLow)
 		}
@@ -779,10 +886,14 @@ func (m *npcStateTestProvider) Chat(
 			}
 		}
 
-		sender := senderIDFromUpdaterInput(messages)
-		relationshipKey := "telegram:" + sender
+		personRef := personRefFromUpdaterInput(messages)
+		if personRef == "" {
+			personRef = nextAvailablePersonRef("", nil, nil)
+		}
+		displayName := senderDisplayNameFromUpdaterInput(messages)
+		userMessage := userMessageFromUpdaterInput(messages)
 		state := NPCState{
-			Version:   1,
+			Version:   2,
 			UpdatedAt: "2026-01-01T00:00:00Z",
 			Emotion: NPCEmotion{
 				Name:      "cheerful",
@@ -794,21 +905,28 @@ func (m *npcStateTestProvider) Chat(
 				Scene:    "main square",
 				Activity: "wandering",
 			},
+			People: map[string]NPCPerson{
+				personRef: {DisplayName: normalizePersonDisplayName(displayName, personRef)},
+			},
 			Relationships: map[string]NPCRelationship{
-				relationshipKey: {
+				personRef: {
 					Affinity:    NPCLevelMid,
 					Trust:       NPCLevelMid,
 					Familiarity: NPCLevelLow,
 				},
 			},
 			Habits:       []string{"greets politely"},
-			RecentEvents: []NPCRecentEvent{{At: "2026-01-01T00:00:00Z", Type: "chat", Summary: "talked with " + sender}},
+			RecentEvents: []NPCRecentEvent{{At: "2026-01-01T00:00:00Z", Type: "chat", Summary: "talked with " + normalizePersonDisplayName(displayName, personRef)}},
 		}
 		var data []byte
 		if isMemoryUpdater {
+			memoryNote := "prefers RPG style"
+			if firstWord := strings.TrimSpace(strings.SplitN(userMessage, " ", 2)[0]); firstWord != "" {
+				memoryNote = fmt.Sprintf("Often opens with %q in chat.", firstWord)
+			}
 			update := npcStateUpdateResult{
 				State:       state,
-				MemoryNotes: []string{"prefers RPG style", "sender=" + sender},
+				MemoryNotes: []string{memoryNote},
 			}
 			data, _ = json.Marshal(update)
 		} else {
@@ -836,23 +954,35 @@ func (m *npcStateTestProvider) maxConcurrentUpdaters() int {
 	return int(m.updaterMaxInFlight.Load())
 }
 
-func senderIDFromUpdaterInput(messages []providers.Message) string {
+func personRefFromUpdaterInput(messages []providers.Message) string {
+	return updaterInputStringField(messages, "person_ref", "")
+}
+
+func senderDisplayNameFromUpdaterInput(messages []providers.Message) string {
+	return updaterInputStringField(messages, "sender_display_name", "")
+}
+
+func userMessageFromUpdaterInput(messages []providers.Message) string {
+	return updaterInputStringField(messages, "user_message", "")
+}
+
+func updaterInputStringField(messages []providers.Message, field, fallback string) string {
 	if len(messages) < 2 {
-		return "unknown"
+		return fallback
 	}
 	content := messages[1].Content
-	marker := `"sender_id": "`
+	marker := fmt.Sprintf(`"%s": "`, field)
 	idx := strings.Index(content, marker)
 	if idx < 0 {
-		return "unknown"
+		return fallback
 	}
 	rest := content[idx+len(marker):]
 	end := strings.Index(rest, `"`)
 	if end < 0 {
-		return "unknown"
+		return fallback
 	}
 	if rest[:end] == "" {
-		return "unknown"
+		return fallback
 	}
 	return rest[:end]
 }
@@ -945,8 +1075,8 @@ func TestAgentLoop_StrictAutoProvision_UpdatesStateAndMemory(t *testing.T) {
 		if state.TrackedTurns != npcUpdaterEveryTurns {
 			return false, fmt.Sprintf("TrackedTurns = %d, want %d", state.TrackedTurns, npcUpdaterEveryTurns)
 		}
-		if _, ok := state.Relationships["telegram:user42"]; !ok {
-			return false, "relationship telegram:user42 not updated yet"
+		if personRef := personRefForIdentifier(state, "telegram", "user42"); personRef == "" {
+			return false, "relationship person_ref for telegram:user42 not updated yet"
 		}
 
 		notes, loadErr := agent.StateStore.LoadMemoryNotes()
@@ -1034,8 +1164,8 @@ func TestAgentLoop_StrictAutoProvision_ThrottlesStateUpdaterUntilCadence(t *test
 		if state.Emotion.Name != "cheerful" {
 			return false, fmt.Sprintf("Emotion.Name = %q, want cheerful", state.Emotion.Name)
 		}
-		if _, ok := state.Relationships["telegram:user7"]; !ok {
-			return false, "relationship telegram:user7 not updated yet"
+		if personRef := personRefForIdentifier(state, "telegram", "user7"); personRef == "" {
+			return false, "relationship person_ref for telegram:user7 not updated yet"
 		}
 
 		notes, err := agent.StateStore.LoadMemoryNotes()
