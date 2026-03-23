@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -102,7 +104,7 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	// Atomic rename: temp file becomes the target
 	// On POSIX: rename() is atomic
 	// On Windows: Rename() is atomic for files
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := renameWithRetry(tmpPath, path); err != nil {
 		return fmt.Errorf("failed to rename temp file: %w", err)
 	}
 
@@ -116,4 +118,43 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	// Success: skip cleanup (file was renamed, no temp to remove)
 	cleanup = false
 	return nil
+}
+
+func renameWithRetry(from, to string) error {
+	const (
+		windowsRenameRetries = 20
+		windowsRenameDelay   = 15 * time.Millisecond
+	)
+
+	attempts := 1
+	if runtime.GOOS == "windows" {
+		attempts = windowsRenameRetries
+	}
+
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		if err := os.Rename(from, to); err != nil {
+			lastErr = err
+			if !shouldRetryRename(err) || i == attempts-1 {
+				return err
+			}
+			time.Sleep(windowsRenameDelay)
+			continue
+		}
+		return nil
+	}
+
+	return lastErr
+}
+
+func shouldRetryRename(err error) bool {
+	if err == nil || runtime.GOOS != "windows" {
+		return false
+	}
+	if os.IsPermission(err) {
+		return true
+	}
+
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "access is denied") || strings.Contains(lower, "used by another process")
 }

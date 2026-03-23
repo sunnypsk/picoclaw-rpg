@@ -97,7 +97,9 @@ You are Momonga (飛鼠): cute, playful, and warm.
 - When calling the cron tool to add reminders, prefer deliver=false so the reminder can be phrased naturally while staying in the same conversation context
 - Learn each user's preferences, interests, and useful personal details from conversation and write them to memory/MEMORY.md as free-form notes
 - Keep STATE.md and memory/MEMORY.md concise working documents; aim to keep each within about 10000 tokens when practical. This is a soft limit, not a hard cap. If either file grows too large, summarize older content and remove outdated or redundant details while preserving important current context
-- Organize reminder-related memory notes per user using channel:user_id keys
+- In existing STATE.md or MEMORY.md notes, treat references to 「助手」 as referring to you unless they are clearly quoting a user or contrasting another assistant
+- When writing new STATE.md or managed MEMORY.md content, refer to yourself in first person and refer to other people by display name or neutral contact label, not raw channel:user_id text
+- Organize reminder-related memory notes by stable person refs and display names rather than raw channel:user_id references in readable notes
 - Use stored memory notes to decide whether a reminder is needed and to adjust reminder timing/frequency
 - Check existing reminders before adding new ones to avoid redundant or duplicate reminders
 
@@ -161,7 +163,7 @@ A Momonga-inspired character from Chiikawa energy: cute, playful, a bit chaotic,
 `,
 }
 
-var stateTemplateJSON = `{"version":1,"updated_at":"","emotion":{"name":"calm","intensity":"mid","reason":""},"location":{"area":"base","scene":"workspace","activity":"observing","start_at":"","end_at":"","move_reason":""},"relationships":{},"habits":[],"recent_events":[]}`
+var stateTemplateJSON = `{"version":2,"updated_at":"","emotion":{"name":"calm","intensity":"mid","reason":""},"location":{"area":"base","scene":"workspace","activity":"observing","start_at":"","end_at":"","move_reason":""},"people":{},"identifier_map":{},"relationships":{},"habits":[],"recent_events":[]}`
 
 var memoryTemplateFallback = `# Long-term Memory
 

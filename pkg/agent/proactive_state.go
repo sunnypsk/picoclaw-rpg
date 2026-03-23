@@ -15,14 +15,14 @@ func prepareRelationshipTarget(agent *AgentInstance, msg bus.InboundMessage, ses
 	if agent == nil || agent.StateStore == nil {
 		return nil
 	}
-	relationshipKey := buildRelationshipKey(msg.Channel, msg.SenderID)
-	if relationshipKey == "" {
-		return nil
-	}
 
 	return agent.StateStore.UpdateState(func(state *NPCState) (bool, error) {
-		now := time.Now().UTC().Format(time.RFC3339)
-		rel, ok := state.Relationships[relationshipKey]
+		personRef := ensurePersonRef(state, msg)
+		if personRef == "" {
+			return false, nil
+		}
+		now := stateTimestampString(time.Now())
+		rel, ok := state.Relationships[personRef]
 		if !ok {
 			rel = NPCRelationship{
 				Affinity:    NPCLevelMid,
@@ -36,7 +36,7 @@ func prepareRelationshipTarget(agent *AgentInstance, msg bus.InboundMessage, ses
 		rel.LastSessionKey = strings.TrimSpace(sessionKey)
 		rel.LastUserMessageAt = now
 		rel.LastInteractionAt = now
-		state.Relationships[relationshipKey] = rel
+		state.Relationships[personRef] = rel
 
 		return true, nil
 	})
@@ -46,10 +46,6 @@ func recordRelationshipSessionKey(agent *AgentInstance, msg bus.InboundMessage, 
 	if !shouldTrackRelationshipMessage(msg) {
 		return nil
 	}
-	relationshipKey := buildRelationshipKey(msg.Channel, msg.SenderID)
-	if relationshipKey == "" {
-		return nil
-	}
 	if agent == nil || agent.StateStore == nil {
 		return nil
 	}
@@ -57,7 +53,11 @@ func recordRelationshipSessionKey(agent *AgentInstance, msg bus.InboundMessage, 
 		if state.Relationships == nil {
 			state.Relationships = make(map[string]NPCRelationship)
 		}
-		rel, ok := state.Relationships[relationshipKey]
+		personRef := ensurePersonRef(state, msg)
+		if personRef == "" {
+			return false, nil
+		}
+		rel, ok := state.Relationships[personRef]
 		if !ok {
 			rel = NPCRelationship{
 				Affinity:    NPCLevelMid,
@@ -69,7 +69,7 @@ func recordRelationshipSessionKey(agent *AgentInstance, msg bus.InboundMessage, 
 		rel.LastChatID = strings.TrimSpace(msg.ChatID)
 		rel.LastPeerKind = normalizeRelationshipPeerKind(msg.Peer.Kind)
 		rel.LastSessionKey = strings.TrimSpace(sessionKey)
-		state.Relationships[relationshipKey] = rel
+		state.Relationships[personRef] = rel
 		return true, nil
 	})
 }
@@ -97,7 +97,7 @@ func recordNPCOutboundMessage(agent *AgentInstance, channel, chatID string) erro
 
 	return agent.StateStore.UpdateState(func(state *NPCState) (bool, error) {
 		updated := false
-		now := time.Now().UTC().Format(time.RFC3339)
+		now := stateTimestampString(time.Now())
 		normalizedChannel := normalizeRelationshipChannel(channel)
 		normalizedChatID := strings.TrimSpace(chatID)
 		for key, rel := range state.Relationships {
@@ -114,13 +114,13 @@ func recordNPCOutboundMessage(agent *AgentInstance, channel, chatID string) erro
 
 func recordProactiveAttempt(agent *AgentInstance, relationshipKey string, at time.Time) error {
 	return updateRelationshipState(agent, relationshipKey, func(rel *NPCRelationship) {
-		rel.LastProactiveAttemptAt = at.UTC().Format(time.RFC3339)
+		rel.LastProactiveAttemptAt = stateTimestampString(at)
 	})
 }
 
 func recordProactiveSuccess(agent *AgentInstance, relationshipKey string, at time.Time) error {
 	return updateRelationshipState(agent, relationshipKey, func(rel *NPCRelationship) {
-		timestamp := at.UTC().Format(time.RFC3339)
+		timestamp := stateTimestampString(at)
 		rel.LastAgentMessageAt = timestamp
 		rel.LastProactiveSuccessAt = timestamp
 	})

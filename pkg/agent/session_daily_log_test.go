@@ -128,7 +128,7 @@ func TestProcessMessage_NewCommandRotatesSessionAndLogsDailyNotes(t *testing.T) 
 	if err != nil {
 		t.Fatalf("LoadState() error: %v", err)
 	}
-	rel := state.Relationships["test:u1"]
+	_, rel := requireRelationshipForIdentifier(t, state, "test", "u1")
 	if rel.LastSessionKey != newSessionKey {
 		t.Fatalf("relationship LastSessionKey = %q, want %q", rel.LastSessionKey, newSessionKey)
 	}

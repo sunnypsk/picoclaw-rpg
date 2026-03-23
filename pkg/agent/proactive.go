@@ -70,7 +70,7 @@ func (al *AgentLoop) RunProactiveHeartbeat(ctx context.Context) {
 		attemptedTargets := make(map[string]struct{}, len(relationshipKeys))
 		for _, relationshipKey := range relationshipKeys {
 			rel := state.Relationships[relationshipKey]
-			routedSessionKey, targetKey := proactiveTargetKeys(al.cfg, agent.ID, relationshipKey, rel)
+			routedSessionKey, targetKey := proactiveTargetKeys(al.cfg, state, agent.ID, relationshipKey, rel)
 			eval := evaluateProactiveOpportunity(rel, proactiveCfg, interval, now, rand.Float64())
 			if !eval.Triggered {
 				continue
@@ -93,7 +93,7 @@ func (al *AgentLoop) RunProactiveHeartbeat(ctx context.Context) {
 					"error":            err.Error(),
 				})
 			}
-			sent, err := al.runProactiveOutreach(ctx, agent, relationshipKey, rel, eval, currentTime, routedSessionKey)
+			sent, err := al.runProactiveOutreach(ctx, agent, state, relationshipKey, rel, eval, currentTime, routedSessionKey)
 			if err != nil {
 				logger.WarnCF("agent", "Proactive outreach failed", map[string]any{
 					"agent_id":         agent.ID,
@@ -119,6 +119,7 @@ func (al *AgentLoop) RunProactiveHeartbeat(ctx context.Context) {
 func (al *AgentLoop) runProactiveOutreach(
 	ctx context.Context,
 	agent *AgentInstance,
+	state NPCState,
 	relationshipKey string,
 	rel NPCRelationship,
 	eval proactiveEvaluation,
@@ -132,7 +133,7 @@ func (al *AgentLoop) runProactiveOutreach(
 		currentTime = time.Now()
 	}
 	if strings.TrimSpace(routedSessionKey) == "" {
-		routedSessionKey = proactiveContextSessionKey(al.cfg, agent.ID, relationshipKey, rel)
+		routedSessionKey = proactiveContextSessionKey(al.cfg, state, agent.ID, relationshipKey, rel)
 	}
 	if routedSessionKey == "" {
 		logger.DebugCF("agent", "Skipped proactive outreach without routed session key", map[string]any{
@@ -188,6 +189,7 @@ func proactiveSessionKey(agentID, relationshipKey string) string {
 
 func proactiveContextSessionKey(
 	cfg *config.Config,
+	state NPCState,
 	agentID, relationshipKey string,
 	rel NPCRelationship,
 ) string {
@@ -203,7 +205,7 @@ func proactiveContextSessionKey(
 		return ""
 	}
 	peerKind := normalizeRelationshipPeerKind(rel.LastPeerKind)
-	peerID := proactivePeerID(relationshipKey, rel)
+	peerID := proactivePeerID(state, relationshipKey, rel)
 	if peerKind == "" || peerID == "" {
 		return ""
 	}
@@ -218,10 +220,11 @@ func proactiveContextSessionKey(
 
 func proactiveTargetKeys(
 	cfg *config.Config,
+	state NPCState,
 	agentID, relationshipKey string,
 	rel NPCRelationship,
 ) (string, string) {
-	routedSessionKey := proactiveContextSessionKey(cfg, agentID, relationshipKey, rel)
+	routedSessionKey := proactiveContextSessionKey(cfg, state, agentID, relationshipKey, rel)
 	if routedSessionKey != "" {
 		return routedSessionKey, "session:" + routedSessionKey
 	}
@@ -233,9 +236,12 @@ func proactiveTargetKeys(
 	return "", ""
 }
 
-func proactivePeerID(relationshipKey string, rel NPCRelationship) string {
+func proactivePeerID(state NPCState, relationshipKey string, rel NPCRelationship) string {
 	peerKind := normalizeRelationshipPeerKind(rel.LastPeerKind)
-	peerID := relationshipPeerID(relationshipKey)
+	peerID := senderIDForPerson(state, rel.LastChannel, relationshipKey)
+	if peerID == "" {
+		peerID = relationshipPeerID(relationshipKey)
+	}
 	switch peerKind {
 	case "group", "channel":
 		return strings.TrimSpace(rel.LastChatID)

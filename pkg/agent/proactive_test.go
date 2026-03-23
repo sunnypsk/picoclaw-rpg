@@ -139,7 +139,7 @@ func TestPrepareRelationshipTargetAndRecordOutboundMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState() error: %v", err)
 	}
-	rel := state.Relationships["telegram:user1"]
+	_, rel := requireRelationshipForIdentifier(t, state, "telegram", "user1")
 	if rel.LastChannel != "telegram" || rel.LastChatID != "chat1" {
 		t.Fatalf("unexpected relationship target: %+v", rel)
 	}
@@ -156,13 +156,16 @@ func TestPrepareRelationshipTargetAndRecordOutboundMessage(t *testing.T) {
 
 func TestProactiveContextSessionKey_UsesRoutedPeerSession(t *testing.T) {
 	cfg := &config.Config{Session: config.SessionConfig{DMScope: "per-channel-peer"}}
+	state := defaultNPCState()
+	state.IdentifierMap["telegram:user1"] = "person_user1"
+	state.People["person_user1"] = NPCPerson{DisplayName: "User 1"}
 	rel := NPCRelationship{
 		LastChannel:  "telegram",
 		LastChatID:   "chat1",
 		LastPeerKind: "direct",
 	}
 
-	got := proactiveContextSessionKey(cfg, "main", "telegram:user1", rel)
+	got := proactiveContextSessionKey(cfg, state, "main", "person_user1", rel)
 	want := strings.ToLower(routing.BuildAgentPeerSessionKey(routing.SessionKeyParams{
 		AgentID: "main",
 		Channel: "telegram",
@@ -329,15 +332,16 @@ func TestRunProactiveHeartbeat_UsesRoutedHistoryAndMirrorsMessageToolOutput(t *t
 		}
 	}
 
-	if got := agent.Sessions.GetHistory(proactiveSessionKey(agent.ID, "telegram:user1")); len(got) != 0 {
-		t.Fatalf("expected proactive internal session to stay ephemeral, got %+v", got)
-	}
-
-	updated, err := agent.StateStore.LoadState()
+	savedState, err := agent.StateStore.LoadState()
 	if err != nil {
 		t.Fatalf("LoadState() error: %v", err)
 	}
-	rel := updated.Relationships["telegram:user1"]
+	personRef := personRefForIdentifier(savedState, "telegram", "user1")
+	if got := agent.Sessions.GetHistory(proactiveSessionKey(agent.ID, personRef)); len(got) != 0 {
+		t.Fatalf("expected proactive internal session to stay ephemeral, got %+v", got)
+	}
+
+	_, rel := requireRelationshipForIdentifier(t, savedState, "telegram", "user1")
 	if rel.LastProactiveSuccessAt == "" {
 		t.Fatal("expected LastProactiveSuccessAt to be recorded")
 	}
@@ -423,7 +427,7 @@ func TestBuildProactivePrompt_IncludesAbsoluteTimesAndRecentTurnContext(t *testi
 		LatestAssistant: "早兩日你都講過佢勁煩",
 	}
 
-	prompt := buildProactivePrompt("whatsapp_native:user1", rel, eval, now, snapshot)
+	prompt := buildProactivePrompt("person_sunny", rel, eval, now, snapshot)
 
 	if !strings.Contains(prompt, "2026-03-20T12:31:03+08:00") {
 		t.Fatalf("prompt missing absolute current timestamp: %q", prompt)
