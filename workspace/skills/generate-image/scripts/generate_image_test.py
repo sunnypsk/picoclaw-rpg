@@ -82,7 +82,7 @@ class GenerateImageRequestTests(unittest.TestCase):
     def test_build_request_uses_chat_completions_for_non_image_api_model(self) -> None:
         endpoint, body, content_type = generate_image.build_request(
             "test-model",
-            {"prompt": "cat", "size": "1024x1024"},
+            {"prompt": "cat", "aspect_ratio": "1:1"},
             None,
         )
 
@@ -92,12 +92,12 @@ class GenerateImageRequestTests(unittest.TestCase):
         payload = json.loads(body.decode("utf-8"))
         self.assertEqual(payload["model"], "test-model")
         self.assertIn("messages", payload)
-        self.assertEqual(payload["messages"][0]["content"][1]["text"], "size: 1024x1024")
+        self.assertEqual(payload["messages"][0]["content"][1]["text"], "aspect_ratio: 1:1")
 
     def test_build_request_uses_images_generation_for_image_api_model(self) -> None:
         endpoint, body, content_type = generate_image.build_request(
             "gpt-image-2",
-            {"prompt": "cat", "aspect_ratio": "16:9", "style": "watercolor"},
+            {"prompt": "cat", "aspect_ratio": "16:9"},
             None,
         )
 
@@ -107,7 +107,7 @@ class GenerateImageRequestTests(unittest.TestCase):
         payload = json.loads(body.decode("utf-8"))
         self.assertEqual(payload["model"], "gpt-image-2")
         self.assertEqual(payload["size"], "1536x864")
-        self.assertIn("Style: watercolor", payload["prompt"])
+        self.assertIn("Target aspect ratio: 16:9", payload["prompt"])
 
     def test_build_request_uses_images_edits_for_image_api_model(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
@@ -117,7 +117,7 @@ class GenerateImageRequestTests(unittest.TestCase):
         try:
             endpoint, body, content_type = generate_image.build_request(
                 "gpt-image-2",
-                {"prompt": "edit this", "size": "1024x1024"},
+                {"prompt": "edit this", "aspect_ratio": "1:1"},
                 image_path,
             )
         finally:

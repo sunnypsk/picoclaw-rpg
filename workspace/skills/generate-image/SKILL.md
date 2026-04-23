@@ -47,23 +47,20 @@ Example tool input:
 
 Optional passthrough fields:
 - `aspect_ratio`
-- `size`
 - `quality`
-- `style`
 - `background`
 - `timeout_seconds`
 
-Ratio and resolution guidance:
+Ratio guidance:
 - Use `aspect_ratio` for composition, for example `1:1`, `4:3`, `3:4`, `16:9`, or `9:16`.
-- Use `size` for output resolution, for example `1024x1024`, `1536x1024`, or `1024x1536`.
-- If both are provided, treat `aspect_ratio` as the framing intent and `size` as the concrete pixel target.
-- If the user asks for square, portrait, landscape, wallpaper, story, or thumbnail formats, translate that into an explicit ratio and usually an explicit size.
+- If the user asks for square, portrait, landscape, wallpaper, story, or thumbnail formats, translate that into an explicit ratio.
+- The helper will infer an API-compatible output size from common aspect ratios when needed.
 
 Examples:
-- square avatar: `aspect_ratio: 1:1`, `size: 1024x1024`
-- portrait selfie: `aspect_ratio: 3:4`, `size: 1024x1536`
-- desktop wallpaper: `aspect_ratio: 16:9`, `size: 1536x1024`
-- phone story: `aspect_ratio: 9:16`, `size: 1024x1536`
+- square avatar: `aspect_ratio: 1:1`
+- portrait selfie: `aspect_ratio: 3:4`
+- desktop wallpaper: `aspect_ratio: 16:9`
+- phone story: `aspect_ratio: 9:16`
 
 ## Sending Back To Chat
 

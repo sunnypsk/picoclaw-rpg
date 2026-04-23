@@ -187,16 +187,13 @@ func TestGenerateImageTool_IncludesNestedWorkspaceImageAndOptionsInChatPayload(t
 		messages := payload["messages"].([]any)
 		msg := messages[0].(map[string]any)
 		content := msg["content"].([]any)
-		if len(content) != 4 {
+		if len(content) != 3 {
 			t.Fatalf("unexpected content length: %d", len(content))
 		}
-		if content[1].(map[string]any)["text"] != "size: 1536x1024" {
-			t.Fatalf("missing size part: %#v", content[1])
+		if content[1].(map[string]any)["text"] != "aspect_ratio: 16:9" {
+			t.Fatalf("missing aspect ratio part: %#v", content[1])
 		}
-		if content[2].(map[string]any)["text"] != "aspect_ratio: 16:9" {
-			t.Fatalf("missing aspect ratio part: %#v", content[2])
-		}
-		imagePart := content[3].(map[string]any)
+		imagePart := content[2].(map[string]any)
 		if imagePart["type"] != "image_url" {
 			t.Fatalf("unexpected image part type: %#v", imagePart)
 		}
@@ -229,7 +226,6 @@ func TestGenerateImageTool_IncludesNestedWorkspaceImageAndOptionsInChatPayload(t
 	result := tool.Execute(context.Background(), map[string]any{
 		"prompt":       "edit this",
 		"image":        filepath.ToSlash(filepath.Join("skills", "generate-image", "assets", "momonga_refs_sheet.png")),
-		"size":         "1536x1024",
 		"aspect_ratio": "16:9",
 	})
 	if result.IsError {
@@ -259,8 +255,8 @@ func TestGenerateImageTool_UsesImagesGenerationEndpointForImageAPIModels(t *test
 			t.Fatalf("unexpected inferred size: %#v", payload["size"])
 		}
 		prompt, _ := payload["prompt"].(string)
-		if !strings.Contains(prompt, "Style: watercolor") {
-			t.Fatalf("expected prompt style hint, got %q", prompt)
+		if !strings.Contains(prompt, "Target aspect ratio: 16:9") {
+			t.Fatalf("expected prompt aspect ratio hint, got %q", prompt)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -289,7 +285,6 @@ func TestGenerateImageTool_UsesImagesGenerationEndpointForImageAPIModels(t *test
 	result := tool.Execute(context.Background(), map[string]any{
 		"prompt":       "cat",
 		"aspect_ratio": "16:9",
-		"style":        "watercolor",
 	})
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.ForLLM)
@@ -324,7 +319,7 @@ func TestGenerateImageTool_UsesImagesEditEndpointForImageAPIModels(t *testing.T)
 		if got := r.FormValue("size"); got != "1024x1024" {
 			t.Fatalf("unexpected size: %q", got)
 		}
-		if got := r.FormValue("prompt"); !strings.Contains(got, "edit this") {
+		if got := r.FormValue("prompt"); !strings.Contains(got, "Target aspect ratio: 1:1") {
 			t.Fatalf("unexpected prompt: %q", got)
 		}
 		files := r.MultipartForm.File["image[]"]
@@ -368,9 +363,9 @@ func TestGenerateImageTool_UsesImagesEditEndpointForImageAPIModels(t *testing.T)
 	}
 
 	result := tool.Execute(context.Background(), map[string]any{
-		"prompt": "edit this",
-		"image":  sourceImage,
-		"size":   "1024x1024",
+		"prompt":       "edit this",
+		"image":        sourceImage,
+		"aspect_ratio": "1:1",
 	})
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.ForLLM)

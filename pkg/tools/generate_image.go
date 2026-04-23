@@ -80,10 +80,6 @@ func (t *GenerateImageTool) Parameters() map[string]any {
 				},
 				"description": "Optional explicit list of input images. Only one is supported safely.",
 			},
-			"size": map[string]any{
-				"type":        "string",
-				"description": "Optional output resolution such as 1024x1024 or 1536x1024, passed through to CPA.",
-			},
 			"aspect_ratio": map[string]any{
 				"type":        "string",
 				"description": "Optional aspect ratio such as 1:1, 4:3, 3:4, 16:9, or 9:16, passed through to CPA when supported.",
@@ -91,10 +87,6 @@ func (t *GenerateImageTool) Parameters() map[string]any {
 			"quality": map[string]any{
 				"type":        "string",
 				"description": "Optional quality passed through to CPA.",
-			},
-			"style": map[string]any{
-				"type":        "string",
-				"description": "Optional style passed through to CPA.",
 			},
 			"background": map[string]any{
 				"type":        "string",
@@ -301,7 +293,7 @@ func buildImagePayload(model, prompt string, inputImages []string, args map[stri
 		"text": prompt,
 	}}
 
-	for _, key := range []string{"size", "aspect_ratio", "quality", "style", "background"} {
+	for _, key := range []string{"aspect_ratio", "quality", "background"} {
 		if value := strings.TrimSpace(imageStringArg(args, key)); value != "" {
 			parts = append(parts, map[string]any{
 				"type": "text",
@@ -352,24 +344,14 @@ func imageModelUsesImageAPI(model string) bool {
 func buildImageAPIPrompt(prompt string, args map[string]any) string {
 	lines := []string{strings.TrimSpace(prompt)}
 
-	if style := strings.TrimSpace(imageStringArg(args, "style")); style != "" {
-		lines = append(lines, fmt.Sprintf("Style: %s", style))
-	}
-
-	if resolveImageAPISize(args) == "" {
-		if aspectRatio := normalizeAspectRatio(imageStringArg(args, "aspect_ratio")); aspectRatio != "" {
-			lines = append(lines, fmt.Sprintf("Target aspect ratio: %s", aspectRatio))
-		}
+	if aspectRatio := normalizeAspectRatio(imageStringArg(args, "aspect_ratio")); aspectRatio != "" {
+		lines = append(lines, fmt.Sprintf("Target aspect ratio: %s", aspectRatio))
 	}
 
 	return strings.Join(lines, "\n")
 }
 
 func resolveImageAPISize(args map[string]any) string {
-	if size := strings.TrimSpace(imageStringArg(args, "size")); size != "" {
-		return size
-	}
-
 	switch normalizeAspectRatio(imageStringArg(args, "aspect_ratio")) {
 	case "1:1":
 		return "1024x1024"

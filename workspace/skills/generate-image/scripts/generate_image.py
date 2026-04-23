@@ -113,23 +113,15 @@ def normalize_aspect_ratio(value: Any) -> str:
 
 
 def resolve_image_api_size(payload: dict[str, Any]) -> str:
-    raw_size = payload.get("size")
-    if isinstance(raw_size, str) and raw_size.strip():
-        return raw_size.strip()
     return IMAGE_API_SIZE_BY_ASPECT_RATIO.get(normalize_aspect_ratio(payload.get("aspect_ratio")), "")
 
 
 def build_image_api_prompt(payload: dict[str, Any]) -> str:
     lines = [resolve_prompt(payload)]
 
-    style = payload.get("style")
-    if isinstance(style, str) and style.strip():
-        lines.append(f"Style: {style.strip()}")
-
-    if not resolve_image_api_size(payload):
-        aspect_ratio = normalize_aspect_ratio(payload.get("aspect_ratio"))
-        if aspect_ratio:
-            lines.append(f"Target aspect ratio: {aspect_ratio}")
+    aspect_ratio = normalize_aspect_ratio(payload.get("aspect_ratio"))
+    if aspect_ratio:
+        lines.append(f"Target aspect ratio: {aspect_ratio}")
 
     return "\n".join(lines)
 
@@ -185,7 +177,7 @@ def build_chat_completions_payload(model: str, payload: dict[str, Any], input_im
         "text": resolve_prompt(payload),
     }]
 
-    for key in ("size", "aspect_ratio", "quality", "style", "background"):
+    for key in ("aspect_ratio", "quality", "background"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             content_parts.append({
