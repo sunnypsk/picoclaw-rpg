@@ -540,6 +540,111 @@ func TestGenerateImageTool_RejectsMultipleInputImages(t *testing.T) {
 	}
 }
 
+func TestGenerateImageTool_DedupesDuplicateInputAliases(t *testing.T) {
+	workspace := t.TempDir()
+	store := media.NewFileMediaStore()
+	tool := NewGenerateImageTool(workspace, false)
+	tool.SetMediaStore(store)
+
+	imagePath := filepath.Join(workspace, "photo.png")
+	if err := os.WriteFile(imagePath, []byte("png"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Store(imagePath, media.MediaMeta{
+		Filename:    "photo.png",
+		ContentType: "image/png",
+	}, "scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := tool.resolveInputImages(context.Background(), map[string]any{
+		"image":        ref,
+		"input_image":  ref,
+		"input_images": []any{ref},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resolved) != 1 || resolved[0] != imagePath {
+		t.Fatalf("resolved inputs = %v, want [%q]", resolved, imagePath)
+	}
+}
+
+func TestGenerateImageTool_ResolvesMediaCurrentForSingleCurrentImage(t *testing.T) {
+	workspace := t.TempDir()
+	store := media.NewFileMediaStore()
+	tool := NewGenerateImageTool(workspace, false)
+	tool.SetMediaStore(store)
+
+	imagePath := filepath.Join(workspace, "photo.png")
+	if err := os.WriteFile(imagePath, []byte("png"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Store(imagePath, media.MediaMeta{
+		Filename:    "photo.png",
+		ContentType: "image/png",
+	}, "scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := WithToolExecutionContext(context.Background(), "whatsapp_native", "chat-1", "msg-1", "user-1", "session-1", []string{ref})
+	resolved, err := tool.resolveInputImages(ctx, map[string]any{"image": "media://current"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resolved) != 1 || resolved[0] != imagePath {
+		t.Fatalf("resolved inputs = %v, want [%q]", resolved, imagePath)
+	}
+}
+
+func TestGenerateImageTool_RejectsMediaCurrentWithoutCurrentImage(t *testing.T) {
+	tool := NewGenerateImageTool(t.TempDir(), false)
+	tool.SetMediaStore(media.NewFileMediaStore())
+
+	_, err := tool.resolveInputImages(context.Background(), map[string]any{"image": "media://current"})
+	if err == nil {
+		t.Fatal("expected error for missing current image")
+	}
+	if !strings.Contains(err.Error(), "no current inbound image") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGenerateImageTool_RejectsMediaCurrentWhenMultipleCurrentImagesExist(t *testing.T) {
+	workspace := t.TempDir()
+	store := media.NewFileMediaStore()
+	tool := NewGenerateImageTool(workspace, false)
+	tool.SetMediaStore(store)
+
+	first := filepath.Join(workspace, "a.png")
+	second := filepath.Join(workspace, "b.png")
+	if err := os.WriteFile(first, []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("b"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	refA, err := store.Store(first, media.MediaMeta{Filename: "a.png", ContentType: "image/png"}, "scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refB, err := store.Store(second, media.MediaMeta{Filename: "b.png", ContentType: "image/png"}, "scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := WithToolExecutionContext(context.Background(), "whatsapp_native", "chat-1", "msg-1", "user-1", "session-1", []string{refA, refB})
+	_, err = tool.resolveInputImages(ctx, map[string]any{"image": "media://current"})
+	if err == nil {
+		t.Fatal("expected error for multiple current images")
+	}
+	if !strings.Contains(err.Error(), "multiple current inbound images") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestGenerateImageTool_RejectsAbsolutePathOutsideWorkspaceWhenRestricted(t *testing.T) {
 	workspace := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "secret.png")

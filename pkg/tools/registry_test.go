@@ -30,6 +30,7 @@ type mockCtxTool struct {
 	channel    string
 	chatID     string
 	messageID  string
+	mediaRefs  []string
 	senderID   string
 	sessionKey string
 }
@@ -38,6 +39,7 @@ func (m *mockCtxTool) Execute(ctx context.Context, _ map[string]any) *ToolResult
 	m.channel = ToolChannel(ctx)
 	m.chatID = ToolChatID(ctx)
 	m.messageID = ToolMessageID(ctx)
+	m.mediaRefs = ToolMediaRefs(ctx)
 	m.senderID = ToolSenderID(ctx)
 	m.sessionKey = ToolSessionKey(ctx)
 	return m.result
@@ -153,7 +155,18 @@ func TestToolRegistry_ExecuteWithContext_InjectsRequestContext(t *testing.T) {
 	}
 	r.Register(ct)
 
-	r.ExecuteWithContext(context.Background(), "ctx_tool", nil, "telegram", "chat-42", "msg-9", "user-7", "agent:main:telegram:direct:user-7", nil)
+	r.ExecuteWithContext(
+		context.Background(),
+		"ctx_tool",
+		nil,
+		"telegram",
+		"chat-42",
+		"msg-9",
+		"user-7",
+		"agent:main:telegram:direct:user-7",
+		[]string{"media://img-1"},
+		nil,
+	)
 
 	if ct.channel != "telegram" {
 		t.Errorf("expected channel 'telegram', got %q", ct.channel)
@@ -163,6 +176,9 @@ func TestToolRegistry_ExecuteWithContext_InjectsRequestContext(t *testing.T) {
 	}
 	if ct.messageID != "msg-9" {
 		t.Errorf("expected messageID 'msg-9', got %q", ct.messageID)
+	}
+	if len(ct.mediaRefs) != 1 || ct.mediaRefs[0] != "media://img-1" {
+		t.Errorf("expected mediaRefs ['media://img-1'], got %v", ct.mediaRefs)
 	}
 	if ct.senderID != "user-7" {
 		t.Errorf("expected senderID 'user-7', got %q", ct.senderID)
@@ -179,9 +195,9 @@ func TestToolRegistry_ExecuteWithContext_UsesEmptyContextWhenUnset(t *testing.T)
 	}
 	r.Register(ct)
 
-	r.ExecuteWithContext(context.Background(), "ctx_tool", nil, "", "", "", "", "", nil)
+	r.ExecuteWithContext(context.Background(), "ctx_tool", nil, "", "", "", "", "", nil, nil)
 
-	if ct.channel != "" || ct.chatID != "" || ct.messageID != "" || ct.senderID != "" || ct.sessionKey != "" {
+	if ct.channel != "" || ct.chatID != "" || ct.messageID != "" || ct.senderID != "" || ct.sessionKey != "" || len(ct.mediaRefs) != 0 {
 		t.Error("expected empty tool context when request context is unset")
 	}
 }
@@ -197,7 +213,7 @@ func TestToolRegistry_ExecuteWithContext_AsyncCallback(t *testing.T) {
 	called := false
 	cb := func(_ context.Context, _ *ToolResult) { called = true }
 
-	result := r.ExecuteWithContext(context.Background(), "async_tool", nil, "", "", "", "", "", cb)
+	result := r.ExecuteWithContext(context.Background(), "async_tool", nil, "", "", "", "", "", nil, cb)
 	if !at.executeAsyncCalled {
 		t.Error("expected ExecuteAsync to have been called")
 	}

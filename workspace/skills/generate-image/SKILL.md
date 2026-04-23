@@ -27,13 +27,14 @@ Use the `generate_image` tool.
 Rules:
 - Pass `prompt` every time.
 - For image editing, pass one explicit source image using `image`, `input_image`, or `input_images` with exactly one item.
-- Use a `media://...` ref from the current conversation when the user uploaded an image in chat.
+- When the user uploaded images in the current turn, prefer the exact `media://...` ref shown in the live prompt.
+- `media://current` is only safe when the live prompt shows exactly one current uploaded image.
 - The canonical Momonga appearance reference sheet is `skills/generate-image/assets/momonga_refs_sheet.png`.
 - For selfie requests or any Momonga image where her visible appearance should stay consistent, pass that path as `image`.
 - If the user already supplied an explicit source image, use that image instead of the Momonga reference sheet.
 - Do not attach the Momonga reference sheet for scenery-only images or images that do not depict Momonga.
 - Do not use Hugging Face Spaces, Nano Banana, or any Hugging Face path for this skill.
-- Do not guess between multiple possible source images. Ask or choose one explicit image only.
+- Do not guess between multiple possible source images. Choose one explicit image only.
 - Do not combine the Momonga reference sheet with another explicit image. This tool safely supports only one explicit input image.
 
 Example tool input:

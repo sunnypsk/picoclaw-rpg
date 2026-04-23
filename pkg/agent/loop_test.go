@@ -213,6 +213,7 @@ func TestToolContext_Updates(t *testing.T) {
 		"msg-99",
 		"user-11",
 		"agent:main:telegram:direct:user-11",
+		[]string{"media://img-1", "media://img-2"},
 	)
 
 	if got := tools.ToolChannel(ctx); got != "telegram" {
@@ -223,6 +224,9 @@ func TestToolContext_Updates(t *testing.T) {
 	}
 	if got := tools.ToolMessageID(ctx); got != "msg-99" {
 		t.Errorf("expected messageID 'msg-99', got %q", got)
+	}
+	if got := tools.ToolMediaRefs(ctx); !slices.Equal(got, []string{"media://img-1", "media://img-2"}) {
+		t.Errorf("expected media refs to round-trip, got %v", got)
 	}
 	if got := tools.ToolSenderID(ctx); got != "user-11" {
 		t.Errorf("expected senderID 'user-11', got %q", got)
@@ -238,6 +242,9 @@ func TestToolContext_Updates(t *testing.T) {
 	}
 	if got := tools.ToolMessageID(context.Background()); got != "" {
 		t.Errorf("expected empty messageID from bare context, got %q", got)
+	}
+	if got := tools.ToolMediaRefs(context.Background()); got != nil {
+		t.Errorf("expected empty media refs from bare context, got %v", got)
 	}
 	if got := tools.ToolSenderID(context.Background()); got != "" {
 		t.Errorf("expected empty senderID from bare context, got %q", got)
@@ -2195,6 +2202,12 @@ func TestNormalizeInboundPromptMedia_StagesAudioAndKeepsImages(t *testing.T) {
 	if !strings.Contains(liveMessage, "skills/stt/SKILL.md") {
 		t.Fatalf("live message missing stt skill hint: %q", liveMessage)
 	}
+	if !strings.Contains(liveMessage, "[Image attachments available for this turn]") {
+		t.Fatalf("live message missing current image refs note: %q", liveMessage)
+	}
+	if !strings.Contains(liveMessage, "photo.png => "+imageRef) {
+		t.Fatalf("live message missing exact image ref: %q", liveMessage)
+	}
 
 	stagedPath := extractPromptLineValue(liveMessage, "Local file:")
 	if stagedPath == "" {
@@ -2214,8 +2227,71 @@ func TestNormalizeInboundPromptMedia_StagesAudioAndKeepsImages(t *testing.T) {
 	if strings.Contains(sessionMessage, stagedPath) {
 		t.Fatalf("session message should not persist staged local path: %q", sessionMessage)
 	}
+	if strings.Contains(sessionMessage, imageRef) {
+		t.Fatalf("session message should not persist current image refs: %q", sessionMessage)
+	}
 	if !strings.Contains(sessionMessage, "[Audio attachment available for this turn: voice.ogg]") {
 		t.Fatalf("session message missing generic audio note: %q", sessionMessage)
+	}
+
+	resolved := resolveMediaRefs([]providers.Message{{Role: "user", Media: mediaRefs}}, store, config.DefaultMaxMediaSize)
+	if got := resolved[0].Media; len(got) != 1 || !strings.HasPrefix(got[0], "data:image/png;base64,") {
+		t.Fatalf("resolved media = %v, want single image data URL", got)
+	}
+}
+
+func TestNormalizeInboundPromptMedia_ListsCurrentImageRefsInStableOrder(t *testing.T) {
+	store := media.NewFileMediaStore()
+	workspace := t.TempDir()
+	srcDir := t.TempDir()
+
+	firstPath := filepath.Join(srcDir, "first.png")
+	secondPath := filepath.Join(srcDir, "second.png")
+	pngHeader := []byte{
+		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
+		0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
+	}
+	if err := os.WriteFile(firstPath, pngHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secondPath, pngHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	firstRef, err := store.Store(firstPath, media.MediaMeta{Filename: "first.png", ContentType: "image/png"}, "scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRef, err := store.Store(secondPath, media.MediaMeta{Filename: "second.png", ContentType: "image/png"}, "scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	liveMessage, sessionMessage, mediaRefs := normalizeInboundPromptMedia(
+		"edit one of these photos",
+		"edit one of these photos",
+		workspace,
+		[]string{firstRef, secondRef},
+		store,
+	)
+
+	if got, want := mediaRefs, []string{firstRef, secondRef}; !slices.Equal(got, want) {
+		t.Fatalf("normalized media = %v, want %v", got, want)
+	}
+	if firstIdx, secondIdx := strings.Index(liveMessage, "first.png => "+firstRef), strings.Index(liveMessage, "second.png => "+secondRef); firstIdx == -1 || secondIdx == -1 || firstIdx >= secondIdx {
+		t.Fatalf("live message should list current image refs in order: %q", liveMessage)
+	}
+	if strings.Contains(sessionMessage, firstRef) || strings.Contains(sessionMessage, secondRef) {
+		t.Fatalf("session message should not persist current image refs: %q", sessionMessage)
+	}
+	if got, want := currentTurnImageMediaRefs(mediaRefs, store), []string{firstRef, secondRef}; !slices.Equal(got, want) {
+		t.Fatalf("current turn image refs = %v, want %v", got, want)
+	}
+
+	resolved := resolveMediaRefs([]providers.Message{{Role: "user", Media: mediaRefs}}, store, config.DefaultMaxMediaSize)
+	if got := resolved[0].Media; len(got) != 2 {
+		t.Fatalf("resolved media = %v, want 2 image data URLs", got)
 	}
 }
 

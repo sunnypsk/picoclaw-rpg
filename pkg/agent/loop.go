@@ -62,6 +62,7 @@ type processOptions struct {
 	SessionUserMessage string   // User message content as stored in session history
 	AutoRecallQuery    string   // Optional auto-recall query override
 	Media              []string // media:// refs from inbound message
+	CurrentImageMedia  []string // exact current-turn image media refs for media-aware tools
 	DefaultResponse    string   // Response when LLM returns empty
 	EnableSummary      bool     // Whether to trigger summarization
 	SendResponse       bool     // Whether to send response via bus
@@ -637,7 +638,15 @@ func (al *AgentLoop) processMessageCore(
 	sessionKey := al.resolveSessionKey(route, msg)
 	turnTracker := &replyStateTracker{}
 	turnCtx := withReplyStateTracker(ctx, turnTracker)
-	turnCtx = tools.WithToolExecutionContext(turnCtx, msg.Channel, msg.ChatID, msg.MessageID, toolSenderID(msg), sessionKey)
+	turnCtx = tools.WithToolExecutionContext(
+		turnCtx,
+		msg.Channel,
+		msg.ChatID,
+		msg.MessageID,
+		toolSenderID(msg),
+		sessionKey,
+		currentTurnImageMediaRefs(msg.Media, al.mediaStore),
+	)
 	scheduleReplyStateUpdate := func() {
 		reply := turnTracker.LastContent()
 		if strings.TrimSpace(reply) == "" {
@@ -888,6 +897,7 @@ func (al *AgentLoop) runAgentLoop(
 			)
 		}
 	}
+	opts.CurrentImageMedia = currentTurnImageMediaRefs(opts.Media, al.mediaStore)
 	liveUserMessage, sessionUserMessage, promptMedia := normalizeInboundPromptMedia(
 		opts.UserMessage,
 		sessionUserMessage,
@@ -1313,6 +1323,7 @@ func (al *AgentLoop) runLLMIteration(
 				opts.MessageID,
 				opts.SenderID,
 				opts.SessionKey,
+				opts.CurrentImageMedia,
 				asyncCallback,
 			)
 

@@ -25,6 +25,11 @@ import (
 
 const inboundAttachmentStageDir = ".picoclaw/inbound_media"
 
+type currentImagePromptRef struct {
+	ref      string
+	filename string
+}
+
 func normalizeInboundPromptMedia(
 	userMessage string,
 	sessionUserMessage string,
@@ -39,6 +44,8 @@ func normalizeInboundPromptMedia(
 	keptMedia := make([]string, 0, len(mediaRefs))
 	promptNotes := make([]string, 0, len(mediaRefs))
 	sessionNotes := make([]string, 0, len(mediaRefs))
+	currentImages := make([]currentImagePromptRef, 0, len(mediaRefs))
+	seenImageRefs := make(map[string]struct{}, len(mediaRefs))
 
 	for _, ref := range mediaRefs {
 		if !strings.HasPrefix(ref, "media://") {
@@ -59,6 +66,13 @@ func normalizeInboundPromptMedia(
 		switch mediaType {
 		case "image":
 			keptMedia = append(keptMedia, ref)
+			if _, seen := seenImageRefs[ref]; !seen {
+				currentImages = append(currentImages, currentImagePromptRef{
+					ref:      ref,
+					filename: attachmentDisplayFilename(meta, localPath, "image"),
+				})
+				seenImageRefs[ref] = struct{}{}
+			}
 		case "audio", "video", "file":
 			stagedPath, stageErr := stageInboundAttachment(localPath, meta, workspace, mediaType)
 			if stageErr != nil {
@@ -78,6 +92,10 @@ func normalizeInboundPromptMedia(
 		default:
 			// Non-image attachments are not serialized into OpenAI-compatible prompts.
 		}
+	}
+
+	if len(currentImages) > 0 {
+		promptNotes = append(promptNotes, buildCurrentImagePromptNote(currentImages))
 	}
 
 	return appendPromptSections(userMessage, promptNotes),
@@ -174,10 +192,7 @@ func detectInboundAttachmentExtension(localPath string) string {
 }
 
 func buildAttachmentPromptNote(stagedPath string, meta media.MediaMeta, mediaType string) string {
-	filename := strings.TrimSpace(meta.Filename)
-	if filename == "" {
-		filename = filepath.Base(stagedPath)
-	}
+	filename := attachmentDisplayFilename(meta, stagedPath, mediaType+" attachment")
 
 	if mediaType == "audio" {
 		return fmt.Sprintf(
@@ -202,10 +217,7 @@ func buildAttachmentPromptNote(stagedPath string, meta media.MediaMeta, mediaTyp
 }
 
 func buildAttachmentPreparationFailureNote(meta media.MediaMeta, mediaType string) string {
-	filename := strings.TrimSpace(meta.Filename)
-	if filename == "" {
-		filename = mediaType + " attachment"
-	}
+	filename := attachmentDisplayFilename(meta, "", mediaType+" attachment")
 
 	if mediaType == "audio" {
 		return fmt.Sprintf(
@@ -222,10 +234,7 @@ func buildAttachmentPreparationFailureNote(meta media.MediaMeta, mediaType strin
 }
 
 func buildAttachmentSessionNote(meta media.MediaMeta, mediaType string, prepared bool) string {
-	filename := strings.TrimSpace(meta.Filename)
-	if filename == "" {
-		filename = mediaType + " attachment"
-	}
+	filename := attachmentDisplayFilename(meta, "", mediaType+" attachment")
 
 	if prepared {
 		return fmt.Sprintf("[%s attachment available for this turn: %s]", attachmentLabel(mediaType), filename)
@@ -243,6 +252,62 @@ func attachmentLabel(mediaType string) string {
 	default:
 		return "File"
 	}
+}
+
+func attachmentDisplayFilename(meta media.MediaMeta, localPath, fallback string) string {
+	filename := strings.TrimSpace(meta.Filename)
+	if filename != "" {
+		return filename
+	}
+	if trimmed := strings.TrimSpace(localPath); trimmed != "" {
+		if base := filepath.Base(trimmed); strings.TrimSpace(base) != "" && base != "." {
+			return base
+		}
+	}
+	return fallback
+}
+
+func buildCurrentImagePromptNote(images []currentImagePromptRef) string {
+	lines := []string{
+		"[Image attachments available for this turn]",
+		"Use one exact media ref when you need to edit an uploaded image with generate_image:",
+	}
+	for _, image := range images {
+		lines = append(lines, fmt.Sprintf("- %s => %s", image.filename, image.ref))
+	}
+	lines = append(lines,
+		"Pass exactly one of these refs via image, input_image, or input_images.",
+		"If exactly one current image is listed, media://current is also supported. These refs are valid only for this turn.",
+	)
+	return strings.Join(lines, "\n")
+}
+
+func currentTurnImageMediaRefs(mediaRefs []string, store media.MediaStore) []string {
+	if len(mediaRefs) == 0 || store == nil {
+		return nil
+	}
+
+	refs := make([]string, 0, len(mediaRefs))
+	seen := make(map[string]struct{}, len(mediaRefs))
+	for _, ref := range mediaRefs {
+		ref = strings.TrimSpace(ref)
+		if !strings.HasPrefix(ref, "media://") {
+			continue
+		}
+		if _, ok := seen[ref]; ok {
+			continue
+		}
+		_, meta, err := store.ResolveWithMeta(ref)
+		if err != nil {
+			continue
+		}
+		if utils.InferMediaType(meta.Filename, meta.ContentType) != "image" {
+			continue
+		}
+		refs = append(refs, ref)
+		seen[ref] = struct{}{}
+	}
+	return refs
 }
 
 func attachmentSkillHint(meta media.MediaMeta, mediaType string) string {

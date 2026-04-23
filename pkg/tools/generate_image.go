@@ -54,7 +54,7 @@ func (t *GenerateImageTool) Name() string {
 }
 
 func (t *GenerateImageTool) Description() string {
-	return "Generate or edit an image through CPA image APIs or chat completions and return it as chat media."
+	return "Generate or edit an image through CPA image APIs or chat completions and return it as chat media. Pass exactly one source image via image, input_image, or input_images; media://current works when exactly one current inbound image is available."
 }
 
 func (t *GenerateImageTool) Parameters() map[string]any {
@@ -67,18 +67,18 @@ func (t *GenerateImageTool) Parameters() map[string]any {
 			},
 			"image": map[string]any{
 				"type":        "string",
-				"description": "Optional local file path or media:// ref for one input image.",
+				"description": "Optional local file path or media:// ref for one input image. media://current is supported when exactly one current inbound image is available.",
 			},
 			"input_image": map[string]any{
 				"type":        "string",
-				"description": "Optional alias for image.",
+				"description": "Optional alias for image. Do not combine different values across aliases.",
 			},
 			"input_images": map[string]any{
 				"type": "array",
 				"items": map[string]any{
 					"type": "string",
 				},
-				"description": "Optional explicit list of input images. Only one is supported safely.",
+				"description": "Optional explicit list of input images. Only one unique explicit input image is supported safely.",
 			},
 			"aspect_ratio": map[string]any{
 				"type":        "string",
@@ -127,7 +127,7 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]any) *T
 	client := *t.httpClient
 	client.Timeout = timeout
 
-	resolvedInputs, err := t.resolveInputImages(args)
+	resolvedInputs, err := t.resolveInputImages(ctx, args)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -228,12 +228,22 @@ type imageOutput struct {
 	remoteURL   string
 }
 
-func (t *GenerateImageTool) resolveInputImages(args map[string]any) ([]string, error) {
+func (t *GenerateImageTool) resolveInputImages(ctx context.Context, args map[string]any) ([]string, error) {
 	var candidates []string
-	for _, key := range []string{"image", "input_image"} {
-		if value := strings.TrimSpace(imageStringArg(args, key)); value != "" {
-			candidates = append(candidates, value)
+	seen := make(map[string]struct{}, 3)
+	appendCandidate := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
 		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		candidates = append(candidates, value)
+		seen[value] = struct{}{}
+	}
+	for _, key := range []string{"image", "input_image"} {
+		appendCandidate(imageStringArg(args, key))
 	}
 	if raw, ok := args["input_images"]; ok {
 		list, err := stringSlice(raw)
@@ -241,10 +251,7 @@ func (t *GenerateImageTool) resolveInputImages(args map[string]any) ([]string, e
 			return nil, fmt.Errorf("input_images must be an array of strings")
 		}
 		for _, item := range list {
-			item = strings.TrimSpace(item)
-			if item != "" {
-				candidates = append(candidates, item)
-			}
+			appendCandidate(item)
 		}
 	}
 
@@ -255,11 +262,27 @@ func (t *GenerateImageTool) resolveInputImages(args map[string]any) ([]string, e
 		return nil, fmt.Errorf("multiple input images provided; pass only one explicit input image")
 	}
 
-	resolved, err := t.resolveInputRef(candidates[0])
+	resolved, err := t.resolveInputRefWithContext(ctx, candidates[0])
 	if err != nil {
 		return nil, err
 	}
 	return []string{resolved}, nil
+}
+
+func (t *GenerateImageTool) resolveInputRefWithContext(ctx context.Context, value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "media://current" {
+		mediaRefs := ToolMediaRefs(ctx)
+		switch len(mediaRefs) {
+		case 0:
+			return "", fmt.Errorf("resolve input media %q: no current inbound image is available; pass an exact media:// ref from this turn", value)
+		case 1:
+			return t.resolveInputRef(mediaRefs[0])
+		default:
+			return "", fmt.Errorf("resolve input media %q: multiple current inbound images are available; pass one exact media:// ref from this turn", value)
+		}
+	}
+	return t.resolveInputRef(value)
 }
 
 func (t *GenerateImageTool) resolveInputRef(value string) (string, error) {

@@ -141,6 +141,7 @@ func TestCronTool_AddJob_StoresRoutedSessionKey(t *testing.T) {
 		"msg-1",
 		"user-1",
 		"agent:main:telegram:direct:user-1",
+		nil,
 	)
 	result := tool.Execute(ctx, map[string]any{
 		"action":     "add",

@@ -28,6 +28,7 @@ var (
 	ctxKeyMessageID  = &toolCtxKey{"messageID"}
 	ctxKeySenderID   = &toolCtxKey{"senderID"}
 	ctxKeySessionKey = &toolCtxKey{"sessionKey"}
+	ctxKeyMediaRefs  = &toolCtxKey{"mediaRefs"}
 )
 
 // WithToolContext returns a child context carrying channel and chatID.
@@ -37,19 +38,24 @@ func WithToolContext(ctx context.Context, channel, chatID string) context.Contex
 
 // WithToolMessageContext returns a child context carrying message routing and source identifiers.
 func WithToolMessageContext(ctx context.Context, channel, chatID, messageID, senderID string) context.Context {
-	return WithToolExecutionContext(ctx, channel, chatID, messageID, senderID, "")
+	return WithToolExecutionContext(ctx, channel, chatID, messageID, senderID, "", nil)
 }
 
 // WithToolExecutionContext returns a child context carrying request-scoped routing, source, and session identifiers.
 func WithToolExecutionContext(
 	ctx context.Context,
 	channel, chatID, messageID, senderID, sessionKey string,
+	mediaRefs []string,
 ) context.Context {
 	ctx = context.WithValue(ctx, ctxKeyChannel, channel)
 	ctx = context.WithValue(ctx, ctxKeyChatID, chatID)
 	ctx = context.WithValue(ctx, ctxKeyMessageID, messageID)
 	ctx = context.WithValue(ctx, ctxKeySenderID, senderID)
 	ctx = context.WithValue(ctx, ctxKeySessionKey, sessionKey)
+	if len(mediaRefs) > 0 {
+		refs := append([]string(nil), mediaRefs...)
+		ctx = context.WithValue(ctx, ctxKeyMediaRefs, refs)
+	}
 	return ctx
 }
 
@@ -81,6 +87,15 @@ func ToolSenderID(ctx context.Context) string {
 func ToolSessionKey(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeySessionKey).(string)
 	return v
+}
+
+// ToolMediaRefs extracts current-turn inbound media refs from ctx.
+func ToolMediaRefs(ctx context.Context) []string {
+	v, _ := ctx.Value(ctxKeyMediaRefs).([]string)
+	if len(v) == 0 {
+		return nil
+	}
+	return append([]string(nil), v...)
 }
 
 func toolReplyTarget(ctx context.Context, channel, chatID string) (string, string) {
