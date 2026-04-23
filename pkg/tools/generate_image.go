@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -53,7 +54,7 @@ func (t *GenerateImageTool) Name() string {
 }
 
 func (t *GenerateImageTool) Description() string {
-	return "Generate or edit an image through CPA chat completions and return it as chat media."
+	return "Generate or edit an image through CPA image APIs or chat completions and return it as chat media."
 }
 
 func (t *GenerateImageTool) Parameters() map[string]any {
@@ -139,12 +140,16 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]any) *T
 		return ErrorResult(err.Error())
 	}
 
-	payload, err := buildImagePayload(model, prompt, resolvedInputs, args)
-	if err != nil {
-		return ErrorResult(err.Error())
-	}
-
-	responseData, err := t.sendCPARequest(ctx, &client, strings.TrimRight(apiBase, "/"), apiKey, payload)
+	responseData, err := t.sendCPARequest(
+		ctx,
+		&client,
+		strings.TrimRight(apiBase, "/"),
+		apiKey,
+		model,
+		prompt,
+		resolvedInputs,
+		args,
+	)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -339,26 +344,174 @@ func encodeImageAsDataURL(path string) (string, error) {
 	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
 }
 
+func imageModelUsesImageAPI(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(normalized, "gpt-image-") || strings.HasPrefix(normalized, "dall-e-")
+}
+
+func buildImageAPIPrompt(prompt string, args map[string]any) string {
+	lines := []string{strings.TrimSpace(prompt)}
+
+	if style := strings.TrimSpace(imageStringArg(args, "style")); style != "" {
+		lines = append(lines, fmt.Sprintf("Style: %s", style))
+	}
+
+	if resolveImageAPISize(args) == "" {
+		if aspectRatio := normalizeAspectRatio(imageStringArg(args, "aspect_ratio")); aspectRatio != "" {
+			lines = append(lines, fmt.Sprintf("Target aspect ratio: %s", aspectRatio))
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func resolveImageAPISize(args map[string]any) string {
+	if size := strings.TrimSpace(imageStringArg(args, "size")); size != "" {
+		return size
+	}
+
+	switch normalizeAspectRatio(imageStringArg(args, "aspect_ratio")) {
+	case "1:1":
+		return "1024x1024"
+	case "4:3":
+		return "1360x1024"
+	case "3:4":
+		return "1024x1360"
+	case "16:9":
+		return "1536x864"
+	case "9:16":
+		return "864x1536"
+	default:
+		return ""
+	}
+}
+
+func normalizeAspectRatio(value string) string {
+	return strings.TrimSpace(strings.ReplaceAll(value, " ", ""))
+}
+
+func buildImageAPIRequest(model, prompt string, inputImages []string, args map[string]any) (string, string, []byte, error) {
+	if len(inputImages) == 0 {
+		payload := map[string]any{
+			"model":  model,
+			"prompt": buildImageAPIPrompt(prompt, args),
+		}
+		for _, key := range []string{"quality", "background"} {
+			if value := strings.TrimSpace(imageStringArg(args, key)); value != "" {
+				payload[key] = value
+			}
+		}
+		if size := resolveImageAPISize(args); size != "" {
+			payload["size"] = size
+		}
+
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return "", "", nil, fmt.Errorf("marshal image generation request: %w", err)
+		}
+		return "/images/generations", "application/json", body, nil
+	}
+
+	var buffer bytes.Buffer
+	writer := multipart.NewWriter(&buffer)
+	writeField := func(name, value string) error {
+		if strings.TrimSpace(value) == "" {
+			return nil
+		}
+		if err := writer.WriteField(name, value); err != nil {
+			return fmt.Errorf("write multipart field %s: %w", name, err)
+		}
+		return nil
+	}
+
+	if err := writeField("model", model); err != nil {
+		return "", "", nil, err
+	}
+	if err := writeField("prompt", buildImageAPIPrompt(prompt, args)); err != nil {
+		return "", "", nil, err
+	}
+	for _, key := range []string{"quality", "background"} {
+		if err := writeField(key, imageStringArg(args, key)); err != nil {
+			return "", "", nil, err
+		}
+	}
+	if err := writeField("size", resolveImageAPISize(args)); err != nil {
+		return "", "", nil, err
+	}
+
+	for _, inputImage := range inputImages {
+		if err := addMultipartImage(writer, "image[]", inputImage); err != nil {
+			return "", "", nil, err
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		return "", "", nil, fmt.Errorf("finalize multipart image edit request: %w", err)
+	}
+
+	return "/images/edits", writer.FormDataContentType(), buffer.Bytes(), nil
+}
+
+func addMultipartImage(writer *multipart.Writer, fieldName, path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open input image %s: %w", path, err)
+	}
+	defer file.Close()
+
+	part, err := writer.CreateFormFile(fieldName, filepath.Base(path))
+	if err != nil {
+		return fmt.Errorf("create multipart image part for %s: %w", path, err)
+	}
+
+	if _, err := io.Copy(part, file); err != nil {
+		return fmt.Errorf("copy input image %s: %w", path, err)
+	}
+
+	return nil
+}
+
 func (t *GenerateImageTool) sendCPARequest(
 	ctx context.Context,
 	client *http.Client,
 	apiBase, apiKey string,
-	payload map[string]any,
+	model, prompt string,
+	inputImages []string,
+	args map[string]any,
 ) (map[string]any, error) {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("marshal image request: %w", err)
+	var (
+		endpoint    string
+		contentType string
+		body        []byte
+		err         error
+	)
+	if imageModelUsesImageAPI(model) {
+		endpoint, contentType, body, err = buildImageAPIRequest(model, prompt, inputImages, args)
+	} else {
+		payload, payloadErr := buildImagePayload(model, prompt, inputImages, args)
+		if payloadErr != nil {
+			return nil, payloadErr
+		}
+		body, err = json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("marshal image request: %w", err)
+		}
+		endpoint = "/chat/completions"
+		contentType = "application/json"
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build image request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("call CPA chat completions endpoint: %w", err)
+		return nil, fmt.Errorf("call CPA image endpoint %s: %w", endpoint, err)
 	}
 	defer resp.Body.Close()
 

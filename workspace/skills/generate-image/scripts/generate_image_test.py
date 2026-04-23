@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import base64
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,8 +12,6 @@ import generate_image
 
 TINY_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aRsAAAAASUVORK5CYII="
 TINY_PNG_BYTES = base64.b64decode(TINY_PNG_BASE64)
-WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
-TEST_OUTPUT_ROOT = WORKSPACE_ROOT / "generated-slides" / "generate-image-tests"
 
 
 class FakeResponse:
@@ -31,8 +30,7 @@ class FakeResponse:
 
 class GenerateImageMaterializeTests(unittest.TestCase):
     def test_materialize_images_copies_base64_outputs_into_output_dir(self) -> None:
-        TEST_OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=TEST_OUTPUT_ROOT) as output_dir:
+        with tempfile.TemporaryDirectory() as output_dir:
             temp_images = generate_image.collect_images({"b64_json": TINY_PNG_BASE64})
             try:
                 saved = generate_image.materialize_images(temp_images, output_dir, "slide-01", 1.0)
@@ -58,8 +56,7 @@ class GenerateImageMaterializeTests(unittest.TestCase):
             captured["timeout"] = timeout
             return FakeResponse(TINY_PNG_BYTES)
 
-        TEST_OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=TEST_OUTPUT_ROOT) as output_dir, mock.patch(
+        with tempfile.TemporaryDirectory() as output_dir, mock.patch(
             "generate_image.urllib.request.urlopen",
             side_effect=fake_urlopen,
         ):
@@ -79,6 +76,59 @@ class GenerateImageMaterializeTests(unittest.TestCase):
             self.assertEqual(captured["url"], "https://example.com/generated/rendered.webp")
             self.assertEqual(captured["user_agent"], generate_image.DEFAULT_USER_AGENT)
             self.assertEqual(captured["timeout"], 2.5)
+
+
+class GenerateImageRequestTests(unittest.TestCase):
+    def test_build_request_uses_chat_completions_for_non_image_api_model(self) -> None:
+        endpoint, body, content_type = generate_image.build_request(
+            "test-model",
+            {"prompt": "cat", "size": "1024x1024"},
+            None,
+        )
+
+        self.assertEqual(endpoint, "/chat/completions")
+        self.assertEqual(content_type, "application/json")
+
+        payload = json.loads(body.decode("utf-8"))
+        self.assertEqual(payload["model"], "test-model")
+        self.assertIn("messages", payload)
+        self.assertEqual(payload["messages"][0]["content"][1]["text"], "size: 1024x1024")
+
+    def test_build_request_uses_images_generation_for_image_api_model(self) -> None:
+        endpoint, body, content_type = generate_image.build_request(
+            "gpt-image-2",
+            {"prompt": "cat", "aspect_ratio": "16:9", "style": "watercolor"},
+            None,
+        )
+
+        self.assertEqual(endpoint, "/images/generations")
+        self.assertEqual(content_type, "application/json")
+
+        payload = json.loads(body.decode("utf-8"))
+        self.assertEqual(payload["model"], "gpt-image-2")
+        self.assertEqual(payload["size"], "1536x864")
+        self.assertIn("Style: watercolor", payload["prompt"])
+
+    def test_build_request_uses_images_edits_for_image_api_model(self) -> None:
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
+            handle.write(TINY_PNG_BYTES)
+            image_path = Path(handle.name)
+
+        try:
+            endpoint, body, content_type = generate_image.build_request(
+                "gpt-image-2",
+                {"prompt": "edit this", "size": "1024x1024"},
+                image_path,
+            )
+        finally:
+            image_path.unlink(missing_ok=True)
+
+        self.assertEqual(endpoint, "/images/edits")
+        self.assertIn("multipart/form-data;", content_type)
+        self.assertIn(b'name="model"', body)
+        self.assertIn(b"gpt-image-2", body)
+        self.assertIn(b'name="image[]"; filename="', body)
+        self.assertIn(TINY_PNG_BYTES, body)
 
 
 if __name__ == "__main__":

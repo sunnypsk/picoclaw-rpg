@@ -3,6 +3,7 @@
 import argparse
 import base64
 import json
+import mimetypes
 import os
 import shutil
 import sys
@@ -10,11 +11,20 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
 
 
 DEFAULT_USER_AGENT = "picoclaw/1.0"
+IMAGE_API_MODEL_PREFIXES = ("gpt-image-", "dall-e-")
+IMAGE_API_SIZE_BY_ASPECT_RATIO = {
+    "1:1": "1024x1024",
+    "4:3": "1360x1024",
+    "3:4": "1024x1360",
+    "16:9": "1536x864",
+    "9:16": "864x1536",
+}
 
 
 def get_picoclaw_home() -> Path:
@@ -47,7 +57,7 @@ def load_persistent_env() -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate or edit images with CPA chat completions.")
+    parser = argparse.ArgumentParser(description="Generate or edit images with CPA image APIs or chat completions.")
     parser.add_argument("--payload-file", required=True, help="Path to a JSON payload file")
     parser.add_argument("--timeout", type=float, default=300.0, help="HTTP timeout in seconds")
     parser.add_argument("--output-dir", help="Optional directory to save generated images into")
@@ -89,6 +99,39 @@ def resolve_prompt(payload: dict[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     raise RuntimeError("payload does not include a prompt")
+
+
+def model_uses_image_api(model: str) -> bool:
+    normalized = model.strip().lower()
+    return normalized.startswith(IMAGE_API_MODEL_PREFIXES)
+
+
+def normalize_aspect_ratio(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.replace(" ", "").strip()
+
+
+def resolve_image_api_size(payload: dict[str, Any]) -> str:
+    raw_size = payload.get("size")
+    if isinstance(raw_size, str) and raw_size.strip():
+        return raw_size.strip()
+    return IMAGE_API_SIZE_BY_ASPECT_RATIO.get(normalize_aspect_ratio(payload.get("aspect_ratio")), "")
+
+
+def build_image_api_prompt(payload: dict[str, Any]) -> str:
+    lines = [resolve_prompt(payload)]
+
+    style = payload.get("style")
+    if isinstance(style, str) and style.strip():
+        lines.append(f"Style: {style.strip()}")
+
+    if not resolve_image_api_size(payload):
+        aspect_ratio = normalize_aspect_ratio(payload.get("aspect_ratio"))
+        if aspect_ratio:
+            lines.append(f"Target aspect ratio: {aspect_ratio}")
+
+    return "\n".join(lines)
 
 
 def file_marker_to_path(value: Any) -> Path | None:
@@ -136,7 +179,7 @@ def encode_data_url(path: Path) -> str:
     return f"data:{media_type};base64,{data}"
 
 
-def build_request_payload(model: str, payload: dict[str, Any], input_image: Path | None) -> dict[str, Any]:
+def build_chat_completions_payload(model: str, payload: dict[str, Any], input_image: Path | None) -> dict[str, Any]:
     content_parts: list[dict[str, Any]] = [{
         "type": "text",
         "text": resolve_prompt(payload),
@@ -168,13 +211,81 @@ def build_request_payload(model: str, payload: dict[str, Any], input_image: Path
     }
 
 
-def send_request(api_key: str, api_base: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
-    body = json.dumps(payload).encode("utf-8")
+def build_image_api_payload(model: str, payload: dict[str, Any]) -> dict[str, Any]:
+    request_payload: dict[str, Any] = {
+        "model": model,
+        "prompt": build_image_api_prompt(payload),
+    }
+
+    for key in ("quality", "background"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            request_payload[key] = value.strip()
+
+    size = resolve_image_api_size(payload)
+    if size:
+        request_payload["size"] = size
+
+    return request_payload
+
+
+def guess_content_type(path: Path) -> str:
+    guessed, _ = mimetypes.guess_type(path.name)
+    return guessed or "application/octet-stream"
+
+
+def build_multipart_form_data(fields: list[tuple[str, str]], files: list[tuple[str, Path]]) -> tuple[bytes, str]:
+    boundary = f"----picoclaw-{uuid.uuid4().hex}"
+    body = bytearray()
+
+    for name, value in fields:
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+        body.extend(value.encode("utf-8"))
+        body.extend(b"\r\n")
+
+    for name, path in files:
+        filename = path.name.replace('"', "")
+        content_type = guess_content_type(path)
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'.encode("utf-8"))
+        body.extend(f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"))
+        body.extend(path.read_bytes())
+        body.extend(b"\r\n")
+
+    body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+    return bytes(body), f"multipart/form-data; boundary={boundary}"
+
+
+def build_request(model: str, payload: dict[str, Any], input_image: Path | None) -> tuple[str, bytes, str]:
+    if not model_uses_image_api(model):
+        request_payload = build_chat_completions_payload(model, payload, input_image)
+        return "/chat/completions", json.dumps(request_payload).encode("utf-8"), "application/json"
+
+    if input_image is None:
+        request_payload = build_image_api_payload(model, payload)
+        return "/images/generations", json.dumps(request_payload).encode("utf-8"), "application/json"
+
+    image_payload = build_image_api_payload(model, payload)
+    fields = [(key, str(value)) for key, value in image_payload.items()]
+    body, content_type = build_multipart_form_data(fields, [("image[]", input_image)])
+    return "/images/edits", body, content_type
+
+
+def send_request(
+    api_key: str,
+    api_base: str,
+    model: str,
+    payload: dict[str, Any],
+    input_image: Path | None,
+    timeout: float,
+) -> dict[str, Any]:
+    endpoint, body, content_type = build_request(model, payload, input_image)
     request = urllib.request.Request(
-        url=f"{api_base}/chat/completions",
+        url=f"{api_base}{endpoint}",
         data=body,
         headers={
-            "Content-Type": "application/json",
+            "Content-Type": content_type,
             "Authorization": f"Bearer {api_key}",
             # Avoid CPA gateway blocking Python-urllib's default browser signature.
             "User-Agent": DEFAULT_USER_AGENT,
@@ -345,8 +456,7 @@ def main() -> int:
         api_key, api_base, model = resolve_config()
         payload = read_payload(args.payload_file)
         input_image = resolve_input_image(payload)
-        request_payload = build_request_payload(model, payload, input_image)
-        response_data = send_request(api_key, api_base, request_payload, args.timeout)
+        response_data = send_request(api_key, api_base, model, payload, input_image, args.timeout)
         images = collect_images(response_data)
         if not images:
             raise RuntimeError("CPA image response did not include any usable image output")

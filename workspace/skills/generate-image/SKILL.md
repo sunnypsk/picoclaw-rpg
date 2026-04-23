@@ -1,11 +1,11 @@
 ---
 name: generate-image
-description: Generate or edit images with CPA chat completions and send the result back to the user in chat. Use when the user asks for image generation, image editing, restyling, prompt-plus-image transforms, or wants the finished image returned on Telegram or WhatsApp.
+description: Generate or edit images with CPA image APIs or chat completions and send the result back to the user in chat. Use when the user asks for image generation, image editing, restyling, prompt-plus-image transforms, or wants the finished image returned on Telegram or WhatsApp.
 ---
 
 # Generate Image
 
-Use this skill for image creation and image editing through CPA chat completions.
+Use this skill for image creation and image editing through CPA image APIs or chat completions.
 
 ## When to use
 

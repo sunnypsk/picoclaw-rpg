@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -230,6 +231,146 @@ func TestGenerateImageTool_IncludesNestedWorkspaceImageAndOptionsInChatPayload(t
 		"image":        filepath.ToSlash(filepath.Join("skills", "generate-image", "assets", "momonga_refs_sheet.png")),
 		"size":         "1536x1024",
 		"aspect_ratio": "16:9",
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if len(result.Media) != 1 {
+		t.Fatalf("expected one media ref, got %v", result.Media)
+	}
+}
+
+func TestGenerateImageTool_UsesImagesGenerationEndpointForImageAPIModels(t *testing.T) {
+	workspace := t.TempDir()
+	store := media.NewFileMediaStore()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/images/generations" {
+			http.NotFound(w, r)
+			return
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if payload["model"] != "gpt-image-2" {
+			t.Fatalf("unexpected model: %#v", payload["model"])
+		}
+		if payload["size"] != "1536x864" {
+			t.Fatalf("unexpected inferred size: %#v", payload["size"])
+		}
+		prompt, _ := payload["prompt"].(string)
+		if !strings.Contains(prompt, "Style: watercolor") {
+			t.Fatalf("expected prompt style hint, got %q", prompt)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{
+				"b64_json": base64.StdEncoding.EncodeToString([]byte("image-api-image")),
+			}},
+		})
+	}))
+	defer server.Close()
+
+	tool := NewGenerateImageTool(workspace, false)
+	tool.SetMediaStore(store)
+	tool.getenv = func(name string) string {
+		switch name {
+		case "CPA_API_KEY":
+			return "test-key"
+		case "CPA_API_BASE":
+			return server.URL
+		case "CPA_IMAGE_MODEL":
+			return "gpt-image-2"
+		default:
+			return ""
+		}
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"prompt":       "cat",
+		"aspect_ratio": "16:9",
+		"style":        "watercolor",
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if len(result.Media) != 1 {
+		t.Fatalf("expected one media ref, got %v", result.Media)
+	}
+}
+
+func TestGenerateImageTool_UsesImagesEditEndpointForImageAPIModels(t *testing.T) {
+	workspace := t.TempDir()
+	store := media.NewFileMediaStore()
+	sourceImage := filepath.Join(workspace, "source.png")
+	if err := os.WriteFile(sourceImage, []byte("input-image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/images/edits" {
+			http.NotFound(w, r)
+			return
+		}
+		if !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data;") {
+			t.Fatalf("unexpected content type: %q", r.Header.Get("Content-Type"))
+		}
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			t.Fatalf("parse multipart form: %v", err)
+		}
+		if got := r.FormValue("model"); got != "gpt-image-2" {
+			t.Fatalf("unexpected model: %q", got)
+		}
+		if got := r.FormValue("size"); got != "1024x1024" {
+			t.Fatalf("unexpected size: %q", got)
+		}
+		if got := r.FormValue("prompt"); !strings.Contains(got, "edit this") {
+			t.Fatalf("unexpected prompt: %q", got)
+		}
+		files := r.MultipartForm.File["image[]"]
+		if len(files) != 1 {
+			t.Fatalf("expected one multipart image, got %d", len(files))
+		}
+		handle, err := files[0].Open()
+		if err != nil {
+			t.Fatalf("open multipart image: %v", err)
+		}
+		defer handle.Close()
+		data, err := io.ReadAll(handle)
+		if err != nil {
+			t.Fatalf("read multipart image: %v", err)
+		}
+		if string(data) != "input-image" {
+			t.Fatalf("unexpected multipart image bytes: %q", string(data))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{
+				"b64_json": base64.StdEncoding.EncodeToString([]byte("edited-image")),
+			}},
+		})
+	}))
+	defer server.Close()
+
+	tool := NewGenerateImageTool(workspace, false)
+	tool.SetMediaStore(store)
+	tool.getenv = func(name string) string {
+		switch name {
+		case "CPA_API_KEY":
+			return "test-key"
+		case "CPA_API_BASE":
+			return server.URL
+		case "CPA_IMAGE_MODEL":
+			return "gpt-image-2"
+		default:
+			return ""
+		}
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"prompt": "edit this",
+		"image":  sourceImage,
+		"size":   "1024x1024",
 	})
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.ForLLM)
