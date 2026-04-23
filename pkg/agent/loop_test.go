@@ -254,6 +254,52 @@ func TestToolContext_Updates(t *testing.T) {
 	}
 }
 
+func TestSanitizeHistoryForProvider_DropsIncompleteAssistantToolTurn(t *testing.T) {
+	history := []providers.Message{
+		{Role: "user", Content: "draw a mall"},
+		{
+			Role:    "assistant",
+			Content: "",
+			ToolCalls: []providers.ToolCall{
+				{ID: "call_1", Name: "generate_image"},
+			},
+		},
+		{Role: "user", Content: "retry"},
+	}
+
+	got := sanitizeHistoryForProvider(history)
+	want := []providers.Message{
+		{Role: "user", Content: "draw a mall"},
+		{Role: "user", Content: "retry"},
+	}
+
+	if !slices.EqualFunc(got, want, func(a, b providers.Message) bool {
+		return a.Role == b.Role && a.Content == b.Content && len(a.ToolCalls) == len(b.ToolCalls) && a.ToolCallID == b.ToolCallID
+	}) {
+		t.Fatalf("sanitized history = %#v, want %#v", got, want)
+	}
+}
+
+func TestSanitizeHistoryForProvider_PreservesCompleteAssistantToolTurn(t *testing.T) {
+	history := []providers.Message{
+		{Role: "user", Content: "draw a mall"},
+		{
+			Role:    "assistant",
+			Content: "",
+			ToolCalls: []providers.ToolCall{
+				{ID: "call_1", Name: "generate_image"},
+			},
+		},
+		{Role: "tool", Content: "generated", ToolCallID: "call_1"},
+		{Role: "assistant", Content: "done"},
+	}
+
+	got := sanitizeHistoryForProvider(history)
+	if len(got) != len(history) {
+		t.Fatalf("expected complete tool-call turn to be preserved, got %#v", got)
+	}
+}
+
 // TestToolRegistry_GetDefinitions verifies tool definitions can be retrieved
 func TestToolRegistry_GetDefinitions(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")

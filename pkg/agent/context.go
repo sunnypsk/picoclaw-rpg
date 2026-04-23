@@ -622,7 +622,7 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 	}
 
 	sanitized := make([]providers.Message, 0, len(history))
-	for _, msg := range history {
+	for idx, msg := range history {
 		switch msg.Role {
 		case "system":
 			// Drop system messages from history. BuildMessages always
@@ -670,6 +670,14 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 					)
 					continue
 				}
+				if !hasCompleteToolResults(history, idx, msg.ToolCalls) {
+					logger.DebugCF(
+						"agent",
+						"Dropping assistant tool-call turn with incomplete tool results",
+						map[string]any{"tool_calls": len(msg.ToolCalls)},
+					)
+					continue
+				}
 			}
 			sanitized = append(sanitized, msg)
 
@@ -679,6 +687,38 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 	}
 
 	return sanitized
+}
+
+func hasCompleteToolResults(history []providers.Message, assistantIdx int, toolCalls []providers.ToolCall) bool {
+	if len(toolCalls) == 0 {
+		return true
+	}
+
+	expected := make(map[string]struct{}, len(toolCalls))
+	for _, tc := range toolCalls {
+		if strings.TrimSpace(tc.ID) == "" {
+			return false
+		}
+		expected[strings.TrimSpace(tc.ID)] = struct{}{}
+	}
+
+	seen := make(map[string]struct{}, len(toolCalls))
+	for i := assistantIdx + 1; i < len(history); i++ {
+		msg := history[i]
+		if msg.Role != "tool" {
+			break
+		}
+		toolCallID := strings.TrimSpace(msg.ToolCallID)
+		if _, ok := expected[toolCallID]; !ok {
+			return false
+		}
+		if _, duplicate := seen[toolCallID]; duplicate {
+			return false
+		}
+		seen[toolCallID] = struct{}{}
+	}
+
+	return len(seen) == len(expected)
 }
 
 func (cb *ContextBuilder) AddToolResult(
