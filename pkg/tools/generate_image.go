@@ -597,7 +597,7 @@ func shouldRetryImageRequest(model string, args map[string]any, qualityOverride 
 	if strings.ToLower(strings.TrimSpace(imageStringArg(args, "quality"))) == "low" {
 		return false
 	}
-	if statusCode == http.StatusGatewayTimeout || statusCode == 524 {
+	if statusCode == http.StatusRequestTimeout || statusCode == http.StatusGatewayTimeout || statusCode == 524 {
 		return true
 	}
 	if err == nil {
