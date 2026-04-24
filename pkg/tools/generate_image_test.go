@@ -804,6 +804,34 @@ func TestGenerateImageTool_ResolvesMediaCurrentForSingleCurrentImage(t *testing.
 	}
 }
 
+func TestGenerateImageTool_AllowsMediaRefOutsideWorkspaceWhenRestricted(t *testing.T) {
+	workspace := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "upload.png")
+	if err := os.WriteFile(outside, []byte("png"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store := media.NewFileMediaStore()
+	ref, err := store.Store(outside, media.MediaMeta{
+		Filename:    "upload.png",
+		ContentType: "image/png",
+	}, "scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewGenerateImageTool(workspace, true)
+	tool.SetMediaStore(store)
+
+	resolved, err := tool.resolveInputRef(ref)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved != filepath.Clean(outside) {
+		t.Fatalf("resolveInputRef(%q) = %q, want %q", ref, resolved, filepath.Clean(outside))
+	}
+}
+
 func TestGenerateImageTool_RejectsMediaCurrentWithoutCurrentImage(t *testing.T) {
 	tool := NewGenerateImageTool(t.TempDir(), false)
 	tool.SetMediaStore(media.NewFileMediaStore())

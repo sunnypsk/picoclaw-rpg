@@ -295,10 +295,7 @@ func (t *GenerateImageTool) resolveInputRef(value string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("resolve input media %q: %w", value, err)
 		}
-		path, err = validatePath(path, t.workspace, t.restrict)
-		if err != nil {
-			return "", err
-		}
+		path = filepath.Clean(path)
 		if _, err := os.Stat(path); err != nil {
 			return "", fmt.Errorf("input image not found: %s", path)
 		}
