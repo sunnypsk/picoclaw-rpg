@@ -52,6 +52,37 @@ Optional passthrough fields:
 - `background`
 - `timeout_seconds`
 
+## Prompt Construction
+
+Do not pass chatty or overloaded user wording directly when a cleaner visual prompt would be safer. Convert the request into a concise image-native prompt before calling `generate_image`.
+
+Use this compact structure when helpful:
+- Main subject: the primary thing to draw.
+- Style/medium: photo, illustration, 3D render, product shot, poster, etc.
+- Composition: close-up, wide shot, top-down, centered, negative space, etc.
+- Lighting/mood: soft studio light, warm film look, dramatic rain, playful, minimal, etc.
+- Key details: only the few details that materially define the image.
+- Constraints: no watermark, no readable text, preserve supplied subject, avoid modern objects, etc.
+
+Specificity policy:
+- If the user's prompt is already concise and specific, preserve it and only normalize formatting.
+- If the prompt is vague, add a small amount of useful visual specificity.
+- If the prompt is overloaded, compress it before the API call instead of adding more detail.
+- Do not invent extra characters, brands, slogans, exact text, or side stories that the user did not ask for.
+
+For edits:
+- State the edit target clearly.
+- Repeat invariants in the prompt, for example `keep the cake shape, color, logo plaque, and toppings unchanged; only replace the background`.
+- Use exactly one source image. Treat it as the edit target unless the user explicitly says it is only a style reference.
+
+Avoid risky prompt shapes unless the user explicitly requires them:
+- many readable labels or exact text
+- dense annotations, legends, or map keys
+- many individually described people or objects
+- exact shop-sign text or text-heavy storefronts
+- very long lists of micro-details
+- multiple competing styles in one prompt
+
 Quality guidance:
 - Omit `quality` for ordinary chat image requests unless the user asks for a specific quality level.
 - Use `quality: low` when speed matters, especially for WhatsApp or casual one-image requests.
