@@ -6,10 +6,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,6 +25,8 @@ import (
 )
 
 const defaultImageTimeout = 300 * time.Second
+
+const defaultImageUserAgent = "picoclaw/1.0"
 
 type GenerateImageTool struct {
 	workspace  string
@@ -396,15 +400,30 @@ func normalizeAspectRatio(value string) string {
 }
 
 func buildImageAPIRequest(model, prompt string, inputImages []string, args map[string]any) (string, string, []byte, error) {
+	return buildImageAPIRequestWithOverrides(model, prompt, inputImages, args, "")
+}
+
+func buildImageAPIRequestWithOverrides(
+	model, prompt string,
+	inputImages []string,
+	args map[string]any,
+	qualityOverride string,
+) (string, string, []byte, error) {
 	if len(inputImages) == 0 {
 		payload := map[string]any{
 			"model":  model,
 			"prompt": buildImageAPIPrompt(prompt, args),
 		}
 		for _, key := range []string{"quality", "background"} {
+			if key == "quality" && strings.TrimSpace(qualityOverride) != "" {
+				continue
+			}
 			if value := strings.TrimSpace(imageStringArg(args, key)); value != "" {
 				payload[key] = value
 			}
+		}
+		if strings.TrimSpace(qualityOverride) != "" {
+			payload["quality"] = strings.TrimSpace(qualityOverride)
 		}
 		if size := resolveImageAPISize(args); size != "" {
 			payload["size"] = size
@@ -436,7 +455,15 @@ func buildImageAPIRequest(model, prompt string, inputImages []string, args map[s
 		return "", "", nil, err
 	}
 	for _, key := range []string{"quality", "background"} {
+		if key == "quality" && strings.TrimSpace(qualityOverride) != "" {
+			continue
+		}
 		if err := writeField(key, imageStringArg(args, key)); err != nil {
+			return "", "", nil, err
+		}
+	}
+	if strings.TrimSpace(qualityOverride) != "" {
+		if err := writeField("quality", strings.TrimSpace(qualityOverride)); err != nil {
 			return "", "", nil, err
 		}
 	}
@@ -484,6 +511,18 @@ func (t *GenerateImageTool) sendCPARequest(
 	inputImages []string,
 	args map[string]any,
 ) (map[string]any, error) {
+	return t.sendCPARequestAttempt(ctx, client, apiBase, apiKey, model, prompt, inputImages, args, "")
+}
+
+func (t *GenerateImageTool) sendCPARequestAttempt(
+	ctx context.Context,
+	client *http.Client,
+	apiBase, apiKey string,
+	model, prompt string,
+	inputImages []string,
+	args map[string]any,
+	qualityOverride string,
+) (map[string]any, error) {
 	var (
 		endpoint    string
 		contentType string
@@ -491,7 +530,13 @@ func (t *GenerateImageTool) sendCPARequest(
 		err         error
 	)
 	if imageModelUsesImageAPI(model) {
-		endpoint, contentType, body, err = buildImageAPIRequest(model, prompt, inputImages, args)
+		endpoint, contentType, body, err = buildImageAPIRequestWithOverrides(
+			model,
+			prompt,
+			inputImages,
+			args,
+			qualityOverride,
+		)
 	} else {
 		payload, payloadErr := buildImagePayload(model, prompt, inputImages, args)
 		if payloadErr != nil {
@@ -513,9 +558,13 @@ func (t *GenerateImageTool) sendCPARequest(
 	}
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("User-Agent", defaultImageUserAgent)
 
 	resp, err := client.Do(req)
 	if err != nil {
+		if shouldRetryImageRequest(model, args, qualityOverride, err, 0) {
+			return t.sendCPARequestAttempt(ctx, client, apiBase, apiKey, model, prompt, inputImages, args, "low")
+		}
 		return nil, fmt.Errorf("call CPA image endpoint %s: %w", endpoint, err)
 	}
 	defer resp.Body.Close()
@@ -525,6 +574,9 @@ func (t *GenerateImageTool) sendCPARequest(
 		return nil, fmt.Errorf("read CPA image response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if shouldRetryImageRequest(model, args, qualityOverride, nil, resp.StatusCode) {
+			return t.sendCPARequestAttempt(ctx, client, apiBase, apiKey, model, prompt, inputImages, args, "low")
+		}
 		return nil, fmt.Errorf("CPA API error %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
 	}
 
@@ -533,6 +585,29 @@ func (t *GenerateImageTool) sendCPARequest(
 		return nil, fmt.Errorf("CPA API returned non-JSON response")
 	}
 	return decoded, nil
+}
+
+func shouldRetryImageRequest(model string, args map[string]any, qualityOverride string, err error, statusCode int) bool {
+	if !imageModelUsesImageAPI(model) {
+		return false
+	}
+	if strings.TrimSpace(qualityOverride) != "" {
+		return false
+	}
+	if strings.ToLower(strings.TrimSpace(imageStringArg(args, "quality"))) == "low" {
+		return false
+	}
+	if statusCode == http.StatusGatewayTimeout || statusCode == 524 {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func (t *GenerateImageTool) collectOutputs(responseData map[string]any) ([]imageOutput, error) {

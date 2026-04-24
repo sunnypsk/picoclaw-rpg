@@ -52,6 +52,12 @@ Optional passthrough fields:
 - `background`
 - `timeout_seconds`
 
+Quality guidance:
+- Omit `quality` for ordinary chat image requests unless the user asks for a specific quality level.
+- Use `quality: low` when speed matters, especially for WhatsApp or casual one-image requests.
+- Use `quality: high` only when the user explicitly asks for high quality, print/detail, or a premium ad/poster result.
+- Do not repeatedly retry an expensive high-quality request after an endpoint timeout.
+
 Ratio guidance:
 - Use `aspect_ratio` for composition, for example `1:1`, `4:3`, `3:4`, `16:9`, or `9:16`.
 - If the user asks for square, portrait, landscape, wallpaper, story, or thumbnail formats, translate that into an explicit ratio.

@@ -294,6 +294,162 @@ func TestGenerateImageTool_UsesImagesGenerationEndpointForImageAPIModels(t *test
 	}
 }
 
+func TestGenerateImageTool_SendsDefaultUserAgent(t *testing.T) {
+	workspace := t.TempDir()
+	store := media.NewFileMediaStore()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/images/generations" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.Header.Get("User-Agent"); got != defaultImageUserAgent {
+			t.Fatalf("unexpected user-agent: %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{
+				"b64_json": base64.StdEncoding.EncodeToString([]byte("image-api-image")),
+			}},
+		})
+	}))
+	defer server.Close()
+
+	tool := NewGenerateImageTool(workspace, false)
+	tool.SetMediaStore(store)
+	tool.getenv = func(name string) string {
+		switch name {
+		case "CPA_API_KEY":
+			return "test-key"
+		case "CPA_API_BASE":
+			return server.URL
+		case "CPA_IMAGE_MODEL":
+			return "gpt-image-2"
+		default:
+			return ""
+		}
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{"prompt": "cat"})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+}
+
+func TestGenerateImageTool_RetriesHighQualityImageAPIAsLowOn524(t *testing.T) {
+	workspace := t.TempDir()
+	store := media.NewFileMediaStore()
+	var qualities []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/images/generations" {
+			http.NotFound(w, r)
+			return
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		quality, _ := payload["quality"].(string)
+		qualities = append(qualities, quality)
+		if len(qualities) == 1 {
+			w.WriteHeader(524)
+			_, _ = w.Write([]byte(`{"error":"timeout"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{
+				"b64_json": base64.StdEncoding.EncodeToString([]byte("retried-image")),
+			}},
+		})
+	}))
+	defer server.Close()
+
+	tool := NewGenerateImageTool(workspace, false)
+	tool.SetMediaStore(store)
+	tool.getenv = func(name string) string {
+		switch name {
+		case "CPA_API_KEY":
+			return "test-key"
+		case "CPA_API_BASE":
+			return server.URL
+		case "CPA_IMAGE_MODEL":
+			return "gpt-image-2"
+		default:
+			return ""
+		}
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"prompt":  "cat",
+		"quality": "high",
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if len(qualities) != 2 {
+		t.Fatalf("expected two attempts, got %d", len(qualities))
+	}
+	if qualities[0] != "high" || qualities[1] != "low" {
+		t.Fatalf("unexpected quality attempts: %#v", qualities)
+	}
+}
+
+func TestGenerateImageTool_RetriesDefaultQualityImageAPIAsLowOn524(t *testing.T) {
+	workspace := t.TempDir()
+	store := media.NewFileMediaStore()
+	var qualities []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/images/generations" {
+			http.NotFound(w, r)
+			return
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		quality, _ := payload["quality"].(string)
+		qualities = append(qualities, quality)
+		if len(qualities) == 1 {
+			w.WriteHeader(524)
+			_, _ = w.Write([]byte(`{"error":"timeout"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{
+				"b64_json": base64.StdEncoding.EncodeToString([]byte("retried-image")),
+			}},
+		})
+	}))
+	defer server.Close()
+
+	tool := NewGenerateImageTool(workspace, false)
+	tool.SetMediaStore(store)
+	tool.getenv = func(name string) string {
+		switch name {
+		case "CPA_API_KEY":
+			return "test-key"
+		case "CPA_API_BASE":
+			return server.URL
+		case "CPA_IMAGE_MODEL":
+			return "gpt-image-2"
+		default:
+			return ""
+		}
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{"prompt": "cat"})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if len(qualities) != 2 {
+		t.Fatalf("expected two attempts, got %d", len(qualities))
+	}
+	if qualities[0] != "" || qualities[1] != "low" {
+		t.Fatalf("unexpected quality attempts: %#v", qualities)
+	}
+}
+
 func TestGenerateImageTool_UsesImagesEditEndpointForImageAPIModels(t *testing.T) {
 	workspace := t.TempDir()
 	store := media.NewFileMediaStore()
