@@ -456,6 +456,49 @@ func TestGenerateImageTool_RetriesDefaultQualityImageAPIAsLowOn524(t *testing.T)
 	}
 }
 
+func TestGenerateImageTool_DoesNotRetryLowQualitySquareImageAPIOn524(t *testing.T) {
+	workspace := t.TempDir()
+	store := media.NewFileMediaStore()
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/images/generations" {
+			http.NotFound(w, r)
+			return
+		}
+		attempts++
+		w.WriteHeader(524)
+		_, _ = w.Write([]byte(`{"error":"timeout"}`))
+	}))
+	defer server.Close()
+
+	tool := NewGenerateImageTool(workspace, false)
+	tool.SetMediaStore(store)
+	tool.getenv = func(name string) string {
+		switch name {
+		case "CPA_API_KEY":
+			return "test-key"
+		case "CPA_API_BASE":
+			return server.URL
+		case "CPA_IMAGE_MODEL":
+			return "gpt-image-2"
+		default:
+			return ""
+		}
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"prompt":       "red cube",
+		"aspect_ratio": "1:1",
+		"quality":      "low",
+	})
+	if !result.IsError {
+		t.Fatalf("expected error")
+	}
+	if attempts != 1 {
+		t.Fatalf("expected one attempt, got %d", attempts)
+	}
+}
+
 func TestGenerateImageTool_UsesImagesEditEndpointForImageAPIModels(t *testing.T) {
 	workspace := t.TempDir()
 	store := media.NewFileMediaStore()

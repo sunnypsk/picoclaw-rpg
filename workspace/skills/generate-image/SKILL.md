@@ -58,6 +58,20 @@ Quality guidance:
 - Use `quality: high` only when the user explicitly asks for high quality, print/detail, or a premium ad/poster result.
 - Do not repeatedly retry an expensive high-quality request after an endpoint timeout.
 
+Timeout avoidance:
+- Prefer concise, image-native prompts. Avoid asking for many tiny readable labels, dense annotations, exact shop-sign text, maps with legends, or large crowds with many individually described objects.
+- If the user asks for a complex scene, preserve the main subject and style but compress the prompt before calling `generate_image`.
+- For text-heavy or label-heavy requests, ask for visual impressions of signs or labels rather than accurate readable text.
+- If `generate_image` returns a provider timeout such as `408`, `504`, or `524`, do not immediately repeat the same prompt. Retry at most once with a shorter prompt, `quality: low`, `background: auto`, and a common ratio such as `1:1`.
+- If the simplified retry also times out, explain that the upstream image service timed out and offer a simpler prompt; do not keep retrying in the same turn.
+
+Prompt rewrite examples:
+- Instead of: `extremely complex fantasy city map with thousands of labels, icons, legends, dense annotations`
+- Use: `fantasy city map illustration, old parchment style, winding roads and rivers, decorative border, a few symbolic district markers, no readable labels`
+- Instead of: `90s Hong Kong mall with many readable shop signs and crowded detailed storefronts`
+- Use: `retro indoor shopping mall atrium inspired by 1990s East Asia, warm film photo look, escalator, marble floor, a few shoppers, simple shopfront shapes, no readable text`
+- If a location-specific mall prompt still times out, remove the exact location and era terms on the retry while preserving the visual mood.
+
 Ratio guidance:
 - Use `aspect_ratio` for composition, for example `1:1`, `4:3`, `3:4`, `16:9`, or `9:16`.
 - If the user asks for square, portrait, landscape, wallpaper, story, or thumbnail formats, translate that into an explicit ratio.
