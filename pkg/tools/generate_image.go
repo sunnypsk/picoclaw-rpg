@@ -13,6 +13,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/textproto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -353,11 +354,38 @@ func encodeImageAsDataURL(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read input image %s: %w", path, err)
 	}
-	contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
-	if contentType == "" {
-		contentType = "image/png"
-	}
+	contentType := detectInputImageContentType(path, data)
 	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+func detectInputImageContentType(path string, data []byte) string {
+	if contentType := normalizeMIMEType(mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))); isImageMIME(contentType) {
+		return contentType
+	}
+	if contentType := normalizeMIMEType(http.DetectContentType(data)); isImageMIME(contentType) {
+		return contentType
+	}
+	if ext := utils.PreferredExtensionForBytes(data); ext != "" {
+		if contentType := normalizeMIMEType(mime.TypeByExtension(ext)); isImageMIME(contentType) {
+			return contentType
+		}
+	}
+	return "image/png"
+}
+
+func normalizeMIMEType(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if parsed, _, err := mime.ParseMediaType(value); err == nil {
+		value = parsed
+	}
+	return strings.ToLower(value)
+}
+
+func isImageMIME(value string) bool {
+	return strings.HasPrefix(normalizeMIMEType(value), "image/")
 }
 
 func imageModelUsesImageAPI(model string) bool {
@@ -488,7 +516,23 @@ func addMultipartImage(writer *multipart.Writer, fieldName, path string) error {
 	}
 	defer file.Close()
 
-	part, err := writer.CreateFormFile(fieldName, filepath.Base(path))
+	sample := make([]byte, 512)
+	n, readErr := file.Read(sample)
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return fmt.Errorf("read input image header %s: %w", path, readErr)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("rewind input image %s: %w", path, err)
+	}
+
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{
+		"name":     fieldName,
+		"filename": filepath.Base(path),
+	}))
+	header.Set("Content-Type", detectInputImageContentType(path, sample[:n]))
+
+	part, err := writer.CreatePart(header)
 	if err != nil {
 		return fmt.Errorf("create multipart image part for %s: %w", path, err)
 	}

@@ -383,16 +383,19 @@ func resolveMediaRefs(messages []providers.Message, store media.MediaStore, maxS
 				continue
 			}
 
-			mime := meta.ContentType
-			if mime == "" {
+			mime := strings.TrimSpace(meta.ContentType)
+			if mime == "" || isGenericBinaryMIME(mime) {
 				kind, ftErr := filetype.MatchFile(localPath)
 				if ftErr != nil || kind == filetype.Unknown {
-					logger.WarnCF("agent", "Unknown media type, skipping", map[string]any{
-						"path": localPath,
-					})
-					continue
+					if mime == "" {
+						logger.WarnCF("agent", "Unknown media type, skipping", map[string]any{
+							"path": localPath,
+						})
+						continue
+					}
+				} else {
+					mime = kind.MIME.Value
 				}
-				mime = kind.MIME.Value
 			}
 
 			f, err := os.Open(localPath)
@@ -429,4 +432,12 @@ func resolveMediaRefs(messages []providers.Message, store media.MediaStore, maxS
 	}
 
 	return result
+}
+
+func isGenericBinaryMIME(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if i := strings.Index(value, ";"); i >= 0 {
+		value = strings.TrimSpace(value[:i])
+	}
+	return value == "application/octet-stream"
 }

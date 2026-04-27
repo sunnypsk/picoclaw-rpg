@@ -2196,6 +2196,38 @@ func TestResolveMediaRefs_UsesMetaContentType(t *testing.T) {
 	}
 }
 
+func TestResolveMediaRefs_SniffsGenericBinaryContentType(t *testing.T) {
+	store := media.NewFileMediaStore()
+	dir := t.TempDir()
+
+	pngPath := filepath.Join(dir, "upload.bin")
+	pngHeader := []byte{
+		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
+		0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
+	}
+	if err := os.WriteFile(pngPath, pngHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Store(pngPath, media.MediaMeta{ContentType: "application/octet-stream"}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	messages := []providers.Message{
+		{Role: "user", Content: "hi", Media: []string{ref}},
+	}
+	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize)
+
+	if len(result[0].Media) != 1 {
+		t.Fatalf("expected 1 media, got %d", len(result[0].Media))
+	}
+	if !strings.HasPrefix(result[0].Media[0], "data:image/png;base64,") {
+		t.Fatalf("expected png prefix, got %q", result[0].Media[0][:30])
+	}
+}
+
 func TestNormalizeInboundPromptMedia_StagesAudioAndKeepsImages(t *testing.T) {
 	store := media.NewFileMediaStore()
 	workspace := t.TempDir()

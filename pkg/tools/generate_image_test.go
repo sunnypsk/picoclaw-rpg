@@ -1,11 +1,14 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +18,15 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/media"
 )
+
+func testPNGBytes(t *testing.T) []byte {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
 
 func TestGenerateImageTool_RequiresEnv(t *testing.T) {
 	tool := NewGenerateImageTool(t.TempDir(), false)
@@ -77,6 +89,70 @@ func TestGenerateImageTool_ProcessEnvOverridesEnvFile(t *testing.T) {
 
 	if got := tool.lookupEnv("CPA_API_KEY"); got != "process-key" {
 		t.Fatalf("lookupEnv(CPA_API_KEY) = %q, want process-key", got)
+	}
+}
+
+func TestEncodeImageAsDataURLSniffsGenericBinImageMIME(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "whatsapp-upload.bin")
+	if err := os.WriteFile(path, testPNGBytes(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dataURL, err := encodeImageAsDataURL(path)
+	if err != nil {
+		t.Fatalf("encodeImageAsDataURL() error = %v", err)
+	}
+	if !strings.HasPrefix(dataURL, "data:image/png;base64,") {
+		t.Fatalf("data URL prefix = %q", dataURL[:min(len(dataURL), 40)])
+	}
+	if strings.Contains(dataURL, "application/octet-stream") {
+		t.Fatalf("data URL used generic MIME: %s", dataURL[:min(len(dataURL), 80)])
+	}
+}
+
+func TestBuildImageAPIRequestSniffsGenericBinMultipartImageMIME(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "whatsapp-upload.bin")
+	if err := os.WriteFile(path, testPNGBytes(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	endpoint, contentType, body, err := buildImageAPIRequest(
+		"gpt-image-2",
+		"edit this image",
+		[]string{path},
+		map[string]any{"aspect_ratio": "1:1"},
+	)
+	if err != nil {
+		t.Fatalf("buildImageAPIRequest() error = %v", err)
+	}
+	if endpoint != "/images/edits" {
+		t.Fatalf("endpoint = %q, want /images/edits", endpoint)
+	}
+
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		t.Fatalf("parse content type: %v", err)
+	}
+	if mediaType != "multipart/form-data" {
+		t.Fatalf("content type = %q, want multipart/form-data", mediaType)
+	}
+
+	reader := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			t.Fatal("multipart image part not found")
+		}
+		if err != nil {
+			t.Fatalf("read multipart part: %v", err)
+		}
+		if part.FormName() != "image[]" {
+			continue
+		}
+		if got := part.Header.Get("Content-Type"); got != "image/png" {
+			t.Fatalf("multipart image content type = %q, want image/png", got)
+		}
+		break
 	}
 }
 
