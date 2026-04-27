@@ -55,59 +55,54 @@ Optional passthrough fields:
 
 ## Prompt Construction
 
-Do not pass chatty or overloaded user wording directly when a cleaner visual prompt would be safer. Convert the request into a concise image-native prompt before calling `generate_image`.
+Do not pass chatty user wording directly when a clearer visual prompt would be safer. Convert the request into a detailed, image-native prompt before calling `generate_image`.
 
-For complex scenes, prefer a short natural-language scene brief over a comma-separated keyword list. Too many hard constraints, exact locations, dense crowds, readable signs, era-specific objects, and micro-details can push the provider into a slow path and cause upstream timeouts such as `408`, `504`, or `524`.
+For complex scenes, keep the user's meaningful details. Organize long requests into visual priorities instead of shortening them by default. Include specific text, logos, signs, materials, place and era cues, composition, lighting, character details, and background elements when they matter to the request.
 
-Use this compact structure when helpful:
+Use this detailed structure when helpful:
 - Main subject: the primary thing to draw.
 - Style/medium: photo, illustration, 3D render, product shot, poster, etc.
 - Composition: close-up, wide shot, top-down, centered, negative space, etc.
 - Lighting/mood: soft studio light, warm film look, dramatic rain, playful, minimal, etc.
-- Key details: only the few details that materially define the image.
-- Constraints: no watermark, no readable text, preserve supplied subject, avoid modern objects, etc.
+- Key details: the important details that define the image, including requested text, logos, signs, labels, props, materials, setting, and era.
+- Constraints: preserve supplied subject, include required text/logos/signage, avoid modern objects, etc.
 
 Specificity policy:
-- If the user's prompt is already concise and specific, preserve it and only normalize formatting.
-- If the prompt is vague, add a small amount of useful visual specificity.
-- If the prompt is overloaded, compress it before the API call instead of adding more detail.
-- Do not invent extra characters, brands, slogans, exact text, or side stories that the user did not ask for.
+- If the user's prompt is already detailed and specific, preserve its detail and only normalize formatting.
+- If the prompt is vague, add useful visual specificity.
+- If the prompt is long or overloaded, restructure it into a clear visual prompt while keeping the user's requested details.
+- Do not invent extra characters or side stories that conflict with the user's request. Real text, logos, brands, slogans, signs, and labels are allowed when the user asks for them or they naturally fit the requested scene.
 
 For edits:
 - State the edit target clearly.
 - Repeat invariants in the prompt, for example `keep the cake shape, color, logo plaque, and toppings unchanged; only replace the background`.
 - Use exactly one source image. Treat it as the edit target unless the user explicitly says it is only a style reference.
 
-Avoid risky prompt shapes unless the user explicitly requires them:
-- many readable labels or exact text
-- dense annotations, legends, or map keys
-- many individually described people or objects
-- exact shop-sign text or text-heavy storefronts
-- very long lists of micro-details
-- multiple competing styles in one prompt
+Detailed prompt handling:
+- Keep requested readable labels, exact text blocks, dense annotations, legends, map keys, shop signs, storefront text, logos, and brand cues when they matter.
+- Preserve detailed people, objects, and scene micro-details when they help the image.
+- For multiple competing styles, make the relationship explicit, for example primary style, secondary influence, or split-scene treatment.
 
 Quality guidance:
 - Omit `quality` for ordinary chat image requests unless the user asks for a specific quality level.
-- Use `quality: low` when speed matters, especially for WhatsApp or casual one-image requests.
-- Use `quality: high` only when the user explicitly asks for high quality, print/detail, or a premium ad/poster result.
-- Do not repeatedly retry an expensive high-quality request after an endpoint timeout.
+- Do not use `quality: low`.
+- Use `quality: high` when the user asks for high quality, print/detail, or a premium ad/poster result.
+- If the user asks for a specific non-low quality level such as `medium`, `high`, or `auto`, pass it through.
 
-Timeout avoidance:
-- Prefer concise, image-native prompts. Avoid asking for many tiny readable labels, dense annotations, exact shop-sign text, maps with legends, or large crowds with many individually described objects.
-- If the user asks for a complex scene, preserve the main subject and style but compress the prompt before calling `generate_image`.
-- Rewrite timeout-prone requests as one or two natural sentences rather than a long keyphrase inventory.
-- For text-heavy or label-heavy requests, ask for visual impressions of signs or labels rather than accurate readable text.
-- If `generate_image` returns a provider timeout such as `408`, `504`, or `524`, do not immediately repeat the same prompt. Retry at most once with a shorter prompt, `quality: low`, `background: auto`, and a common ratio such as `1:1`.
-- If the simplified retry also times out, explain that the upstream image service timed out and offer a simpler prompt; do not keep retrying in the same turn.
+Timeout handling:
+- Do not simplify a prompt preemptively only because it is detailed.
+- If `generate_image` returns a provider timeout such as `408`, `504`, or `524`, do not immediately repeat the same prompt.
+- Retry at most once with a more focused but still detailed prompt, `background: auto`, and a common ratio such as `1:1`. Do not downgrade to `quality: low`.
+- Do not drop user-required text, logos, signage, identity details, or scene requirements during a timeout retry.
+- If the retry also times out, explain that the upstream image service timed out and offer a smaller-scope prompt that still preserves the user's required details; do not keep retrying in the same turn.
 
-Prompt rewrite examples:
+Prompt organization examples:
 - Instead of: `extremely complex fantasy city map with thousands of labels, icons, legends, dense annotations`
-- Use: `fantasy city map illustration, old parchment style, winding roads and rivers, decorative border, a few symbolic district markers, no readable labels`
+- Use: `detailed fantasy city map illustration in old parchment style, winding roads, rivers, city walls, district boundaries, decorative border, readable labels for the main districts, a clear legend, icons for markets, temples, docks, gates, and towers`
 - Instead of: `90s Hong Kong mall with many readable shop signs and crowded detailed storefronts`
-- Use: `retro indoor shopping mall atrium inspired by 1990s East Asia, warm film photo look, escalator, marble floor, a few shoppers, simple shopfront shapes, no readable text`
-- If a location-specific mall prompt still times out, remove the exact location and era terms on the retry while preserving the visual mood.
+- Use: `detailed retro indoor shopping mall atrium inspired by 1990s East Asia, warm film photo look, escalators, marble floor, crowded storefronts, readable shop signs, illuminated logos, hanging banners, directory boards, shoppers, and period-accurate decor`
 - Instead of: `Realistic 1980s Hong Kong street documentary photograph, Mong Kok at midday, bright overhead sunlight, old double-decker bus, red taxi, crowded pavement, dense hanging signboards, weathered buildings, faded color film grain, no modern objects`
-- Use: `Create a nostalgic film photo of a retro Hong Kong-inspired street at noon. Show one old bus, one red taxi, simple shopfronts, and a few pedestrians. Keep details broad, with no readable text or modern objects.`
+- Use: `realistic 1980s Hong Kong street documentary photograph in Mong Kok at midday, bright overhead sunlight, old double-decker bus, red taxi, crowded pavement, dense hanging signboards with readable text, weathered shopfronts, period-accurate logos, faded color film grain, no modern objects`
 
 Ratio guidance:
 - Use `aspect_ratio` for composition, for example `1:1`, `4:3`, `3:4`, `16:9`, or `9:16`.
