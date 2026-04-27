@@ -56,6 +56,8 @@ Optional passthrough fields:
 
 Do not pass chatty or overloaded user wording directly when a cleaner visual prompt would be safer. Convert the request into a concise image-native prompt before calling `generate_image`.
 
+For complex scenes, prefer a short natural-language scene brief over a comma-separated keyword list. Too many hard constraints, exact locations, dense crowds, readable signs, era-specific objects, and micro-details can push the provider into a slow path and cause upstream timeouts such as `408`, `504`, or `524`.
+
 Use this compact structure when helpful:
 - Main subject: the primary thing to draw.
 - Style/medium: photo, illustration, 3D render, product shot, poster, etc.
@@ -92,6 +94,7 @@ Quality guidance:
 Timeout avoidance:
 - Prefer concise, image-native prompts. Avoid asking for many tiny readable labels, dense annotations, exact shop-sign text, maps with legends, or large crowds with many individually described objects.
 - If the user asks for a complex scene, preserve the main subject and style but compress the prompt before calling `generate_image`.
+- Rewrite timeout-prone requests as one or two natural sentences rather than a long keyphrase inventory.
 - For text-heavy or label-heavy requests, ask for visual impressions of signs or labels rather than accurate readable text.
 - If `generate_image` returns a provider timeout such as `408`, `504`, or `524`, do not immediately repeat the same prompt. Retry at most once with a shorter prompt, `quality: low`, `background: auto`, and a common ratio such as `1:1`.
 - If the simplified retry also times out, explain that the upstream image service timed out and offer a simpler prompt; do not keep retrying in the same turn.
@@ -102,6 +105,8 @@ Prompt rewrite examples:
 - Instead of: `90s Hong Kong mall with many readable shop signs and crowded detailed storefronts`
 - Use: `retro indoor shopping mall atrium inspired by 1990s East Asia, warm film photo look, escalator, marble floor, a few shoppers, simple shopfront shapes, no readable text`
 - If a location-specific mall prompt still times out, remove the exact location and era terms on the retry while preserving the visual mood.
+- Instead of: `Realistic 1980s Hong Kong street documentary photograph, Mong Kok at midday, bright overhead sunlight, old double-decker bus, red taxi, crowded pavement, dense hanging signboards, weathered buildings, faded color film grain, no modern objects`
+- Use: `Create a nostalgic film photo of a retro Hong Kong-inspired street at noon. Show one old bus, one red taxi, simple shopfronts, and a few pedestrians. Keep details broad, with no readable text or modern objects.`
 
 Ratio guidance:
 - Use `aspect_ratio` for composition, for example `1:1`, `4:3`, `3:4`, `16:9`, or `9:16`.
