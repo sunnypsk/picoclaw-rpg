@@ -181,7 +181,7 @@ vim docker/data/config.json   # Set provider API keys, bot tokens, etc.
 
 # Optional: store skill-helper secrets in the persistent env file
 cp .env.example docker/data/.env
-# Then edit `docker/data/.env` and keep only the keys you need, such as `CPA_API_KEY` / `HF_TOKEN`
+# Then edit `docker/data/.env` and keep only the keys you need, such as `TUZHI_KEY` / `HF_TOKEN`
 
 # 4. Start
 docker compose -f docker/docker-compose.yml --profile gateway up -d
@@ -214,7 +214,7 @@ docker compose -f docker/docker-compose.yml --profile gateway up -d
 > The helper defaults to `--user root` with `docker/data` mounted to `/root/.picoclaw`, which is often the least
 > troublesome option for local bind mounts on Docker Desktop.
 >
-> To smoke-test the configured CPA image model against the same helper used by the workspace skill, run:
+> To smoke-test the configured image model against the same helper used by the workspace skill, run:
 > `powershell -ExecutionPolicy Bypass -File .\scripts\test-image-model.ps1`
 >
 > By default this reads `docker/data/.env` via `PICOCLAW_HOME=docker/data` and writes outputs under

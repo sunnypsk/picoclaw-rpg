@@ -2,6 +2,7 @@
 
 import base64
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -79,6 +80,50 @@ class GenerateImageMaterializeTests(unittest.TestCase):
 
 
 class GenerateImageRequestTests(unittest.TestCase):
+    def test_resolve_config_prefers_tuzhi_over_cpa(self) -> None:
+        env = {
+            "TUZHI_KEY": "tuzhi-key",
+            "TUZHI_IMAGE_MODEL": "tuzhi-model",
+            "TUZHI_IMAGE_GEN_BASE": "https://example.invalid/v1/images/generations/",
+            "TUZHI_IMAGE_EDIT_BASE": "https://example.invalid/v1/images/edits/",
+            "CPA_API_KEY": "cpa-key",
+            "CPA_API_BASE": "https://cpa.invalid/v1",
+            "CPA_IMAGE_MODEL": "gpt-image-2",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            config = generate_image.resolve_config()
+
+        self.assertEqual(config.provider, "tuzhi")
+        self.assertEqual(config.api_key, "tuzhi-key")
+        self.assertEqual(config.model, "tuzhi-model")
+        self.assertEqual(config.generation_url, "https://example.invalid/v1/images/generations")
+        self.assertEqual(config.edit_url, "https://example.invalid/v1/images/edits")
+
+    def test_resolve_config_rejects_partial_tuzhi_without_cpa_fallback(self) -> None:
+        env = {
+            "TUZHI_KEY": "tuzhi-key",
+            "CPA_API_KEY": "cpa-key",
+            "CPA_API_BASE": "https://cpa.invalid/v1",
+            "CPA_IMAGE_MODEL": "gpt-image-2",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "TUZHI_IMAGE_MODEL"):
+                generate_image.resolve_config()
+
+    def test_resolve_config_falls_back_to_cpa(self) -> None:
+        env = {
+            "CPA_API_KEY": "cpa-key",
+            "CPA_API_BASE": "https://cpa.invalid/v1/",
+            "CPA_IMAGE_MODEL": "gpt-image-2",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            config = generate_image.resolve_config()
+
+        self.assertEqual(config.provider, "cpa")
+        self.assertEqual(config.api_key, "cpa-key")
+        self.assertEqual(config.api_base, "https://cpa.invalid/v1")
+        self.assertEqual(config.model, "gpt-image-2")
+
     def test_build_request_uses_chat_completions_for_non_image_api_model(self) -> None:
         endpoint, body, content_type = generate_image.build_request(
             "test-model",
@@ -127,6 +172,55 @@ class GenerateImageRequestTests(unittest.TestCase):
         self.assertIn("multipart/form-data;", content_type)
         self.assertIn(b'name="model"', body)
         self.assertIn(b"gpt-image-2", body)
+        self.assertIn(b'name="image[]"; filename="', body)
+        self.assertIn(TINY_PNG_BYTES, body)
+
+    def test_build_provider_request_uses_exact_tuzhi_generation_url(self) -> None:
+        config = generate_image.ImageProviderConfig(
+            provider="tuzhi",
+            api_key="tuzhi-key",
+            model="tuzhi-model",
+            generation_url="https://example.invalid/custom/generate",
+            edit_url="https://example.invalid/custom/edit",
+        )
+
+        url, body, content_type = generate_image.build_provider_request(
+            config,
+            {"prompt": "cat", "aspect_ratio": "16:9"},
+            None,
+        )
+
+        self.assertEqual(url, "https://example.invalid/custom/generate")
+        self.assertEqual(content_type, "application/json")
+        payload = json.loads(body.decode("utf-8"))
+        self.assertEqual(payload["model"], "tuzhi-model")
+        self.assertEqual(payload["size"], "1536x864")
+
+    def test_build_provider_request_uses_exact_tuzhi_edit_url(self) -> None:
+        config = generate_image.ImageProviderConfig(
+            provider="tuzhi",
+            api_key="tuzhi-key",
+            model="tuzhi-model",
+            generation_url="https://example.invalid/custom/generate",
+            edit_url="https://example.invalid/custom/edit",
+        )
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
+            handle.write(TINY_PNG_BYTES)
+            image_path = Path(handle.name)
+
+        try:
+            url, body, content_type = generate_image.build_provider_request(
+                config,
+                {"prompt": "edit this", "aspect_ratio": "1:1"},
+                image_path,
+            )
+        finally:
+            image_path.unlink(missing_ok=True)
+
+        self.assertEqual(url, "https://example.invalid/custom/edit")
+        self.assertIn("multipart/form-data;", content_type)
+        self.assertIn(b'name="model"', body)
+        self.assertIn(b"tuzhi-model", body)
         self.assertIn(b'name="image[]"; filename="', body)
         self.assertIn(TINY_PNG_BYTES, body)
 

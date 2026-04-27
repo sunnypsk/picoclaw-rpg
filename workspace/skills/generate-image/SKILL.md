@@ -1,11 +1,11 @@
 ---
 name: generate-image
-description: Generate or edit images with CPA image APIs or chat completions and send the result back to the user in chat. Use when the user asks for image generation, image editing, restyling, prompt-plus-image transforms, or wants the finished image returned on Telegram or WhatsApp.
+description: Generate or edit images with the configured TUZHI image APIs and send the result back to the user in chat. Use when the user asks for image generation, image editing, restyling, prompt-plus-image transforms, or wants the finished image returned on Telegram or WhatsApp.
 ---
 
 # Generate Image
 
-Use this skill for image creation and image editing through CPA image APIs or chat completions.
+Use this skill for image creation and image editing through the configured TUZHI image APIs.
 
 ## When to use
 
@@ -17,8 +17,9 @@ Use it when the user asks to:
 
 ## Setup
 
-- Set `CPA_API_BASE`, `CPA_API_KEY`, and `CPA_IMAGE_MODEL` in `~/.picoclaw/.env` or `$PICOCLAW_HOME/.env`.
-- Never print, echo, or expose `CPA_API_KEY`.
+- Set `TUZHI_KEY`, `TUZHI_IMAGE_MODEL`, `TUZHI_IMAGE_GEN_BASE`, and `TUZHI_IMAGE_EDIT_BASE` in `~/.picoclaw/.env` or `$PICOCLAW_HOME/.env`.
+- Legacy `CPA_API_BASE`, `CPA_API_KEY`, and `CPA_IMAGE_MODEL` are used only when no TUZHI image variables are configured.
+- Never print, echo, or expose `TUZHI_KEY` or `CPA_API_KEY`.
 
 ## Primary workflow
 

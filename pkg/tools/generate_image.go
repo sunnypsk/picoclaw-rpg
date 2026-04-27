@@ -29,6 +29,15 @@ const defaultImageTimeout = 300 * time.Second
 
 const defaultImageUserAgent = "picoclaw/1.0"
 
+type imageProviderConfig struct {
+	provider      string
+	apiKey        string
+	model         string
+	apiBase       string
+	generationURL string
+	editURL       string
+}
+
 type GenerateImageTool struct {
 	workspace  string
 	restrict   bool
@@ -59,7 +68,9 @@ func (t *GenerateImageTool) Name() string {
 }
 
 func (t *GenerateImageTool) Description() string {
-	return "Generate or edit an image through CPA image APIs or chat completions and return it as chat media. Pass exactly one source image via image, input_image, or input_images; media://current works when exactly one current inbound image is available."
+	return "Generate or edit an image through the configured image provider and return it as chat media. " +
+		"Pass exactly one source image via image, input_image, or input_images; " +
+		"media://current works when exactly one current inbound image is available."
 }
 
 func (t *GenerateImageTool) Parameters() map[string]any {
@@ -86,16 +97,17 @@ func (t *GenerateImageTool) Parameters() map[string]any {
 				"description": "Optional explicit list of input images. Only one unique explicit input image is supported safely.",
 			},
 			"aspect_ratio": map[string]any{
-				"type":        "string",
-				"description": "Optional aspect ratio such as 1:1, 4:3, 3:4, 16:9, or 9:16, passed through to CPA when supported.",
+				"type": "string",
+				"description": "Optional aspect ratio such as 1:1, 4:3, 3:4, 16:9, or 9:16, " +
+					"passed through to the image provider when supported.",
 			},
 			"quality": map[string]any{
 				"type":        "string",
-				"description": "Optional quality passed through to CPA.",
+				"description": "Optional quality passed through to the image provider.",
 			},
 			"background": map[string]any{
 				"type":        "string",
-				"description": "Optional background passed through to CPA.",
+				"description": "Optional background passed through to the image provider.",
 			},
 			"timeout_seconds": map[string]any{
 				"type":        "number",
@@ -115,17 +127,9 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]any) *T
 		return ErrorResult("image generation is not configured with a media store")
 	}
 
-	apiKey := strings.TrimSpace(t.lookupEnv("CPA_API_KEY"))
-	if apiKey == "" {
-		return ErrorResult("CPA_API_KEY is required")
-	}
-	apiBase := strings.TrimSpace(t.lookupEnv("CPA_API_BASE"))
-	if apiBase == "" {
-		return ErrorResult("CPA_API_BASE is required")
-	}
-	model := strings.TrimSpace(t.lookupEnv("CPA_IMAGE_MODEL"))
-	if model == "" {
-		return ErrorResult("CPA_IMAGE_MODEL is required")
+	providerConfig, err := t.resolveImageProviderConfig()
+	if err != nil {
+		return ErrorResult(err.Error())
 	}
 
 	timeout := durationArg(args, "timeout_seconds", defaultImageTimeout)
@@ -137,12 +141,10 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]any) *T
 		return ErrorResult(err.Error())
 	}
 
-	responseData, err := t.sendCPARequest(
+	responseData, err := t.sendImageProviderRequest(
 		ctx,
 		&client,
-		strings.TrimRight(apiBase, "/"),
-		apiKey,
-		model,
+		providerConfig,
 		prompt,
 		resolvedInputs,
 		args,
@@ -165,8 +167,61 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]any) *T
 		refs = append(refs, ref)
 	}
 
-	summary := fmt.Sprintf("Generated %d image(s) with model %s.", len(refs), model)
+	summary := fmt.Sprintf("Generated %d image(s) with model %s.", len(refs), providerConfig.model)
 	return MediaResult(summary, refs)
+}
+
+func (t *GenerateImageTool) resolveImageProviderConfig() (imageProviderConfig, error) {
+	tuzhiValues := map[string]string{
+		"TUZHI_KEY":             strings.TrimSpace(t.lookupEnv("TUZHI_KEY")),
+		"TUZHI_IMAGE_MODEL":     strings.TrimSpace(t.lookupEnv("TUZHI_IMAGE_MODEL")),
+		"TUZHI_IMAGE_GEN_BASE":  strings.TrimSpace(t.lookupEnv("TUZHI_IMAGE_GEN_BASE")),
+		"TUZHI_IMAGE_EDIT_BASE": strings.TrimSpace(t.lookupEnv("TUZHI_IMAGE_EDIT_BASE")),
+	}
+	var hasTuzhi bool
+	var missingTuzhi []string
+	for _, key := range []string{"TUZHI_KEY", "TUZHI_IMAGE_MODEL", "TUZHI_IMAGE_GEN_BASE", "TUZHI_IMAGE_EDIT_BASE"} {
+		if tuzhiValues[key] != "" {
+			hasTuzhi = true
+			continue
+		}
+		missingTuzhi = append(missingTuzhi, key)
+	}
+	if hasTuzhi {
+		if len(missingTuzhi) > 0 {
+			return imageProviderConfig{}, fmt.Errorf(
+				"incomplete TUZHI image config: missing %s",
+				strings.Join(missingTuzhi, ", "),
+			)
+		}
+		return imageProviderConfig{
+			provider:      "tuzhi",
+			apiKey:        tuzhiValues["TUZHI_KEY"],
+			model:         tuzhiValues["TUZHI_IMAGE_MODEL"],
+			generationURL: strings.TrimRight(tuzhiValues["TUZHI_IMAGE_GEN_BASE"], "/"),
+			editURL:       strings.TrimRight(tuzhiValues["TUZHI_IMAGE_EDIT_BASE"], "/"),
+		}, nil
+	}
+
+	apiKey := strings.TrimSpace(t.lookupEnv("CPA_API_KEY"))
+	if apiKey == "" {
+		return imageProviderConfig{}, fmt.Errorf("CPA_API_KEY is required")
+	}
+	apiBase := strings.TrimSpace(t.lookupEnv("CPA_API_BASE"))
+	if apiBase == "" {
+		return imageProviderConfig{}, fmt.Errorf("CPA_API_BASE is required")
+	}
+	model := strings.TrimSpace(t.lookupEnv("CPA_IMAGE_MODEL"))
+	if model == "" {
+		return imageProviderConfig{}, fmt.Errorf("CPA_IMAGE_MODEL is required")
+	}
+
+	return imageProviderConfig{
+		provider: "cpa",
+		apiKey:   apiKey,
+		model:    model,
+		apiBase:  strings.TrimRight(apiBase, "/"),
+	}, nil
 }
 
 func (t *GenerateImageTool) lookupEnv(name string) string {
@@ -544,42 +599,57 @@ func addMultipartImage(writer *multipart.Writer, fieldName, path string) error {
 	return nil
 }
 
-func (t *GenerateImageTool) sendCPARequest(
+func (t *GenerateImageTool) sendImageProviderRequest(
 	ctx context.Context,
 	client *http.Client,
-	apiBase, apiKey string,
-	model, prompt string,
+	config imageProviderConfig,
+	prompt string,
 	inputImages []string,
 	args map[string]any,
 ) (map[string]any, error) {
-	return t.sendCPARequestAttempt(ctx, client, apiBase, apiKey, model, prompt, inputImages, args, "")
+	return t.sendImageProviderRequestAttempt(ctx, client, config, prompt, inputImages, args, "")
 }
 
-func (t *GenerateImageTool) sendCPARequestAttempt(
+func (t *GenerateImageTool) sendImageProviderRequestAttempt(
 	ctx context.Context,
 	client *http.Client,
-	apiBase, apiKey string,
-	model, prompt string,
+	config imageProviderConfig,
+	prompt string,
 	inputImages []string,
 	args map[string]any,
 	qualityOverride string,
 ) (map[string]any, error) {
 	var (
+		requestURL  string
 		endpoint    string
+		endpointLog string
 		contentType string
 		body        []byte
 		err         error
 	)
-	if imageModelUsesImageAPI(model) {
+	isImageAPIRequest := config.provider == "tuzhi" || imageModelUsesImageAPI(config.model)
+	if isImageAPIRequest {
 		endpoint, contentType, body, err = buildImageAPIRequestWithOverrides(
-			model,
+			config.model,
 			prompt,
 			inputImages,
 			args,
 			qualityOverride,
 		)
+		if config.provider == "tuzhi" {
+			if len(inputImages) == 0 {
+				requestURL = config.generationURL
+				endpointLog = "TUZHI image generation endpoint"
+			} else {
+				requestURL = config.editURL
+				endpointLog = "TUZHI image edit endpoint"
+			}
+		} else {
+			requestURL = config.apiBase + endpoint
+			endpointLog = endpoint
+		}
 	} else {
-		payload, payloadErr := buildImagePayload(model, prompt, inputImages, args)
+		payload, payloadErr := buildImagePayload(config.model, prompt, inputImages, args)
 		if payloadErr != nil {
 			return nil, payloadErr
 		}
@@ -587,49 +657,61 @@ func (t *GenerateImageTool) sendCPARequestAttempt(
 		if err != nil {
 			return nil, fmt.Errorf("marshal image request: %w", err)
 		}
-		endpoint = "/chat/completions"
+		requestURL = config.apiBase + "/chat/completions"
+		endpointLog = "/chat/completions"
 		contentType = "application/json"
 	}
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build image request: %w", err)
 	}
 	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Authorization", "Bearer "+config.apiKey)
 	req.Header.Set("User-Agent", defaultImageUserAgent)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		if shouldRetryImageRequest(model, args, qualityOverride, err, 0) {
-			return t.sendCPARequestAttempt(ctx, client, apiBase, apiKey, model, prompt, inputImages, args, "low")
+		if shouldRetryImageRequest(isImageAPIRequest, args, qualityOverride, err, 0) {
+			return t.sendImageProviderRequestAttempt(ctx, client, config, prompt, inputImages, args, "low")
 		}
-		return nil, fmt.Errorf("call CPA image endpoint %s: %w", endpoint, err)
+		return nil, fmt.Errorf("call %s: %w", endpointLog, err)
 	}
 	defer resp.Body.Close()
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read CPA image response: %w", err)
+		return nil, fmt.Errorf("read %s image response: %w", strings.ToUpper(config.provider), err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if shouldRetryImageRequest(model, args, qualityOverride, nil, resp.StatusCode) {
-			return t.sendCPARequestAttempt(ctx, client, apiBase, apiKey, model, prompt, inputImages, args, "low")
+		if shouldRetryImageRequest(isImageAPIRequest, args, qualityOverride, nil, resp.StatusCode) {
+			return t.sendImageProviderRequestAttempt(ctx, client, config, prompt, inputImages, args, "low")
 		}
-		return nil, fmt.Errorf("CPA API error %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
+		return nil, fmt.Errorf(
+			"%s API error %d: %s",
+			strings.ToUpper(config.provider),
+			resp.StatusCode,
+			strings.TrimSpace(string(responseBody)),
+		)
 	}
 
 	var decoded map[string]any
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		return nil, fmt.Errorf("CPA API returned non-JSON response")
+		return nil, fmt.Errorf("%s API returned non-JSON response", strings.ToUpper(config.provider))
 	}
 	return decoded, nil
 }
 
-func shouldRetryImageRequest(model string, args map[string]any, qualityOverride string, err error, statusCode int) bool {
-	if !imageModelUsesImageAPI(model) {
+func shouldRetryImageRequest(
+	isImageAPIRequest bool,
+	args map[string]any,
+	qualityOverride string,
+	err error,
+	statusCode int,
+) bool {
+	if !isImageAPIRequest {
 		return false
 	}
 	if strings.TrimSpace(qualityOverride) != "" {
@@ -655,7 +737,7 @@ func (t *GenerateImageTool) collectOutputs(responseData map[string]any) ([]image
 	var outputs []imageOutput
 	visitImageCandidates(responseData, &outputs)
 	if len(outputs) == 0 {
-		return nil, fmt.Errorf("CPA image response did not include any usable image output")
+		return nil, fmt.Errorf("image provider response did not include any usable image output")
 	}
 	return dedupeOutputs(outputs), nil
 }

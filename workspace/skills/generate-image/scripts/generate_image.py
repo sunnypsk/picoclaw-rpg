@@ -12,6 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,16 @@ IMAGE_API_SIZE_BY_ASPECT_RATIO = {
     "16:9": "1536x864",
     "9:16": "864x1536",
 }
+
+
+@dataclass(frozen=True)
+class ImageProviderConfig:
+    provider: str
+    api_key: str
+    model: str
+    api_base: str = ""
+    generation_url: str = ""
+    edit_url: str = ""
 
 
 def get_picoclaw_home() -> Path:
@@ -57,7 +68,7 @@ def load_persistent_env() -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate or edit images with CPA image APIs or chat completions.")
+    parser = argparse.ArgumentParser(description="Generate or edit images with the configured image provider.")
     parser.add_argument("--payload-file", required=True, help="Path to a JSON payload file")
     parser.add_argument("--timeout", type=float, default=300.0, help="HTTP timeout in seconds")
     parser.add_argument("--output-dir", help="Optional directory to save generated images into")
@@ -77,7 +88,26 @@ def get_env(name: str) -> str:
     return os.getenv(name, "").strip()
 
 
-def resolve_config() -> tuple[str, str, str]:
+def resolve_config() -> ImageProviderConfig:
+    tuzhi_values = {
+        "TUZHI_KEY": get_env("TUZHI_KEY"),
+        "TUZHI_IMAGE_MODEL": get_env("TUZHI_IMAGE_MODEL"),
+        "TUZHI_IMAGE_GEN_BASE": get_env("TUZHI_IMAGE_GEN_BASE"),
+        "TUZHI_IMAGE_EDIT_BASE": get_env("TUZHI_IMAGE_EDIT_BASE"),
+    }
+    has_tuzhi = any(tuzhi_values.values())
+    if has_tuzhi:
+        missing = [key for key, value in tuzhi_values.items() if not value]
+        if missing:
+            raise RuntimeError(f"incomplete TUZHI image config: missing {', '.join(missing)}")
+        return ImageProviderConfig(
+            provider="tuzhi",
+            api_key=tuzhi_values["TUZHI_KEY"],
+            model=tuzhi_values["TUZHI_IMAGE_MODEL"],
+            generation_url=tuzhi_values["TUZHI_IMAGE_GEN_BASE"].rstrip("/"),
+            edit_url=tuzhi_values["TUZHI_IMAGE_EDIT_BASE"].rstrip("/"),
+        )
+
     api_key = get_env("CPA_API_KEY")
     if not api_key:
         raise RuntimeError("CPA_API_KEY is required")
@@ -90,7 +120,7 @@ def resolve_config() -> tuple[str, str, str]:
     if not model:
         raise RuntimeError("CPA_IMAGE_MODEL is required")
 
-    return api_key, api_base, model
+    return ImageProviderConfig(provider="cpa", api_key=api_key, model=model, api_base=api_base)
 
 
 def resolve_prompt(payload: dict[str, Any]) -> str:
@@ -264,22 +294,42 @@ def build_request(model: str, payload: dict[str, Any], input_image: Path | None)
     return "/images/edits", body, content_type
 
 
+def build_provider_request(
+    config: ImageProviderConfig,
+    payload: dict[str, Any],
+    input_image: Path | None,
+) -> tuple[str, bytes, str]:
+    if config.provider == "tuzhi":
+        image_payload = build_image_api_payload(config.model, payload)
+        if input_image is None:
+            return (
+                config.generation_url,
+                json.dumps(image_payload).encode("utf-8"),
+                "application/json",
+            )
+
+        fields = [(key, str(value)) for key, value in image_payload.items()]
+        body, content_type = build_multipart_form_data(fields, [("image[]", input_image)])
+        return config.edit_url, body, content_type
+
+    endpoint, body, content_type = build_request(config.model, payload, input_image)
+    return f"{config.api_base}{endpoint}", body, content_type
+
+
 def send_request(
-    api_key: str,
-    api_base: str,
-    model: str,
+    config: ImageProviderConfig,
     payload: dict[str, Any],
     input_image: Path | None,
     timeout: float,
 ) -> dict[str, Any]:
-    endpoint, body, content_type = build_request(model, payload, input_image)
+    url, body, content_type = build_provider_request(config, payload, input_image)
     request = urllib.request.Request(
-        url=f"{api_base}{endpoint}",
+        url=url,
         data=body,
         headers={
             "Content-Type": content_type,
-            "Authorization": f"Bearer {api_key}",
-            # Avoid CPA gateway blocking Python-urllib's default browser signature.
+            "Authorization": f"Bearer {config.api_key}",
+            # Avoid gateways blocking Python-urllib's default browser signature.
             "User-Agent": DEFAULT_USER_AGENT,
         },
         method="POST",
@@ -290,14 +340,14 @@ def send_request(
             response_body = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"CPA API error {exc.code}: {detail}") from exc
+        raise RuntimeError(f"{config.provider.upper()} API error {exc.code}: {detail}") from exc
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"failed to reach CPA API: {exc.reason}") from exc
+        raise RuntimeError(f"failed to reach {config.provider.upper()} API: {exc.reason}") from exc
 
     try:
         return json.loads(response_body)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("CPA API returned non-JSON response") from exc
+        raise RuntimeError(f"{config.provider.upper()} API returned non-JSON response") from exc
 
 
 def collect_images(value: Any) -> list[str]:
@@ -445,13 +495,13 @@ def main() -> int:
 
     try:
         load_persistent_env()
-        api_key, api_base, model = resolve_config()
+        config = resolve_config()
         payload = read_payload(args.payload_file)
         input_image = resolve_input_image(payload)
-        response_data = send_request(api_key, api_base, model, payload, input_image, args.timeout)
+        response_data = send_request(config, payload, input_image, args.timeout)
         images = collect_images(response_data)
         if not images:
-            raise RuntimeError("CPA image response did not include any usable image output")
+            raise RuntimeError(f"{config.provider.upper()} image response did not include any usable image output")
         images = materialize_images(images, args.output_dir, args.output_prefix, args.timeout)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -459,8 +509,8 @@ def main() -> int:
 
     json.dump(
         {
-            "provider": "cpa",
-            "model": model,
+            "provider": config.provider,
+            "model": config.model,
             "images": images,
             "raw": response_data,
         },

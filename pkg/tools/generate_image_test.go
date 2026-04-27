@@ -92,6 +92,107 @@ func TestGenerateImageTool_ProcessEnvOverridesEnvFile(t *testing.T) {
 	}
 }
 
+func TestGenerateImageTool_LoadsTuzhiEnvFromPicoclawHome(t *testing.T) {
+	home := t.TempDir()
+	env := strings.Join([]string{
+		"TUZHI_KEY=file-key",
+		"TUZHI_IMAGE_MODEL=tuzhi-model",
+		"TUZHI_IMAGE_GEN_BASE=https://example.invalid/v1/images/generations/",
+		"TUZHI_IMAGE_EDIT_BASE=https://example.invalid/v1/images/edits/",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(home, ".env"), []byte(env), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewGenerateImageTool(t.TempDir(), false)
+	tool.getenv = func(name string) string {
+		if name == "PICOCLAW_HOME" {
+			return home
+		}
+		return ""
+	}
+
+	config, err := tool.resolveImageProviderConfig()
+	if err != nil {
+		t.Fatalf("resolveImageProviderConfig() error = %v", err)
+	}
+	if config.provider != "tuzhi" {
+		t.Fatalf("provider = %q, want tuzhi", config.provider)
+	}
+	if config.apiKey != "file-key" || config.model != "tuzhi-model" {
+		t.Fatalf("unexpected config key/model: %#v", config)
+	}
+	if config.generationURL != "https://example.invalid/v1/images/generations" {
+		t.Fatalf("generationURL = %q", config.generationURL)
+	}
+	if config.editURL != "https://example.invalid/v1/images/edits" {
+		t.Fatalf("editURL = %q", config.editURL)
+	}
+}
+
+func TestGenerateImageTool_TuzhiProcessEnvOverridesEnvFile(t *testing.T) {
+	home := t.TempDir()
+	env := strings.Join([]string{
+		"TUZHI_KEY=file-key",
+		"TUZHI_IMAGE_MODEL=file-model",
+		"TUZHI_IMAGE_GEN_BASE=https://file.invalid/v1/images/generations",
+		"TUZHI_IMAGE_EDIT_BASE=https://file.invalid/v1/images/edits",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(home, ".env"), []byte(env), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewGenerateImageTool(t.TempDir(), false)
+	tool.getenv = func(name string) string {
+		switch name {
+		case "PICOCLAW_HOME":
+			return home
+		case "TUZHI_KEY":
+			return "process-key"
+		default:
+			return ""
+		}
+	}
+
+	config, err := tool.resolveImageProviderConfig()
+	if err != nil {
+		t.Fatalf("resolveImageProviderConfig() error = %v", err)
+	}
+	if config.apiKey != "process-key" {
+		t.Fatalf("apiKey = %q, want process-key", config.apiKey)
+	}
+}
+
+func TestGenerateImageTool_PartialTuzhiConfigDoesNotFallbackToCPA(t *testing.T) {
+	tool := NewGenerateImageTool(t.TempDir(), false)
+	tool.getenv = func(name string) string {
+		switch name {
+		case "TUZHI_KEY":
+			return "tuzhi-key"
+		case "CPA_API_KEY":
+			return "cpa-key"
+		case "CPA_API_BASE":
+			return "https://example.invalid/v1"
+		case "CPA_IMAGE_MODEL":
+			return "gpt-image-2"
+		default:
+			return ""
+		}
+	}
+
+	_, err := tool.resolveImageProviderConfig()
+	if err == nil {
+		t.Fatal("expected partial TUZHI config error")
+	}
+	if !strings.Contains(err.Error(), "TUZHI_IMAGE_MODEL") ||
+		!strings.Contains(err.Error(), "TUZHI_IMAGE_GEN_BASE") ||
+		!strings.Contains(err.Error(), "TUZHI_IMAGE_EDIT_BASE") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestEncodeImageAsDataURLSniffsGenericBinImageMIME(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "whatsapp-upload.bin")
 	if err := os.WriteFile(path, testPNGBytes(t), 0o600); err != nil {
@@ -409,6 +510,133 @@ func TestGenerateImageTool_SendsDefaultUserAgent(t *testing.T) {
 	result := tool.Execute(context.Background(), map[string]any{"prompt": "cat"})
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+}
+
+func TestGenerateImageTool_UsesExactTuzhiGenerationURL(t *testing.T) {
+	workspace := t.TempDir()
+	store := media.NewFileMediaStore()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/custom/images/generate" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer tuzhi-key" {
+			t.Fatalf("unexpected authorization header: %q", got)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if payload["model"] != "tuzhi-model" {
+			t.Fatalf("unexpected model: %#v", payload["model"])
+		}
+		if payload["size"] != "1536x864" {
+			t.Fatalf("unexpected inferred size: %#v", payload["size"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{
+				"b64_json": base64.StdEncoding.EncodeToString([]byte("tuzhi-image")),
+			}},
+		})
+	}))
+	defer server.Close()
+
+	tool := NewGenerateImageTool(workspace, false)
+	tool.SetMediaStore(store)
+	tool.getenv = func(name string) string {
+		switch name {
+		case "TUZHI_KEY":
+			return "tuzhi-key"
+		case "TUZHI_IMAGE_MODEL":
+			return "tuzhi-model"
+		case "TUZHI_IMAGE_GEN_BASE":
+			return server.URL + "/custom/images/generate"
+		case "TUZHI_IMAGE_EDIT_BASE":
+			return server.URL + "/custom/images/edit"
+		default:
+			return ""
+		}
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"prompt":       "cat",
+		"aspect_ratio": "16:9",
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if len(result.Media) != 1 {
+		t.Fatalf("expected one media ref, got %v", result.Media)
+	}
+}
+
+func TestGenerateImageTool_UsesExactTuzhiEditURL(t *testing.T) {
+	workspace := t.TempDir()
+	store := media.NewFileMediaStore()
+	sourceImage := filepath.Join(workspace, "source.png")
+	if err := os.WriteFile(sourceImage, []byte("input-image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/custom/images/edit" {
+			http.NotFound(w, r)
+			return
+		}
+		if !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data;") {
+			t.Fatalf("unexpected content type: %q", r.Header.Get("Content-Type"))
+		}
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			t.Fatalf("parse multipart form: %v", err)
+		}
+		if got := r.FormValue("model"); got != "tuzhi-model" {
+			t.Fatalf("unexpected model: %q", got)
+		}
+		if got := r.FormValue("size"); got != "1024x1024" {
+			t.Fatalf("unexpected size: %q", got)
+		}
+		files := r.MultipartForm.File["image[]"]
+		if len(files) != 1 {
+			t.Fatalf("expected one multipart image, got %d", len(files))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{
+				"b64_json": base64.StdEncoding.EncodeToString([]byte("edited-image")),
+			}},
+		})
+	}))
+	defer server.Close()
+
+	tool := NewGenerateImageTool(workspace, false)
+	tool.SetMediaStore(store)
+	tool.getenv = func(name string) string {
+		switch name {
+		case "TUZHI_KEY":
+			return "tuzhi-key"
+		case "TUZHI_IMAGE_MODEL":
+			return "tuzhi-model"
+		case "TUZHI_IMAGE_GEN_BASE":
+			return server.URL + "/custom/images/generate"
+		case "TUZHI_IMAGE_EDIT_BASE":
+			return server.URL + "/custom/images/edit"
+		default:
+			return ""
+		}
+	}
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"prompt":       "edit this",
+		"image":        sourceImage,
+		"aspect_ratio": "1:1",
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if len(result.Media) != 1 {
+		t.Fatalf("expected one media ref, got %v", result.Media)
 	}
 }
 
