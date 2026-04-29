@@ -36,6 +36,15 @@ func (m *mockReactionChannel) SendReaction(ctx context.Context, msg bus.Outbound
 	return m.reactionFn(ctx, msg)
 }
 
+type mockMediaChannel struct {
+	mockChannel
+	mediaFn func(ctx context.Context, msg bus.OutboundMediaMessage) error
+}
+
+func (m *mockMediaChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) error {
+	return m.mediaFn(ctx, msg)
+}
+
 // newTestManager creates a minimal Manager suitable for unit tests.
 func newTestManager() *Manager {
 	return &Manager{
@@ -577,15 +586,123 @@ func TestPreSend_TypingStopCalled(t *testing.T) {
 		},
 	}
 
-	m.RecordTypingStop("test", "123", func() {
+	m.RecordTypingStop("test", "123", "msg-1", func() {
 		stopCalled = true
 	})
 
-	msg := bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello"}
+	msg := bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello", ReplyToMessageID: "msg-1"}
 	m.preSend(context.Background(), "test", msg, ch)
 
 	if !stopCalled {
 		t.Fatal("expected typing stop func to be called")
+	}
+}
+
+func TestPreSendStopsMatchingTypingMessageOnly(t *testing.T) {
+	m := newTestManager()
+	var firstStopped bool
+	var secondStopped bool
+
+	ch := &mockChannel{
+		sendFn: func(_ context.Context, _ bus.OutboundMessage) error {
+			return nil
+		},
+	}
+
+	m.RecordTypingStop("test", "chat1", "msg-1", func() {
+		firstStopped = true
+	})
+	m.RecordTypingStop("test", "chat1", "msg-2", func() {
+		secondStopped = true
+	})
+
+	m.preSend(context.Background(), "test", bus.OutboundMessage{
+		Channel:          "test",
+		ChatID:           "chat1",
+		Content:          "first",
+		ReplyToMessageID: "msg-1",
+	}, ch)
+
+	if !firstStopped {
+		t.Fatal("expected first typing stop to be called")
+	}
+	if secondStopped {
+		t.Fatal("did not expect second typing stop to be called")
+	}
+	if _, loaded := m.typingStops.Load(typingStopKey{channel: "test", chatID: "chat1", messageID: "msg-2"}); !loaded {
+		t.Fatal("expected second typing entry to remain")
+	}
+
+	m.preSend(context.Background(), "test", bus.OutboundMessage{
+		Channel:          "test",
+		ChatID:           "chat1",
+		Content:          "second",
+		ReplyToMessageID: "msg-2",
+	}, ch)
+
+	if !secondStopped {
+		t.Fatal("expected second typing stop to be called")
+	}
+	if _, loaded := m.typingStops.Load(typingStopKey{channel: "test", chatID: "chat1", messageID: "msg-2"}); loaded {
+		t.Fatal("expected second typing entry to be deleted")
+	}
+}
+
+func TestPreSendWithoutReplyStopsAllTypingForChat(t *testing.T) {
+	m := newTestManager()
+	var stopped atomic.Int32
+	var otherStopped bool
+
+	ch := &mockChannel{
+		sendFn: func(_ context.Context, _ bus.OutboundMessage) error {
+			return nil
+		},
+	}
+
+	m.RecordTypingStop("test", "chat1", "msg-1", func() { stopped.Add(1) })
+	m.RecordTypingStop("test", "chat1", "msg-2", func() { stopped.Add(1) })
+	m.RecordTypingStop("test", "other", "msg-3", func() { otherStopped = true })
+
+	m.preSend(context.Background(), "test", bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "chat1",
+		Content: "fallback",
+	}, ch)
+
+	if got := stopped.Load(); got != 2 {
+		t.Fatalf("stopped typing entries = %d, want 2", got)
+	}
+	if otherStopped {
+		t.Fatal("did not expect other chat typing stop to be called")
+	}
+	if _, loaded := m.typingStops.Load(typingStopKey{channel: "test", chatID: "other", messageID: "msg-3"}); !loaded {
+		t.Fatal("expected other chat typing entry to remain")
+	}
+}
+
+func TestRecordTypingStop_ReplacesDuplicateKey(t *testing.T) {
+	m := newTestManager()
+	var firstStopped bool
+	var secondStopped bool
+
+	m.RecordTypingStop("test", "chat1", "msg-1", func() {
+		firstStopped = true
+	})
+	m.RecordTypingStop("test", "chat1", "msg-1", func() {
+		secondStopped = true
+	})
+
+	if !firstStopped {
+		t.Fatal("expected replaced typing stop to be called")
+	}
+	if secondStopped {
+		t.Fatal("did not expect replacement typing stop to be called yet")
+	}
+
+	m.stopTypingForOutbound("test", "chat1", "msg-1")
+
+	if !secondStopped {
+		t.Fatal("expected replacement typing stop to be called")
 	}
 }
 
@@ -623,12 +740,12 @@ func TestPreSend_TypingAndPlaceholder(t *testing.T) {
 		},
 	}
 
-	m.RecordTypingStop("test", "123", func() {
+	m.RecordTypingStop("test", "123", "msg-1", func() {
 		stopCalled = true
 	})
 	m.RecordPlaceholder("test", "123", "456")
 
-	msg := bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello"}
+	msg := bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello", ReplyToMessageID: "msg-1"}
 	edited := m.preSend(context.Background(), "test", msg, ch)
 
 	if !stopCalled {
@@ -666,7 +783,7 @@ func TestRecordTypingStop_ConcurrentSafe(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			chatID := fmt.Sprintf("chat_%d", i%10)
-			m.RecordTypingStop("test", chatID, func() {})
+			m.RecordTypingStop("test", chatID, fmt.Sprintf("msg_%d", i), func() {})
 		}(i)
 	}
 	wg.Wait()
@@ -700,6 +817,47 @@ func TestSendWithRetry_PreSendEditsPlaceholder(t *testing.T) {
 
 	if sendCalled {
 		t.Fatal("expected Send to NOT be called when placeholder was edited")
+	}
+}
+
+func TestSendMediaWithRetry_StopsMatchingTypingMessage(t *testing.T) {
+	m := newTestManager()
+	var stopCalled bool
+	var mediaCalled bool
+
+	ch := &mockMediaChannel{
+		mockChannel: mockChannel{
+			sendFn: func(_ context.Context, _ bus.OutboundMessage) error {
+				return nil
+			},
+		},
+		mediaFn: func(_ context.Context, _ bus.OutboundMediaMessage) error {
+			mediaCalled = true
+			return nil
+		},
+	}
+
+	m.RecordTypingStop("test", "chat1", "msg-1", func() {
+		stopCalled = true
+	})
+
+	w := &channelWorker{
+		ch:      ch,
+		limiter: rate.NewLimiter(rate.Inf, 1),
+	}
+
+	m.sendMediaWithRetry(context.Background(), "test", w, bus.OutboundMediaMessage{
+		Channel:          "test",
+		ChatID:           "chat1",
+		Parts:            []bus.MediaPart{{Type: "image", Ref: "media://1"}},
+		ReplyToMessageID: "msg-1",
+	})
+
+	if !stopCalled {
+		t.Fatal("expected typing stop to be called before media send")
+	}
+	if !mediaCalled {
+		t.Fatal("expected SendMedia to be called")
 	}
 }
 
@@ -769,7 +927,7 @@ func TestTypingStopJanitorEviction(t *testing.T) {
 
 	var stopCalled atomic.Bool
 	// Store a typing entry with a creation time far in the past
-	m.typingStops.Store("test:123", typingEntry{
+	m.typingStops.Store(typingStopKey{channel: "test", chatID: "123", messageID: "msg-1"}, typingEntry{
 		stop:      func() { stopCalled.Store(true) },
 		createdAt: time.Now().Add(-10 * time.Minute), // well past typingStopTTL
 	})
@@ -801,7 +959,7 @@ func TestTypingStopJanitorEviction(t *testing.T) {
 	}
 
 	// Verify entry was deleted
-	if _, loaded := m.typingStops.Load("test:123"); loaded {
+	if _, loaded := m.typingStops.Load(typingStopKey{channel: "test", chatID: "123", messageID: "msg-1"}); loaded {
 		t.Fatal("expected typing entry to be deleted after eviction")
 	}
 }
@@ -853,12 +1011,12 @@ func TestPreSendStillWorksWithWrappedTypes(t *testing.T) {
 	}
 
 	// Use the new wrapped types via the public API
-	m.RecordTypingStop("test", "chat1", func() {
+	m.RecordTypingStop("test", "chat1", "msg-1", func() {
 		stopCalled = true
 	})
 	m.RecordPlaceholder("test", "chat1", "ph_id")
 
-	msg := bus.OutboundMessage{Channel: "test", ChatID: "chat1", Content: "response"}
+	msg := bus.OutboundMessage{Channel: "test", ChatID: "chat1", Content: "response", ReplyToMessageID: "msg-1"}
 	edited := m.preSend(context.Background(), "test", msg, ch)
 
 	if !stopCalled {

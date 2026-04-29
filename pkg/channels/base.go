@@ -275,7 +275,7 @@ func (c *BaseChannel) HandleMessage(
 		// Typing — independent pipeline
 		if tc, ok := c.owner.(TypingCapable); ok {
 			if stop, err := tc.StartTyping(ctx, chatID); err == nil {
-				c.placeholderRecorder.RecordTypingStop(c.name, chatID, stop)
+				c.placeholderRecorder.RecordTypingStop(c.name, chatID, messageID, stop)
 			}
 		}
 		// Reaction — independent pipeline

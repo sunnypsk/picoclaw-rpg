@@ -44,6 +44,12 @@ type typingEntry struct {
 	createdAt time.Time
 }
 
+type typingStopKey struct {
+	channel   string
+	chatID    string
+	messageID string
+}
+
 // reactionEntry wraps a reaction undo function with a creation timestamp for TTL eviction.
 type reactionEntry struct {
 	undo      func()
@@ -86,7 +92,7 @@ type Manager struct {
 	httpServer    *http.Server
 	mu            sync.RWMutex
 	placeholders  sync.Map // "channel:chatID" → placeholderID (string)
-	typingStops   sync.Map // "channel:chatID" → func()
+	typingStops   sync.Map // typingStopKey -> typingEntry
 	reactionUndos sync.Map // "channel:chatID" → reactionEntry
 }
 
@@ -103,9 +109,46 @@ func (m *Manager) RecordPlaceholder(channel, chatID, placeholderID string) {
 
 // RecordTypingStop registers a typing stop function for later invocation.
 // Implements PlaceholderRecorder.
-func (m *Manager) RecordTypingStop(channel, chatID string, stop func()) {
-	key := channel + ":" + chatID
-	m.typingStops.Store(key, typingEntry{stop: stop, createdAt: time.Now()})
+func (m *Manager) RecordTypingStop(channel, chatID, messageID string, stop func()) {
+	if stop == nil {
+		return
+	}
+	key := typingStopKey{channel: channel, chatID: chatID, messageID: messageID}
+	entry := typingEntry{stop: stop, createdAt: time.Now()}
+	if previous, loaded := m.typingStops.Swap(key, entry); loaded {
+		stopTypingEntry(previous)
+	}
+}
+
+func (m *Manager) stopTypingForOutbound(channel, chatID, messageID string) {
+	if messageID != "" {
+		m.stopTypingByKey(typingStopKey{channel: channel, chatID: chatID, messageID: messageID})
+		return
+	}
+	m.stopAllTypingForChat(channel, chatID)
+}
+
+func (m *Manager) stopTypingByKey(key typingStopKey) {
+	if value, loaded := m.typingStops.LoadAndDelete(key); loaded {
+		stopTypingEntry(value)
+	}
+}
+
+func (m *Manager) stopAllTypingForChat(channel, chatID string) {
+	m.typingStops.Range(func(key, _ any) bool {
+		typedKey, ok := key.(typingStopKey)
+		if !ok || typedKey.channel != channel || typedKey.chatID != chatID {
+			return true
+		}
+		m.stopTypingByKey(typedKey)
+		return true
+	})
+}
+
+func stopTypingEntry(value any) {
+	if entry, ok := value.(typingEntry); ok && entry.stop != nil {
+		entry.stop()
+	}
 }
 
 // RecordReactionUndo registers a reaction undo function for later invocation.
@@ -121,11 +164,7 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	key := name + ":" + msg.ChatID
 
 	// 1. Stop typing
-	if v, loaded := m.typingStops.LoadAndDelete(key); loaded {
-		if entry, ok := v.(typingEntry); ok {
-			entry.stop() // idempotent, safe
-		}
-	}
+	m.stopTypingForOutbound(name, msg.ChatID, msg.ReplyToMessageID)
 
 	// 2. Undo reaction
 	if v, loaded := m.reactionUndos.LoadAndDelete(key); loaded {
@@ -699,6 +738,8 @@ func (m *Manager) runReactionWorker(ctx context.Context, name string, w *channel
 // sendMediaWithRetry sends a media message through the channel with rate limiting and
 // retry logic. If the channel does not implement MediaSender, it silently skips.
 func (m *Manager) sendMediaWithRetry(ctx context.Context, name string, w *channelWorker, msg bus.OutboundMediaMessage) {
+	m.stopTypingForOutbound(name, msg.ChatID, msg.ReplyToMessageID)
+
 	ms, ok := w.ch.(MediaSender)
 	if !ok {
 		logger.DebugCF("channels", "Channel does not support MediaSender, skipping media", map[string]any{

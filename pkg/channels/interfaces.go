@@ -45,6 +45,6 @@ type PlaceholderCapable interface {
 // Manager uses the registered state on outbound to stop typing and edit placeholders.
 type PlaceholderRecorder interface {
 	RecordPlaceholder(channel, chatID, placeholderID string)
-	RecordTypingStop(channel, chatID string, stop func())
+	RecordTypingStop(channel, chatID, messageID string, stop func())
 	RecordReactionUndo(channel, chatID string, undo func())
 }
