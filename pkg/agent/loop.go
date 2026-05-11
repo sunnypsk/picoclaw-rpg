@@ -776,6 +776,7 @@ func (al *AgentLoop) buildPromptMessages(
 		autoRecallQuery = opts.AutoRecallQuery
 	}
 	messages = injectAutoRecallHints(messages, al.buildAutoRecallHints(ctx, agent, autoRecallQuery))
+	messages = injectActiveCharacterContext(messages, buildActiveCharacterContext(agent, opts))
 
 	maxMediaSize := config.DefaultMaxMediaSize
 	if al != nil && al.cfg != nil {
