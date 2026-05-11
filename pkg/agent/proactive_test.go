@@ -427,7 +427,7 @@ func TestBuildProactivePrompt_IncludesAbsoluteTimesAndRecentTurnContext(t *testi
 		LatestAssistant: "早兩日你都講過佢勁煩",
 	}
 
-	prompt := buildProactivePrompt("person_sunny", rel, eval, now, snapshot)
+	prompt := buildProactivePrompt(defaultNPCState(), "person_sunny", rel, eval, now, snapshot)
 
 	if !strings.Contains(prompt, "2026-03-20T12:31:03+08:00") {
 		t.Fatalf("prompt missing absolute current timestamp: %q", prompt)
@@ -440,6 +440,107 @@ func TestBuildProactivePrompt_IncludesAbsoluteTimesAndRecentTurnContext(t *testi
 	}
 	if !strings.Contains(prompt, "Recalled memory can be stale.") {
 		t.Fatalf("prompt missing stale memory guidance: %q", prompt)
+	}
+}
+
+func TestProactivePromptIncludesSelfSnapshotForMeaningfulState(t *testing.T) {
+	now := time.Date(2026, 3, 20, 12, 31, 3, 0, time.FixedZone("HKT", 8*60*60))
+	state := defaultNPCState()
+	state.Emotion = NPCEmotion{
+		Name:      "playful",
+		Intensity: NPCEmotionIntensityMid,
+		Reason:    "I enjoyed the last joke.",
+	}
+	state.Location = NPCLocation{
+		Area:     "harbor",
+		Scene:    "boardwalk",
+		Activity: "taking a slow walk",
+	}
+	state.RecentEvents = []NPCRecentEvent{
+		{At: "2026-03-20T12:05:00+08:00", Type: "scene", Summary: "I noticed the harbor lights."},
+	}
+	rel := NPCRelationship{
+		LastChannel:       "telegram",
+		LastChatID:        "chat1",
+		LastPeerKind:      "direct",
+		LastUserMessageAt: "2026-03-20T04:00:00Z",
+	}
+	eval := proactiveEvaluation{
+		Silence:     3 * time.Hour,
+		Tolerance:   2 * time.Hour,
+		Probability: 0.5,
+	}
+
+	prompt := buildProactivePrompt(state, "person_sunny", rel, eval, now, proactiveSessionSnapshot{})
+
+	for _, want := range []string{
+		"Self snapshot:",
+		"Emotion: playful, mid intensity. Reason: I enjoyed the last joke.",
+		"Location: harbor / boardwalk / taking a slow walk",
+		"I noticed the harbor lights.",
+		"If there is a strong unresolved latest user topic, prefer continuing that topic.",
+		"If there is no strong unresolved topic and Self snapshot is meaningful",
+		"If Self snapshot is bland, stale, or not worth sharing, stay silent.",
+		"Never present the snapshot as proof of a real-world event.",
+		"Relationship snapshot:",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("proactive prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestProactiveSelfSnapshotSkipsDefaultState(t *testing.T) {
+	rel := NPCRelationship{
+		LastChannel:  "telegram",
+		LastChatID:   "chat1",
+		LastPeerKind: "direct",
+	}
+	state := defaultNPCState()
+
+	if got := formatProactiveSelfSnapshot(state, "person_sunny", rel); got != "" {
+		t.Fatalf("formatProactiveSelfSnapshot() = %q, want empty", got)
+	}
+
+	prompt := buildProactivePrompt(
+		state,
+		"person_sunny",
+		rel,
+		proactiveEvaluation{Silence: time.Hour, Tolerance: time.Hour, Probability: 1},
+		time.Now(),
+		proactiveSessionSnapshot{},
+	)
+	if strings.Contains(prompt, "Self snapshot:") {
+		t.Fatalf("default state should not inject self snapshot:\n%s", prompt)
+	}
+}
+
+func TestProactiveSelfSnapshotSanitizesIdentifiers(t *testing.T) {
+	state := defaultNPCState()
+	state.Emotion = NPCEmotion{
+		Name:      "curious",
+		Intensity: NPCEmotionIntensityMid,
+		Reason:    "person_sunny mentioned telegram:user1 in chat1.",
+	}
+	state.People["person_sunny"] = NPCPerson{DisplayName: "Sunny"}
+	state.IdentifierMap["telegram:user1"] = "person_sunny"
+	state.RecentEvents = []NPCRecentEvent{
+		{At: "2026-03-20T12:05:00+08:00", Type: "chat", Summary: "I thought about person_sunny, telegram:user1, user1, and chat1."},
+	}
+	rel := NPCRelationship{
+		LastChannel:  "telegram",
+		LastChatID:   "chat1",
+		LastPeerKind: "direct",
+	}
+
+	got := formatProactiveSelfSnapshot(state, "person_sunny", rel)
+	if !strings.Contains(got, "Sunny") {
+		t.Fatalf("snapshot should keep display name replacement:\n%s", got)
+	}
+	for _, forbidden := range []string{"person_sunny", "telegram:user1", "user1", "chat1"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("snapshot leaked raw identifier %q:\n%s", forbidden, got)
+		}
 	}
 }
 

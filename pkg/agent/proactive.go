@@ -158,7 +158,7 @@ func (al *AgentLoop) runProactiveOutreach(
 		ContextSessionKey: routedSessionKey,
 		Channel:           rel.LastChannel,
 		ChatID:            rel.LastChatID,
-		UserMessage:       buildProactivePrompt(relationshipKey, rel, eval, currentTime, snapshot),
+		UserMessage:       buildProactivePrompt(state, relationshipKey, rel, eval, currentTime, snapshot),
 		AutoRecallQuery:   proactiveAutoRecallQueryFromHistory(history),
 		DefaultResponse:   proactiveNoopToken,
 		EnableSummary:     false,
@@ -310,6 +310,7 @@ func proactiveSessionSnapshotFromHistory(history []providers.Message) proactiveS
 }
 
 func buildProactivePrompt(
+	state NPCState,
 	relationshipKey string,
 	rel NPCRelationship,
 	eval proactiveEvaluation,
@@ -317,6 +318,11 @@ func buildProactivePrompt(
 	snapshot proactiveSessionSnapshot,
 ) string {
 	relationshipJSON, _ := json.MarshalIndent(rel, "", "  ")
+	selfSnapshot := formatProactiveSelfSnapshot(state, relationshipKey, rel)
+	selfSnapshotSection := ""
+	if selfSnapshot != "" {
+		selfSnapshotSection = "\n" + selfSnapshot
+	}
 	return fmt.Sprintf(`# Proactive Outreach Check
 
 Current time: %s
@@ -333,6 +339,7 @@ Last proactive success at: %s
 Latest visible session turn role: %s
 Latest user turn preview: %s
 Latest assistant turn preview: %s
+%s
 
 Relationship snapshot:
 %s
@@ -344,6 +351,10 @@ Rules:
 - Prefer silence if the user may be working, sleeping, focused, socially tired, or simply seems to want space.
 - Treat the latest visible routed-session turn and the exact timestamps above as the ground truth for whether a topic is still current.
 - Recalled memory can be stale. Do not talk about an old issue as if it is happening right now unless the latest visible session context shows it is still ongoing.
+- If there is a strong unresolved latest user topic, prefer continuing that topic.
+- If there is no strong unresolved topic and Self snapshot is meaningful, you may send one small first-person life update.
+- If Self snapshot is bland, stale, or not worth sharing, stay silent.
+- Never present the snapshot as proof of a real-world event.
 - If you decide to send something, use the message tool with a short, natural message. You can omit channel/chat_id and use the current target.
 - If you decide not to send anything, respond ONLY with: %s
 - Do not mention probabilities, timers, heartbeat checks, or internal state.
@@ -355,7 +366,44 @@ Rules:
 		proactiveValueOrDefault(snapshot.LatestRole),
 		proactivePreviewOrDefault(snapshot.LatestUser),
 		proactivePreviewOrDefault(snapshot.LatestAssistant),
+		selfSnapshotSection,
 		string(relationshipJSON), proactiveNoopToken)
+}
+
+func formatProactiveSelfSnapshot(state NPCState, relationshipKey string, rel NPCRelationship) string {
+	state = normalizeNPCState(state)
+	if !activeCharacterHasMeaningfulState(state, false) {
+		return ""
+	}
+
+	peerID := proactivePeerID(state, relationshipKey, rel)
+	displayName := displayNameForPerson(state, relationshipKey)
+	replacements := activeCharacterReplacements(processOptions{
+		Channel:  rel.LastChannel,
+		ChatID:   rel.LastChatID,
+		SenderID: peerID,
+	}, relationshipKey, displayName)
+
+	var sb strings.Builder
+	sb.WriteString("Self snapshot:\n")
+	if line := activeCharacterEmotionLine(state.Emotion, replacements); line != "" {
+		sb.WriteString("- Emotion: ")
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+	if line := activeCharacterLocationLine(state.Location, replacements); line != "" {
+		sb.WriteString("- Location: ")
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+	if events := activeCharacterRecentEventLines(state.RecentEvents, replacements); len(events) > 0 {
+		sb.WriteString("- Recent events:\n")
+		for i, event := range events {
+			fmt.Fprintf(&sb, "  %d. %s\n", i+1, event)
+		}
+	}
+
+	return strings.TrimSpace(sb.String())
 }
 
 func formatProactiveCurrentTime(currentTime time.Time) string {
