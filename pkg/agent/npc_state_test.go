@@ -500,6 +500,262 @@ func TestApplyHeartbeatLocationPolicy_StartsOutingWhenIdle(t *testing.T) {
 	}
 }
 
+type heartbeatAmbientTestProvider struct {
+	response     string
+	calls        atomic.Int32
+	lastMessages []providers.Message
+}
+
+func (p *heartbeatAmbientTestProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	if len(messages) > 0 && strings.Contains(messages[0].Content, npcHeartbeatAmbientPromptTag) {
+		p.calls.Add(1)
+		p.lastMessages = append([]providers.Message(nil), messages...)
+		return &providers.LLMResponse{Content: p.response}, nil
+	}
+	return &providers.LLMResponse{Content: "ok"}, nil
+}
+
+func (p *heartbeatAmbientTestProvider) GetDefaultModel() string {
+	return "mock-model"
+}
+
+func newStateHeartbeatTestLoop(
+	t *testing.T,
+	provider providers.LLMProvider,
+	locationCfg config.HeartbeatLocationConfig,
+) (*AgentLoop, *AgentInstance) {
+	t.Helper()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         t.TempDir(),
+				Model:             "mock-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+		Heartbeat: config.HeartbeatConfig{
+			Enabled:  true,
+			Interval: 30,
+			Location: locationCfg,
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("default agent is nil")
+	}
+	return al, agent
+}
+
+func TestRunStateHeartbeat_AppliesLocationPolicyWithoutProcessHeartbeat(t *testing.T) {
+	now := time.Now()
+	locationCfg := defaultHeartbeatLocationConfig()
+	locationCfg.OutingProbability = 1
+	provider := &heartbeatAmbientTestProvider{response: `{"event":"I sorted through a few thoughts."}`}
+	al, agent := newStateHeartbeatTestLoop(t, provider, locationCfg)
+
+	state := defaultNPCState()
+	state.Relationships = map[string]NPCRelationship{
+		"telegram:user1": {
+			LastInteractionAt: now.Add(-3 * time.Hour).UTC().Format(time.RFC3339),
+		},
+	}
+	if err := agent.StateStore.SaveState(state); err != nil {
+		t.Fatalf("SaveState() error: %v", err)
+	}
+
+	al.RunStateHeartbeat(context.Background())
+
+	loaded, err := agent.StateStore.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState() error: %v", err)
+	}
+	if loaded.Location.Area == "base" || loaded.Location.MoveReason != npcHeartbeatMoveReason {
+		t.Fatalf("expected state heartbeat to start an outing, got %+v", loaded.Location)
+	}
+	if provider.calls.Load() != 0 {
+		t.Fatalf("ambient provider calls = %d, want 0 when location changed", provider.calls.Load())
+	}
+}
+
+func TestRunStateHeartbeat_AppendsAmbientEventWhenLocationDoesNotMove(t *testing.T) {
+	now := time.Date(2026, 3, 5, 21, 0, 0, 0, time.UTC)
+	provider := &heartbeatAmbientTestProvider{response: `{"event":"I watched the harbor lights for a moment."}`}
+	al, agent := newStateHeartbeatTestLoop(t, provider, defaultHeartbeatLocationConfig())
+
+	state := defaultNPCState()
+	state.Emotion = NPCEmotion{Name: "curious", Intensity: NPCEmotionIntensityMid, Reason: "thinking about the evening"}
+	state.Location = NPCLocation{Area: "harbor", Scene: "boardwalk", Activity: "taking a slow walk"}
+	state.Relationships = map[string]NPCRelationship{
+		"telegram:user1": {
+			LastInteractionAt: now.Add(-3 * time.Hour).Format(time.RFC3339),
+		},
+	}
+	if err := agent.StateStore.SaveState(state); err != nil {
+		t.Fatalf("SaveState() error: %v", err)
+	}
+
+	changed := al.runStateHeartbeatForAgent(context.Background(), agent, now, 0.9, 0, 45)
+	if !changed {
+		t.Fatal("expected ambient heartbeat to change state")
+	}
+	if provider.calls.Load() != 1 {
+		t.Fatalf("ambient provider calls = %d, want 1", provider.calls.Load())
+	}
+	loaded, err := agent.StateStore.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState() error: %v", err)
+	}
+	if loaded.Location.Area != "harbor" || loaded.Emotion.Name != "curious" {
+		t.Fatalf("ambient event should not change location/emotion, got location=%+v emotion=%+v", loaded.Location, loaded.Emotion)
+	}
+	if len(loaded.Relationships) != 1 {
+		t.Fatalf("ambient event should not change relationships, got %+v", loaded.Relationships)
+	}
+	if len(loaded.RecentEvents) == 0 {
+		t.Fatal("expected ambient recent event")
+	}
+	last := loaded.RecentEvents[len(loaded.RecentEvents)-1]
+	if last.Type != "ambient" || last.Summary != "I watched the harbor lights for a moment." {
+		t.Fatalf("unexpected ambient event: %+v", last)
+	}
+}
+
+func TestRunStateHeartbeat_SkipsAmbientWithinCooldown(t *testing.T) {
+	now := time.Date(2026, 3, 5, 21, 0, 0, 0, time.UTC)
+	provider := &heartbeatAmbientTestProvider{response: `{"event":"I sorted through a few thoughts."}`}
+	al, agent := newStateHeartbeatTestLoop(t, provider, defaultHeartbeatLocationConfig())
+
+	state := defaultNPCState()
+	state.Relationships = map[string]NPCRelationship{
+		"telegram:user1": {
+			LastInteractionAt: now.Add(-3 * time.Hour).Format(time.RFC3339),
+		},
+	}
+	state.RecentEvents = []NPCRecentEvent{{
+		At:      stateTimestampString(now.Add(-30 * time.Minute)),
+		Type:    "ambient",
+		Summary: "I stretched at the workspace.",
+	}}
+	if err := agent.StateStore.SaveState(state); err != nil {
+		t.Fatalf("SaveState() error: %v", err)
+	}
+
+	changed := al.runStateHeartbeatForAgent(context.Background(), agent, now, 0.9, 0, 45)
+	if changed {
+		t.Fatal("expected no state change inside ambient cooldown")
+	}
+	if provider.calls.Load() != 0 {
+		t.Fatalf("ambient provider calls = %d, want 0 inside cooldown", provider.calls.Load())
+	}
+}
+
+func TestRunStateHeartbeat_EmptyOrInvalidAmbientResponseWritesNothing(t *testing.T) {
+	tests := []struct {
+		name     string
+		response string
+	}{
+		{name: "empty event", response: `{"event":""}`},
+		{name: "invalid json", response: `not-json`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Date(2026, 3, 5, 21, 0, 0, 0, time.UTC)
+			provider := &heartbeatAmbientTestProvider{response: tt.response}
+			al, agent := newStateHeartbeatTestLoop(t, provider, defaultHeartbeatLocationConfig())
+
+			state := defaultNPCState()
+			state.Relationships = map[string]NPCRelationship{
+				"telegram:user1": {
+					LastInteractionAt: now.Add(-3 * time.Hour).Format(time.RFC3339),
+				},
+			}
+			if err := agent.StateStore.SaveState(state); err != nil {
+				t.Fatalf("SaveState() error: %v", err)
+			}
+
+			changed := al.runStateHeartbeatForAgent(context.Background(), agent, now, 0.9, 0, 45)
+			if changed {
+				t.Fatal("expected no state change for empty/invalid ambient response")
+			}
+			loaded, err := agent.StateStore.LoadState()
+			if err != nil {
+				t.Fatalf("LoadState() error: %v", err)
+			}
+			if len(loaded.RecentEvents) != 0 {
+				t.Fatalf("expected no recent events, got %+v", loaded.RecentEvents)
+			}
+		})
+	}
+}
+
+func TestRunStateHeartbeat_LocationChangeTakesPrecedenceOverAmbient(t *testing.T) {
+	now := time.Date(2026, 3, 5, 21, 0, 0, 0, time.UTC)
+	provider := &heartbeatAmbientTestProvider{response: `{"event":"I sorted through a few thoughts."}`}
+	al, agent := newStateHeartbeatTestLoop(t, provider, defaultHeartbeatLocationConfig())
+
+	state := defaultNPCState()
+	state.Relationships = map[string]NPCRelationship{
+		"telegram:user1": {
+			LastInteractionAt: now.Add(-3 * time.Hour).Format(time.RFC3339),
+		},
+	}
+	if err := agent.StateStore.SaveState(state); err != nil {
+		t.Fatalf("SaveState() error: %v", err)
+	}
+
+	changed := al.runStateHeartbeatForAgent(context.Background(), agent, now, 0.01, 1, 50)
+	if !changed {
+		t.Fatal("expected location heartbeat to change state")
+	}
+	if provider.calls.Load() != 0 {
+		t.Fatalf("ambient provider calls = %d, want 0 when location changed", provider.calls.Load())
+	}
+	loaded, err := agent.StateStore.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState() error: %v", err)
+	}
+	for _, event := range loaded.RecentEvents {
+		if event.Type == "ambient" {
+			t.Fatalf("ambient event should not be written when location changed: %+v", loaded.RecentEvents)
+		}
+	}
+}
+
+func TestLatestInteractionAt_IgnoresAmbientEvents(t *testing.T) {
+	now := time.Date(2026, 3, 5, 21, 0, 0, 0, time.UTC)
+	chatAt := now.Add(-3 * time.Hour)
+	ambientAt := now.Add(-30 * time.Minute)
+	state := defaultNPCState()
+	state.Relationships = map[string]NPCRelationship{
+		"telegram:user1": {
+			LastInteractionAt: chatAt.Format(time.RFC3339),
+		},
+	}
+	state.RecentEvents = []NPCRecentEvent{{
+		At:      ambientAt.Format(time.RFC3339),
+		Type:    "ambient",
+		Summary: "I sorted through a few thoughts.",
+	}}
+
+	got, ok := latestInteractionAt(state)
+	if !ok {
+		t.Fatal("expected latest interaction")
+	}
+	if !got.Equal(chatAt) {
+		t.Fatalf("latestInteractionAt() = %s, want %s", got.Format(time.RFC3339), chatAt.Format(time.RFC3339))
+	}
+}
+
 func TestApplyHeartbeatLocationPolicy_NoOutingBeforeIdleThreshold(t *testing.T) {
 	now := time.Date(2026, 3, 5, 21, 0, 0, 0, time.Local)
 	state := defaultNPCState()
@@ -574,6 +830,9 @@ func TestNormalizeHeartbeatLocationConfig_AppliesFallbacks(t *testing.T) {
 	}
 	if cfg.MaxDurationMinutes != cfg.MinDurationMinutes {
 		t.Fatalf("MaxDurationMinutes = %d, want %d", cfg.MaxDurationMinutes, cfg.MinDurationMinutes)
+	}
+	if cfg.AmbientCooldownMinutes != npcHeartbeatDefaultAmbientCooldown {
+		t.Fatalf("AmbientCooldownMinutes = %d, want %d", cfg.AmbientCooldownMinutes, npcHeartbeatDefaultAmbientCooldown)
 	}
 }
 

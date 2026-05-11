@@ -548,7 +548,6 @@ func (al *AgentLoop) ProcessHeartbeat(
 		return "", err
 	}
 
-	al.maybeApplyHeartbeatLocationPolicy(agent)
 	return response, nil
 }
 

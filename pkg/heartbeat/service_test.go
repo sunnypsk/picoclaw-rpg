@@ -47,6 +47,36 @@ func TestExecuteHeartbeat_Async(t *testing.T) {
 	}
 }
 
+func TestExecuteHeartbeat_RunsTickHandlerWithoutPrompt(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "heartbeat-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs.stopChan = make(chan struct{})
+
+	tickCalled := false
+	handlerCalled := false
+	hs.SetTickHandler(func() {
+		tickCalled = true
+	})
+	hs.SetHandler(func(prompt, channel, chatID string) *tools.ToolResult {
+		handlerCalled = true
+		return tools.SilentResult("ok")
+	})
+
+	hs.executeHeartbeat()
+
+	if !tickCalled {
+		t.Fatal("expected tick handler to run even without HEARTBEAT.md prompt")
+	}
+	if handlerCalled {
+		t.Fatal("handler should not run when HEARTBEAT.md prompt is missing")
+	}
+}
+
 func TestExecuteHeartbeat_ResultLogging(t *testing.T) {
 	tests := []struct {
 		name    string

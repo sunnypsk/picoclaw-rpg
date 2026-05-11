@@ -475,11 +475,13 @@ type HeartbeatConfig struct {
 }
 
 type HeartbeatLocationConfig struct {
-	Enabled              bool    `json:"enabled,omitempty"                env:"PICOCLAW_HEARTBEAT_LOCATION_ENABLED"`
-	IdleThresholdMinutes int     `json:"idle_threshold_minutes,omitempty" env:"PICOCLAW_HEARTBEAT_LOCATION_IDLE_THRESHOLD_MINUTES"`
-	OutingProbability    float64 `json:"outing_probability,omitempty"     env:"PICOCLAW_HEARTBEAT_LOCATION_OUTING_PROBABILITY"`
-	MinDurationMinutes   int     `json:"min_duration_minutes,omitempty"   env:"PICOCLAW_HEARTBEAT_LOCATION_MIN_DURATION_MINUTES"`
-	MaxDurationMinutes   int     `json:"max_duration_minutes,omitempty"   env:"PICOCLAW_HEARTBEAT_LOCATION_MAX_DURATION_MINUTES"`
+	Enabled                bool    `json:"enabled,omitempty"                  env:"PICOCLAW_HEARTBEAT_LOCATION_ENABLED"`
+	IdleThresholdMinutes   int     `json:"idle_threshold_minutes,omitempty"   env:"PICOCLAW_HEARTBEAT_LOCATION_IDLE_THRESHOLD_MINUTES"`
+	OutingProbability      float64 `json:"outing_probability,omitempty"       env:"PICOCLAW_HEARTBEAT_LOCATION_OUTING_PROBABILITY"`
+	MinDurationMinutes     int     `json:"min_duration_minutes,omitempty"     env:"PICOCLAW_HEARTBEAT_LOCATION_MIN_DURATION_MINUTES"`
+	MaxDurationMinutes     int     `json:"max_duration_minutes,omitempty"     env:"PICOCLAW_HEARTBEAT_LOCATION_MAX_DURATION_MINUTES"`
+	AmbientEnabled         bool    `json:"ambient_enabled,omitempty"          env:"PICOCLAW_HEARTBEAT_LOCATION_AMBIENT_ENABLED"`
+	AmbientCooldownMinutes int     `json:"ambient_cooldown_minutes,omitempty" env:"PICOCLAW_HEARTBEAT_LOCATION_AMBIENT_COOLDOWN_MINUTES"`
 }
 
 type HeartbeatProactiveConfig struct {

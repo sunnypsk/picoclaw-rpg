@@ -355,7 +355,9 @@
       "idle_threshold_minutes": 60,
       "outing_probability": 0.2,
       "min_duration_minutes": 35,
-      "max_duration_minutes": 75
+      "max_duration_minutes": 75,
+      "ambient_enabled": true,
+      "ambient_cooldown_minutes": 180
     },
     "proactive": {
       "enabled": false,

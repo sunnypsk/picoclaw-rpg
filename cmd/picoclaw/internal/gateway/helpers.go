@@ -116,6 +116,7 @@ func gatewayCmd(debug bool) error {
 		return tools.SilentResult(response)
 	})
 	heartbeatService.SetTickHandler(func() {
+		agentLoop.RunStateHeartbeat(context.Background())
 		agentLoop.RunProactiveHeartbeat(context.Background())
 	})
 

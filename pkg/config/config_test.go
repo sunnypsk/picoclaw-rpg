@@ -251,6 +251,12 @@ func TestDefaultConfig_HeartbeatEnabled(t *testing.T) {
 	if cfg.Heartbeat.Location.MaxDurationMinutes != 75 {
 		t.Errorf("Heartbeat location max duration = %d, want 75", cfg.Heartbeat.Location.MaxDurationMinutes)
 	}
+	if !cfg.Heartbeat.Location.AmbientEnabled {
+		t.Error("Heartbeat location ambient mode should be enabled by default")
+	}
+	if cfg.Heartbeat.Location.AmbientCooldownMinutes != 180 {
+		t.Errorf("Heartbeat location ambient cooldown = %d, want 180", cfg.Heartbeat.Location.AmbientCooldownMinutes)
+	}
 	if cfg.Heartbeat.Proactive.Enabled {
 		t.Error("Heartbeat proactive mode should be disabled by default")
 	}
@@ -569,6 +575,7 @@ func TestDefaultConfig_WorkspacePath_Default(t *testing.T) {
 	t.Setenv("PICOCLAW_HOME", "")
 	// Set a known home for consistent test results
 	t.Setenv("HOME", "/tmp/home")
+	t.Setenv("USERPROFILE", "/tmp/home")
 
 	cfg := DefaultConfig()
 	want := filepath.Join("/tmp/home", ".picoclaw", "workspace")
@@ -582,7 +589,7 @@ func TestDefaultConfig_WorkspacePath_WithPicoclawHome(t *testing.T) {
 	t.Setenv("PICOCLAW_HOME", "/custom/picoclaw/home")
 
 	cfg := DefaultConfig()
-	want := "/custom/picoclaw/home/workspace"
+	want := filepath.Join("/custom/picoclaw/home", "workspace")
 
 	if cfg.Agents.Defaults.Workspace != want {
 		t.Errorf("Workspace path with PICOCLAW_HOME = %q, want %q", cfg.Agents.Defaults.Workspace, want)

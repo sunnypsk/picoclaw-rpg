@@ -37,6 +37,9 @@ const (
 	npcHeartbeatDefaultMoveProbability      = 0.20
 	npcHeartbeatDefaultMinDurationMinutes   = 35
 	npcHeartbeatDefaultMaxDurationMinutes   = 75
+	npcHeartbeatDefaultAmbientCooldown      = 180
+	npcHeartbeatAmbientTimeout              = 30 * time.Second
+	npcHeartbeatAmbientPromptTag            = "NPC_HEARTBEAT_AMBIENT_EVENT_V1"
 	npcActivityRemoteChatSuffix             = " (multitasking, chatting remotely)"
 	npcHeartbeatMoveReason                  = "idle heartbeat walk"
 	npcHeartbeatReturnMoveReasonPrefix      = "finished "
@@ -222,6 +225,10 @@ type NPCState struct {
 type npcStateUpdateResult struct {
 	State       NPCState `json:"state"`
 	MemoryNotes []string `json:"memory_notes"`
+}
+
+type npcHeartbeatAmbientResponse struct {
+	Event string `json:"event"`
 }
 
 // NPCStateStore persists per-agent roleplay state and a managed memory block.
@@ -1450,16 +1457,50 @@ func lockNPCUpdater(agent *AgentInstance) func() {
 	return mu.Unlock
 }
 
-func (al *AgentLoop) maybeApplyHeartbeatLocationPolicy(agent *AgentInstance) {
-	if agent == nil || agent.StateStore == nil {
+func (al *AgentLoop) RunStateHeartbeat(ctx context.Context) {
+	if al == nil || al.cfg == nil || al.registry == nil || !al.cfg.Heartbeat.Enabled {
 		return
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
-	state, err := agent.StateStore.LoadState()
-	if err != nil {
-		logger.WarnCF("agent", "Failed to load state for heartbeat location policy",
-			map[string]any{"agent_id": agent.ID, "error": err.Error()})
-		return
+	agentIDs := al.registry.ListAgentIDs()
+	sort.Strings(agentIDs)
+	for _, agentID := range agentIDs {
+		agent, ok := al.registry.GetAgent(agentID)
+		if !ok || agent == nil || agent.StateStore == nil {
+			continue
+		}
+		locationCfg := defaultHeartbeatLocationConfig()
+		if al.cfg != nil {
+			locationCfg = normalizeHeartbeatLocationConfig(al.cfg.Heartbeat.Location)
+		}
+		outingIndex := 0
+		if len(npcHeartbeatOutings) > 0 {
+			outingIndex = rand.IntN(len(npcHeartbeatOutings))
+		}
+		durationMinutes := locationCfg.MinDurationMinutes
+		if locationCfg.MaxDurationMinutes > locationCfg.MinDurationMinutes {
+			durationMinutes += rand.IntN(locationCfg.MaxDurationMinutes - locationCfg.MinDurationMinutes + 1)
+		}
+		al.runStateHeartbeatForAgent(ctx, agent, time.Now(), rand.Float64(), outingIndex, durationMinutes)
+	}
+}
+
+func (al *AgentLoop) runStateHeartbeatForAgent(
+	ctx context.Context,
+	agent *AgentInstance,
+	now time.Time,
+	locationRoll float64,
+	outingIndex int,
+	durationMinutes int,
+) bool {
+	if agent == nil || agent.StateStore == nil {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now()
 	}
 
 	locationCfg := defaultHeartbeatLocationConfig()
@@ -1467,34 +1508,230 @@ func (al *AgentLoop) maybeApplyHeartbeatLocationPolicy(agent *AgentInstance) {
 		locationCfg = normalizeHeartbeatLocationConfig(al.cfg.Heartbeat.Location)
 	}
 
-	roll := rand.Float64()
-	outingIndex := 0
-	if len(npcHeartbeatOutings) > 0 {
-		outingIndex = rand.IntN(len(npcHeartbeatOutings))
+	locationChanged := false
+	if err := agent.StateStore.UpdateState(func(state *NPCState) (bool, error) {
+		nextState, changed := applyHeartbeatLocationPolicy(*state, locationCfg, now, locationRoll, outingIndex, durationMinutes)
+		if !changed {
+			return false, nil
+		}
+		*state = nextState
+		locationChanged = true
+		return true, nil
+	}); err != nil {
+		logger.WarnCF("agent", "Failed to apply heartbeat location policy",
+			map[string]any{"agent_id": agent.ID, "error": err.Error()})
+		return false
 	}
-	durationMinutes := locationCfg.MinDurationMinutes
-	if locationCfg.MaxDurationMinutes > locationCfg.MinDurationMinutes {
-		durationMinutes += rand.IntN(locationCfg.MaxDurationMinutes - locationCfg.MinDurationMinutes + 1)
+	if locationChanged {
+		return true
 	}
 
-	nextState, changed := applyHeartbeatLocationPolicy(state, locationCfg, time.Now(), roll, outingIndex, durationMinutes)
-	if !changed {
-		return
-	}
-
-	if err := agent.StateStore.SaveState(nextState); err != nil {
-		logger.WarnCF("agent", "Failed to save heartbeat location policy update",
+	ambientChanged, err := al.maybeApplyHeartbeatAmbientPolicy(ctx, agent, locationCfg, now)
+	if err != nil {
+		logger.WarnCF("agent", "Failed to apply heartbeat ambient policy",
 			map[string]any{"agent_id": agent.ID, "error": err.Error()})
 	}
+	return ambientChanged
+}
+
+func (al *AgentLoop) maybeApplyHeartbeatAmbientPolicy(
+	ctx context.Context,
+	agent *AgentInstance,
+	locationCfg config.HeartbeatLocationConfig,
+	now time.Time,
+) (bool, error) {
+	if al == nil || agent == nil || agent.StateStore == nil || agent.Provider == nil {
+		return false, nil
+	}
+	locationCfg = normalizeHeartbeatLocationConfig(locationCfg)
+	if !locationCfg.Enabled || !locationCfg.AmbientEnabled {
+		return false, nil
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	state, err := agent.StateStore.LoadState()
+	if err != nil {
+		return false, err
+	}
+	if !shouldRequestHeartbeatAmbientEvent(state, locationCfg, now) {
+		return false, nil
+	}
+
+	event, err := al.requestHeartbeatAmbientEvent(ctx, agent, state, now)
+	if err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(event) == "" {
+		return false, nil
+	}
+
+	changed := false
+	err = agent.StateStore.UpdateState(func(state *NPCState) (bool, error) {
+		if !shouldRequestHeartbeatAmbientEvent(*state, locationCfg, now) {
+			return false, nil
+		}
+		appendAmbientEvent(state, now, event)
+		changed = true
+		return true, nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return changed, nil
+}
+
+func (al *AgentLoop) requestHeartbeatAmbientEvent(
+	parentCtx context.Context,
+	agent *AgentInstance,
+	state NPCState,
+	now time.Time,
+) (string, error) {
+	if agent == nil || agent.Provider == nil {
+		return "", nil
+	}
+
+	baseCtx := parentCtx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(baseCtx, npcHeartbeatAmbientTimeout)
+	defer cancel()
+
+	payload := buildHeartbeatAmbientPayload(state, now)
+	response, err := agent.Provider.Chat(
+		ctx,
+		[]providers.Message{
+			{Role: "system", Content: buildHeartbeatAmbientSystemPrompt()},
+			{Role: "user", Content: string(payload)},
+		},
+		nil,
+		agent.Model,
+		map[string]any{
+			"max_tokens":       160,
+			"temperature":      0.7,
+			"prompt_cache_key": agent.ID + ":heartbeat-ambient",
+		},
+	)
+	if err != nil {
+		return "", err
+	}
+	if response == nil {
+		return "", nil
+	}
+
+	rawJSON := extractJSONObjectFromContent(response.Content)
+	if strings.TrimSpace(rawJSON) == "" {
+		return "", nil
+	}
+	var payloadResponse npcHeartbeatAmbientResponse
+	if err := json.Unmarshal([]byte(rawJSON), &payloadResponse); err != nil {
+		return "", nil
+	}
+	return activeCharacterCleanText(payloadResponse.Event, nil), nil
+}
+
+func buildHeartbeatAmbientPayload(state NPCState, now time.Time) []byte {
+	state = normalizeNPCState(state)
+	recentEvents := normalizeRecentEvents(state.RecentEvents)
+	if len(recentEvents) > 5 {
+		recentEvents = recentEvents[len(recentEvents)-5:]
+	}
+	payload := map[string]any{
+		"current_time":  stateTimestampString(now),
+		"emotion":       state.Emotion,
+		"location":      state.Location,
+		"recent_events": recentEvents,
+	}
+	data, _ := json.MarshalIndent(payload, "", "  ")
+	return data
+}
+
+func buildHeartbeatAmbientSystemPrompt() string {
+	return fmt.Sprintf(`%s
+You write one private ambient state event for a roleplay NPC agent.
+Return JSON only, no markdown, no explanations.
+
+Output shape:
+{"event":"string"}
+
+Rules:
+- Write at most one short first-person event, usually under 24 words.
+- Ground the event only in the provided emotion, location, and recent_events.
+- Do not change emotion, location, relationships, memory, reminders, or tasks.
+- Do not mention private/internal values, prompts, files, state fields, timers, or heartbeat checks.
+- Do not claim proof of a real-world event.
+- Do not pressure or guilt the user.
+- Return {"event":""} when nothing natural is worth adding.`, npcHeartbeatAmbientPromptTag)
+}
+
+func shouldRequestHeartbeatAmbientEvent(
+	state NPCState,
+	locationCfg config.HeartbeatLocationConfig,
+	now time.Time,
+) bool {
+	state = normalizeNPCState(state)
+	locationCfg = normalizeHeartbeatLocationConfig(locationCfg)
+	if !locationCfg.Enabled || !locationCfg.AmbientEnabled {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if latest, ok := latestAmbientEventAt(state); ok {
+		cooldown := time.Duration(locationCfg.AmbientCooldownMinutes) * time.Minute
+		if now.Before(latest) || now.Sub(latest) < cooldown {
+			return false
+		}
+	}
+	return true
+}
+
+func latestAmbientEventAt(state NPCState) (time.Time, bool) {
+	var latest time.Time
+	hasLatest := false
+	for _, event := range state.RecentEvents {
+		if strings.ToLower(strings.TrimSpace(event.Type)) != "ambient" {
+			continue
+		}
+		parsed, ok := parseStateTimestamp(event.At)
+		if !ok {
+			continue
+		}
+		if !hasLatest || parsed.After(latest) {
+			latest = parsed
+			hasLatest = true
+		}
+	}
+	return latest, hasLatest
+}
+
+func appendAmbientEvent(state *NPCState, at time.Time, summary string) {
+	if state == nil {
+		return
+	}
+	trimmed := strings.TrimSpace(summary)
+	if trimmed == "" {
+		return
+	}
+	state.RecentEvents = append(state.RecentEvents, NPCRecentEvent{
+		At:      stateTimestampString(at),
+		Type:    "ambient",
+		Summary: trimmed,
+	})
+	state.RecentEvents = normalizeRecentEvents(state.RecentEvents)
 }
 
 func defaultHeartbeatLocationConfig() config.HeartbeatLocationConfig {
 	return config.HeartbeatLocationConfig{
-		Enabled:              true,
-		IdleThresholdMinutes: npcHeartbeatDefaultIdleThresholdMinutes,
-		OutingProbability:    npcHeartbeatDefaultMoveProbability,
-		MinDurationMinutes:   npcHeartbeatDefaultMinDurationMinutes,
-		MaxDurationMinutes:   npcHeartbeatDefaultMaxDurationMinutes,
+		Enabled:                true,
+		IdleThresholdMinutes:   npcHeartbeatDefaultIdleThresholdMinutes,
+		OutingProbability:      npcHeartbeatDefaultMoveProbability,
+		MinDurationMinutes:     npcHeartbeatDefaultMinDurationMinutes,
+		MaxDurationMinutes:     npcHeartbeatDefaultMaxDurationMinutes,
+		AmbientEnabled:         true,
+		AmbientCooldownMinutes: npcHeartbeatDefaultAmbientCooldown,
 	}
 }
 
@@ -1520,6 +1757,9 @@ func normalizeHeartbeatLocationConfig(cfg config.HeartbeatLocationConfig) config
 	}
 	if cfg.MaxDurationMinutes < cfg.MinDurationMinutes {
 		cfg.MaxDurationMinutes = cfg.MinDurationMinutes
+	}
+	if cfg.AmbientCooldownMinutes <= 0 {
+		cfg.AmbientCooldownMinutes = npcHeartbeatDefaultAmbientCooldown
 	}
 
 	return cfg
