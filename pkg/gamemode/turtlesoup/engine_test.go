@@ -188,6 +188,38 @@ func TestHandleAcceptsPublicCodeReferences(t *testing.T) {
 	}
 }
 
+func TestHandleAcceptsCodedGiveupCommand(t *testing.T) {
+	privateRoot := t.TempDir()
+	engine := NewEngine(NewStore(privateRoot), []Puzzle{{
+		ID:       "test",
+		Surface:  "surface text",
+		Solution: "solution secret",
+	}})
+	sessionKey := "agent:main:test"
+	if _, err := engine.Start(sessionKey); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	state, err := engine.store.Load(sessionKey)
+	if err != nil {
+		t.Fatalf("Load(started state) error = %v", err)
+	}
+
+	judge := &scriptedJudge{results: []Evaluation{{Kind: "guess"}}}
+	reveal, err := engine.Handle(context.Background(), sessionKey, "/turtle "+state.PublicCode+" giveup", judge)
+	if err != nil {
+		t.Fatalf("Handle(coded giveup) error = %v", err)
+	}
+	if !strings.Contains(reveal, "solution secret") {
+		t.Fatalf("coded giveup should reveal solution, got %q", reveal)
+	}
+	if judge.calls != 0 {
+		t.Fatalf("coded giveup should not call judge, got %d calls", judge.calls)
+	}
+	if _, err := engine.Handle(context.Background(), sessionKey, "status", nil); !errors.Is(err, ErrNoActiveGame) {
+		t.Fatalf("expected ErrNoActiveGame after coded giveup, got %v", err)
+	}
+}
+
 func TestJudgeFailureReturnsCannotAnswer(t *testing.T) {
 	privateRoot := t.TempDir()
 	engine := NewEngine(NewStore(privateRoot), []Puzzle{{

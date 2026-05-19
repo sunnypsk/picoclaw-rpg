@@ -255,6 +255,7 @@ func isSurrenderRequest(input string) bool {
 		lower == "揭晓" ||
 		lower == "答案" ||
 		lower == "give up" ||
+		lower == "giveup" ||
 		lower == "surrender" ||
 		lower == "/turtle giveup" ||
 		lower == "/turtle surrender"
