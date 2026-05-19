@@ -126,15 +126,33 @@ func TestTurtleSoupToolControlActionsDoNotCallJudge(t *testing.T) {
 	)
 	tool := NewTurtleSoupTool(engine, provider, "mock-model")
 	ctx := WithToolExecutionContext(context.Background(), "telegram", "chat-1", "", "", "session-1", nil)
-	if result := tool.Execute(ctx, map[string]any{"action": "start"}); result.IsError {
-		t.Fatalf("start result error = %+v", result)
+	start := tool.Execute(ctx, map[string]any{"action": "start"})
+	if start == nil || start.IsError {
+		t.Fatalf("start result error = %+v", start)
+	}
+	code := turtleSoupPublicCode(start.ForLLM)
+	if code == "" {
+		t.Fatalf("start result should include public code, got %q", start.ForLLM)
 	}
 
-	hint := tool.Execute(ctx, map[string]any{"action": "hint"})
+	hint := tool.Execute(ctx, map[string]any{
+		"action":  "hint",
+		"message": code + " can I get a hint?",
+	})
 	if hint == nil || hint.IsError || !strings.Contains(hint.ForLLM, "first hint") {
 		t.Fatalf("hint result = %+v", hint)
 	}
-	reveal := tool.Execute(ctx, map[string]any{"action": "surrender"})
+	status := tool.Execute(ctx, map[string]any{
+		"action":  "status",
+		"message": "please check " + code,
+	})
+	if status == nil || status.IsError || !strings.Contains(status.ForLLM, "surface text") {
+		t.Fatalf("status result = %+v", status)
+	}
+	reveal := tool.Execute(ctx, map[string]any{
+		"action":  "surrender",
+		"message": "/turtle " + code + " please reveal the answer",
+	})
 	if reveal == nil || reveal.IsError || !strings.Contains(reveal.ForLLM, "hidden answer") {
 		t.Fatalf("surrender result = %+v", reveal)
 	}

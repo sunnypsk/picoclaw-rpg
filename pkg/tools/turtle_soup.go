@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/gamemode/turtlesoup"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
+
+var turtleSoupPublicCodePattern = regexp.MustCompile(`(?i)\bTS-?[A-Z0-9]{4}\b`)
 
 type TurtleSoupTool struct {
 	engine   *turtlesoup.Engine
@@ -79,11 +82,11 @@ func (t *TurtleSoupTool) Execute(ctx context.Context, args map[string]any) *Tool
 		}
 		response, err = t.engine.Handle(ctx, sessionKey, message, t.judge())
 	case "hint":
-		response, err = t.engine.Handle(ctx, sessionKey, defaultString(message, "hint"), nil)
+		response, err = t.engine.Handle(ctx, sessionKey, turtleSoupControlInput(message, "hint"), nil)
 	case "status":
-		response, err = t.engine.Handle(ctx, sessionKey, defaultString(message, "status"), nil)
+		response, err = t.engine.Handle(ctx, sessionKey, turtleSoupControlInput(message, "status"), nil)
 	case "surrender", "giveup", "give_up", "reveal", "answer":
-		response, err = t.engine.Handle(ctx, sessionKey, defaultString(message, "giveup"), nil)
+		response, err = t.engine.Handle(ctx, sessionKey, turtleSoupControlInput(message, "giveup"), nil)
 	default:
 		return ErrorResult(fmt.Sprintf("unknown turtle_soup action: %s", action))
 	}
@@ -106,11 +109,23 @@ func (t *TurtleSoupTool) judge() turtlesoup.Judge {
 	}
 }
 
-func defaultString(value, fallback string) string {
-	if strings.TrimSpace(value) != "" {
-		return value
+func turtleSoupControlInput(message, command string) string {
+	if code := turtleSoupPublicCode(message); code != "" {
+		return code + " " + command
 	}
-	return fallback
+	return command
+}
+
+func turtleSoupPublicCode(message string) string {
+	match := turtleSoupPublicCodePattern.FindString(message)
+	if match == "" {
+		return ""
+	}
+	compact := strings.ToUpper(strings.ReplaceAll(match, "-", ""))
+	if len(compact) != 6 || !strings.HasPrefix(compact, "TS") {
+		return ""
+	}
+	return "TS-" + compact[2:]
 }
 
 func turtleSoupStringArg(args map[string]any, key string) string {
