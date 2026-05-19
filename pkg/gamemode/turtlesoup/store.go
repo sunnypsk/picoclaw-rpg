@@ -22,6 +22,7 @@ var ErrNoActiveGame = errors.New("no active turtle soup game")
 type GameState struct {
 	Version       int       `json:"version"`
 	GameID        string    `json:"game_id"`
+	PublicCode    string    `json:"public_code,omitempty"`
 	SessionHash   string    `json:"session_hash"`
 	PuzzleID      string    `json:"puzzle_id"`
 	Surface       string    `json:"surface"`

@@ -33,6 +33,9 @@ func (al *AgentLoop) handleTurtleSoupTurn(
 	}
 
 	if !al.turtleSoup.HasActive(sessionKey) {
+		if al.turtleSoup.ReferencesGameCode(content) {
+			return "找不到這局海龜湯，請確認代號。", true
+		}
 		return "", false
 	}
 

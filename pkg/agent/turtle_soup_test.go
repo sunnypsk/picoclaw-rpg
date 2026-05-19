@@ -141,6 +141,77 @@ func TestTurtleSoupActiveQuestionUsesJudgeAndDoesNotCallNormalLoop(t *testing.T)
 	}
 }
 
+func TestTurtleSoupPublicCodeRoutesQuestionAndRejectsMismatch(t *testing.T) {
+	provider := &turtleSoupProvider{response: `{"kind":"question","label":"yes"}`}
+	al, _ := newTurtleSoupTestLoop(t, provider)
+	msg := bus.InboundMessage{
+		Channel:  "telegram",
+		ChatID:   "chat-1",
+		SenderID: "user-1",
+		Content:  "開一局海龜湯",
+		Peer:     bus.Peer{Kind: "direct", ID: "user-1"},
+	}
+	startResponse, _, err := al.processMessageCore(context.Background(), msg, false)
+	if err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	code := turtleSoupCodeFromResponse(t, startResponse)
+
+	msg.Content = code + " 這跟八樓的人有關嗎？"
+	response, _, err := al.processMessageCore(context.Background(), msg, false)
+	if err != nil {
+		t.Fatalf("question with code error = %v", err)
+	}
+	if response != "是" {
+		t.Fatalf("question response = %q, want 是", response)
+	}
+	if len(provider.calls) != 1 {
+		t.Fatalf("coded question should call only the judge once, got %d calls", len(provider.calls))
+	}
+	judgePayload := provider.calls[0][1].Content
+	if strings.Contains(judgePayload, code) {
+		t.Fatalf("judge payload should receive stripped question without public code: %s", judgePayload)
+	}
+	if !strings.Contains(judgePayload, "這跟八樓的人有關嗎？") {
+		t.Fatalf("judge payload should include stripped player question: %s", judgePayload)
+	}
+
+	msg.Content = "/turtle TS-0000 status"
+	response, _, err = al.processMessageCore(context.Background(), msg, false)
+	if err != nil {
+		t.Fatalf("wrong code error = %v", err)
+	}
+	if !strings.Contains(response, "找不到這局海龜湯") {
+		t.Fatalf("wrong-code response = %q", response)
+	}
+	if len(provider.calls) != 1 {
+		t.Fatalf("wrong code should not call judge or normal loop, got %d provider calls", len(provider.calls))
+	}
+}
+
+func TestTurtleSoupUnknownPublicCodeDoesNotEnterNormalLoop(t *testing.T) {
+	provider := &turtleSoupProvider{response: `normal model response`}
+	al, _ := newTurtleSoupTestLoop(t, provider)
+	msg := bus.InboundMessage{
+		Channel:  "telegram",
+		ChatID:   "chat-1",
+		SenderID: "user-1",
+		Content:  "TS-0000 這跟八樓有關嗎？",
+		Peer:     bus.Peer{Kind: "direct", ID: "user-1"},
+	}
+
+	response, _, err := al.processMessageCore(context.Background(), msg, false)
+	if err != nil {
+		t.Fatalf("unknown code error = %v", err)
+	}
+	if !strings.Contains(response, "找不到這局海龜湯") {
+		t.Fatalf("unknown-code response = %q", response)
+	}
+	if len(provider.calls) != 0 {
+		t.Fatalf("unknown turtle-soup code should not enter normal model loop, got %d calls", len(provider.calls))
+	}
+}
+
 func TestTurtleSoupDirectSessionsAreIsolated(t *testing.T) {
 	provider := &turtleSoupProvider{response: `{"kind":"question","label":"yes"}`}
 	al, _ := newTurtleSoupTestLoop(t, provider)
@@ -168,6 +239,15 @@ func TestTurtleSoupDirectSessionsAreIsolated(t *testing.T) {
 	if response == "是" {
 		t.Fatalf("other session should not be routed to active game")
 	}
+}
+
+func turtleSoupCodeFromResponse(t *testing.T, response string) string {
+	t.Helper()
+	idx := strings.Index(response, "TS-")
+	if idx < 0 || len(response[idx:]) < len("TS-7K3P") {
+		t.Fatalf("response does not include turtle soup code: %q", response)
+	}
+	return response[idx : idx+len("TS-7K3P")]
 }
 
 func readAllFilesForTest(t *testing.T, root string) string {

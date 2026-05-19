@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const publicCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
 type Engine struct {
 	store   *Store
 	puzzles []Puzzle
@@ -40,6 +42,11 @@ func (e *Engine) HasActive(sessionKey string) bool {
 	return err == nil
 }
 
+func (e *Engine) ReferencesGameCode(input string) bool {
+	ref := parseGameReference(input)
+	return ref.hasCode
+}
+
 func (e *Engine) Start(sessionKey string) (string, error) {
 	if e == nil || e.store == nil {
 		return "", errors.New("turtle soup engine is not configured")
@@ -48,24 +55,36 @@ func (e *Engine) Start(sessionKey string) (string, error) {
 		return "", errors.New("no turtle soup puzzles configured")
 	}
 	if state, err := e.store.Load(sessionKey); err == nil && state != nil {
-		return fmt.Sprintf("已經有一局海龜湯進行中。\n\n湯面：%s\n\n可以問是非題，或輸入「提示」「放棄」。", state.Surface), nil
+		if err := e.ensurePublicCode(sessionKey, state); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf(
+			"已經有一局海龜湯進行中。\n代號：%s\n\n湯面：%s\n\n可以問是非題，或輸入「提示」「放棄」。",
+			state.PublicCode,
+			state.Surface,
+		), nil
 	}
 
 	puzzle := e.pickPuzzle()
 	now := e.now()
 	state := &GameState{
-		GameID:    newGameID(),
-		PuzzleID:  puzzle.ID,
-		Surface:   puzzle.Surface,
-		Solution:  puzzle.Solution,
-		Hints:     append([]string(nil), puzzle.Hints...),
-		StartedAt: now,
-		UpdatedAt: now,
+		GameID:     newGameID(),
+		PublicCode: newPublicCode(),
+		PuzzleID:   puzzle.ID,
+		Surface:    puzzle.Surface,
+		Solution:   puzzle.Solution,
+		Hints:      append([]string(nil), puzzle.Hints...),
+		StartedAt:  now,
+		UpdatedAt:  now,
 	}
 	if err := e.store.Save(sessionKey, state); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("海龜湯開始。\n\n湯面：%s\n\n你可以問是非題；我只會回答「是 / 否 / 無關 / 部分是 / 不能回答」。", state.Surface), nil
+	return fmt.Sprintf(
+		"海龜湯開始。\n代號：%s\n\n湯面：%s\n\n你可以問是非題；我只會回答「是 / 否 / 無關 / 部分是 / 不能回答」。",
+		state.PublicCode,
+		state.Surface,
+	), nil
 }
 
 func (e *Engine) Handle(ctx context.Context, sessionKey, input string, judge Judge) (string, error) {
@@ -76,8 +95,21 @@ func (e *Engine) Handle(ctx context.Context, sessionKey, input string, judge Jud
 	if err != nil {
 		return "", err
 	}
+	if err := e.ensurePublicCode(sessionKey, state); err != nil {
+		return "", err
+	}
 
 	input = strings.TrimSpace(input)
+	ref := parseGameReference(input)
+	if ref.hasCode {
+		if !samePublicCode(ref.code, state.PublicCode) {
+			return "找不到這局海龜湯，請確認代號。", nil
+		}
+		input = ref.remaining
+		if input == "" {
+			return statusText(*state), nil
+		}
+	}
 	if input == "" {
 		return "請問一個是非題，或輸入「提示」「放棄」。", nil
 	}
@@ -91,7 +123,11 @@ func (e *Engine) Handle(ctx context.Context, sessionKey, input string, judge Jud
 		return e.revealAndEnd(sessionKey, state, "揭曉湯底")
 	}
 	if isStartRequest(input) {
-		return fmt.Sprintf("這局還在進行中。\n\n湯面：%s\n\n可以繼續問問題，或輸入「提示」「放棄」。", state.Surface), nil
+		return fmt.Sprintf(
+			"這局還在進行中。\n代號：%s\n\n湯面：%s\n\n可以繼續問問題，或輸入「提示」「放棄」。",
+			state.PublicCode,
+			state.Surface,
+		), nil
 	}
 	if judge == nil {
 		return "不能回答", nil
@@ -127,14 +163,22 @@ func (e *Engine) hint(sessionKey string, state *GameState) (string, error) {
 	if err := e.store.Save(sessionKey, state); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("提示 %d：%s", state.HintsUsed, hint), nil
+	return fmt.Sprintf("代號：%s\n提示 %d：%s", state.PublicCode, state.HintsUsed, hint), nil
 }
 
 func (e *Engine) revealAndEnd(sessionKey string, state *GameState, prefix string) (string, error) {
 	if err := e.store.Delete(sessionKey); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s\n\n湯底：%s", prefix, state.Solution), nil
+	return fmt.Sprintf("%s\n代號：%s\n\n湯底：%s", prefix, state.PublicCode, state.Solution), nil
+}
+
+func (e *Engine) ensurePublicCode(sessionKey string, state *GameState) error {
+	if state == nil || strings.TrimSpace(state.PublicCode) != "" {
+		return nil
+	}
+	state.PublicCode = newPublicCode()
+	return e.store.Save(sessionKey, state)
 }
 
 func (e *Engine) now() time.Time {
@@ -164,7 +208,8 @@ func statusText(state GameState) string {
 	if remainingHints < 0 {
 		remainingHints = 0
 	}
-	return fmt.Sprintf("湯面：%s\n\n已問問題：%d\n已用提示：%d\n剩餘提示：%d",
+	return fmt.Sprintf("代號：%s\n湯面：%s\n\n已問問題：%d\n已用提示：%d\n剩餘提示：%d",
+		state.PublicCode,
 		state.Surface,
 		state.QuestionCount,
 		state.HintsUsed,
@@ -213,6 +258,78 @@ func isSurrenderRequest(input string) bool {
 		lower == "surrender" ||
 		lower == "/turtle giveup" ||
 		lower == "/turtle surrender"
+}
+
+type gameReference struct {
+	hasCode   bool
+	code      string
+	remaining string
+}
+
+func parseGameReference(input string) gameReference {
+	fields := strings.Fields(strings.TrimSpace(input))
+	if len(fields) == 0 {
+		return gameReference{}
+	}
+
+	first := strings.ToLower(fields[0])
+	if first == "/turtle" || first == "/turtle-soup" || first == "/turtlesoup" {
+		if len(fields) < 2 {
+			return gameReference{}
+		}
+		code := normalizePublicCode(fields[1])
+		if code == "" {
+			return gameReference{}
+		}
+		return gameReference{
+			hasCode:   true,
+			code:      code,
+			remaining: strings.TrimSpace(strings.Join(fields[2:], " ")),
+		}
+	}
+
+	code := normalizePublicCode(fields[0])
+	if code == "" {
+		return gameReference{}
+	}
+	return gameReference{
+		hasCode:   true,
+		code:      code,
+		remaining: strings.TrimSpace(strings.Join(fields[1:], " ")),
+	}
+}
+
+func samePublicCode(a, b string) bool {
+	return normalizePublicCode(a) != "" && normalizePublicCode(a) == normalizePublicCode(b)
+}
+
+func normalizePublicCode(code string) string {
+	code = strings.TrimSpace(code)
+	code = strings.Trim(code, ":：,，.。")
+	code = strings.ToUpper(strings.ReplaceAll(code, "-", ""))
+	if len(code) != 6 || !strings.HasPrefix(code, "TS") {
+		return ""
+	}
+	suffix := code[2:]
+	for _, r := range suffix {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			return ""
+		}
+	}
+	return "TS-" + suffix
+}
+
+func newPublicCode() string {
+	var buf [4]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return fmt.Sprintf("TS-%04X", time.Now().UnixNano()%0x10000)
+	}
+	out := make([]byte, 3+len(buf))
+	copy(out, "TS-")
+	for i, b := range buf {
+		out[i+3] = publicCodeAlphabet[int(b)%len(publicCodeAlphabet)]
+	}
+	return string(out)
 }
 
 func newGameID() string {
