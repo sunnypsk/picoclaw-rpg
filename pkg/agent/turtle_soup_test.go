@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,24 +10,48 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/gamemode/turtlesoup"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/routing"
+	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
 type turtleSoupProvider struct {
-	response string
-	calls    [][]providers.Message
+	agentResponses []providers.LLMResponse
+	judgeResponse  string
+	agentCalls     [][]providers.Message
+	judgeCalls     [][]providers.Message
+	toolNames      [][]string
 }
 
 func (p *turtleSoupProvider) Chat(
-	ctx context.Context,
+	_ context.Context,
 	messages []providers.Message,
-	tools []providers.ToolDefinition,
-	model string,
-	opts map[string]any,
+	toolDefs []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
 ) (*providers.LLMResponse, error) {
 	cloned := make([]providers.Message, len(messages))
 	copy(cloned, messages)
-	p.calls = append(p.calls, cloned)
-	return &providers.LLMResponse{Content: p.response}, nil
+	if len(messages) >= 2 && strings.Contains(messages[0].Content, "internal judge for a turtle soup") {
+		p.judgeCalls = append(p.judgeCalls, cloned)
+		response := p.judgeResponse
+		if response == "" {
+			response = `{"kind":"question","label":"cannot_answer"}`
+		}
+		return &providers.LLMResponse{Content: response, FinishReason: "stop"}, nil
+	}
+
+	names := make([]string, 0, len(toolDefs))
+	for _, tool := range toolDefs {
+		names = append(names, tool.Function.Name)
+	}
+	p.toolNames = append(p.toolNames, names)
+	p.agentCalls = append(p.agentCalls, cloned)
+	if len(p.agentResponses) == 0 {
+		return &providers.LLMResponse{Content: "ok", FinishReason: "stop"}, nil
+	}
+	response := p.agentResponses[0]
+	p.agentResponses = p.agentResponses[1:]
+	return &response, nil
 }
 
 func (p *turtleSoupProvider) GetDefaultModel() string {
@@ -51,26 +74,59 @@ func newTurtleSoupTestLoop(t *testing.T, provider *turtleSoupProvider) (*AgentLo
 		Session: config.SessionConfig{DMScope: "per-channel-peer"},
 	}
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
-	al.turtleSoup = turtlesoup.NewEngine(
-		turtlesoup.NewStore(filepath.Join(root, "games", "turtle_soup")),
-		[]turtlesoup.Puzzle{{
-			ID:       "test",
-			Surface:  "一名男子每天搭電梯到十樓。某天電梯停在八樓時，他突然哭了。",
-			Solution: "男子是視障者，平日妻子會在八樓進電梯陪他並確認十樓按鍵。",
-			Hints:    []string{"八樓平常會有固定的人出現。"},
-		}},
-	)
+	installTestTurtleSoup(t, al, root)
 	return al, cfg
 }
 
-func TestTurtleSoupStartBypassesNormalModelAndStoresVisibleHistoryOnly(t *testing.T) {
-	provider := &turtleSoupProvider{response: `{"kind":"question","label":"yes"}`}
-	al, cfg := newTurtleSoupTestLoop(t, provider)
+func installTestTurtleSoup(t *testing.T, al *AgentLoop, root string) {
+	t.Helper()
+	engine := turtlesoup.NewEngine(
+		turtlesoup.NewStore(filepath.Join(root, "games", "turtle_soup")),
+		[]turtlesoup.Puzzle{{
+			ID:       "test",
+			Surface:  "surface text",
+			Solution: "hidden answer",
+			Hints:    []string{"first hint"},
+		}},
+	)
+	al.turtleSoup = engine
+	for _, agentID := range al.registry.ListAgentIDs() {
+		agent, ok := al.registry.GetAgent(agentID)
+		if !ok {
+			continue
+		}
+		agent.Tools.Register(tools.NewTurtleSoupTool(engine, agent.Provider, agent.Model))
+	}
+}
+
+func turtleSoupToolResponse(action, message string) providers.LLMResponse {
+	args := map[string]any{"action": action}
+	if message != "" {
+		args["message"] = message
+	}
+	return providers.LLMResponse{
+		ToolCalls: []providers.ToolCall{{
+			ID:        "call-turtle-soup",
+			Name:      "turtle_soup",
+			Arguments: args,
+		}},
+		FinishReason: "tool_calls",
+	}
+}
+
+func TestTurtleSoupStartUsesAgentToolAndStoresVisibleHistoryOnly(t *testing.T) {
+	provider := &turtleSoupProvider{
+		agentResponses: []providers.LLMResponse{
+			turtleSoupToolResponse("start", ""),
+			{Content: "game started", FinishReason: "stop"},
+		},
+	}
+	al, _ := newTurtleSoupTestLoop(t, provider)
 	msg := bus.InboundMessage{
 		Channel:  "telegram",
 		ChatID:   "chat-1",
 		SenderID: "user-1",
-		Content:  "開一局海龜湯",
+		Content:  "play 海龜湯",
 		Peer:     bus.Peer{Kind: "direct", ID: "user-1"},
 	}
 
@@ -78,195 +134,155 @@ func TestTurtleSoupStartBypassesNormalModelAndStoresVisibleHistoryOnly(t *testin
 	if err != nil {
 		t.Fatalf("processMessageCore(start) error = %v", err)
 	}
-	if !strings.Contains(response, "湯面") {
-		t.Fatalf("start response should include surface, got %q", response)
+	if response != "game started" {
+		t.Fatalf("response = %q, want tool-driven final response", response)
 	}
-	if strings.Contains(response, "視障") || strings.Contains(response, "妻子") {
-		t.Fatalf("start response leaked solution: %q", response)
+	if len(provider.agentCalls) != 2 {
+		t.Fatalf("agent calls = %d, want 2", len(provider.agentCalls))
 	}
-	if len(provider.calls) != 0 {
-		t.Fatalf("start should bypass provider, got %d calls", len(provider.calls))
+	if !hasTool(provider.toolNames[0], "turtle_soup") {
+		t.Fatalf("turtle_soup tool was not offered to agent: %v", provider.toolNames[0])
 	}
-
-	history := agent.Sessions.GetHistory("agent:main:telegram:direct:user-1")
-	if len(history) != 2 {
-		t.Fatalf("history len = %d, want 2: %+v", len(history), history)
-	}
-	joined := history[0].Content + "\n" + history[1].Content
-	if strings.Contains(joined, "視障") || strings.Contains(joined, "妻子") {
-		t.Fatalf("visible history leaked hidden solution: %s", joined)
-	}
-
-	workspaceText := readAllFilesForTest(t, cfg.WorkspacePath())
-	if strings.Contains(workspaceText, "視障") || strings.Contains(workspaceText, "妻子") {
-		t.Fatalf("workspace-visible files leaked hidden solution:\n%s", workspaceText)
-	}
-}
-
-func TestTurtleSoupActiveQuestionUsesJudgeAndDoesNotCallNormalLoop(t *testing.T) {
-	provider := &turtleSoupProvider{response: `{"kind":"question","label":"yes"}`}
-	al, _ := newTurtleSoupTestLoop(t, provider)
-	msg := bus.InboundMessage{
-		Channel:  "telegram",
-		ChatID:   "chat-1",
-		SenderID: "user-1",
-		Content:  "開一局海龜湯",
-		Peer:     bus.Peer{Kind: "direct", ID: "user-1"},
-	}
-	if _, _, err := al.processMessageCore(context.Background(), msg, false); err != nil {
-		t.Fatalf("start error = %v", err)
-	}
-
-	msg.Content = "這跟八樓的人有關嗎？"
-	response, agent, err := al.processMessageCore(context.Background(), msg, false)
-	if err != nil {
-		t.Fatalf("question error = %v", err)
-	}
-	if response != "是" {
-		t.Fatalf("question response = %q, want 是", response)
-	}
-	if len(provider.calls) != 1 {
-		t.Fatalf("active question should call only the judge once, got %d calls", len(provider.calls))
-	}
-	if len(provider.calls[0]) == 0 || !strings.Contains(provider.calls[0][1].Content, "hidden_solution") {
-		t.Fatalf("judge call should receive hidden solution payload: %+v", provider.calls[0])
+	if len(provider.judgeCalls) != 0 {
+		t.Fatalf("start should not call judge, got %d calls", len(provider.judgeCalls))
 	}
 
 	history := agent.Sessions.GetHistory("agent:main:telegram:direct:user-1")
-	if len(history) != 4 {
-		t.Fatalf("history len = %d, want 4: %+v", len(history), history)
+	joined := joinHistory(history)
+	if !strings.Contains(joined, "surface text") || !strings.Contains(joined, "TS-") {
+		t.Fatalf("session should contain visible tool result with surface/code, got %s", joined)
 	}
-	if got := history[len(history)-1].Content; got != "是" {
-		t.Fatalf("last visible response = %q, want 是", got)
+	if strings.Contains(joined, "hidden answer") {
+		t.Fatalf("visible session history leaked hidden solution: %s", joined)
 	}
 }
 
-func TestTurtleSoupPublicCodeRoutesQuestionAndRejectsMismatch(t *testing.T) {
-	provider := &turtleSoupProvider{response: `{"kind":"question","label":"yes"}`}
+func TestTurtleSoupActiveGameDoesNotCaptureUnrelatedMessage(t *testing.T) {
+	provider := &turtleSoupProvider{
+		agentResponses: []providers.LLMResponse{{Content: "normal answer", FinishReason: "stop"}},
+	}
 	al, _ := newTurtleSoupTestLoop(t, provider)
-	msg := bus.InboundMessage{
+	sessionKey := "agent:main:telegram:direct:user-1"
+	if _, err := al.turtleSoup.Start(sessionKey); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	response, _, err := al.processMessageCore(context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
 		ChatID:   "chat-1",
 		SenderID: "user-1",
-		Content:  "開一局海龜湯",
+		Content:  "what is the weather?",
 		Peer:     bus.Peer{Kind: "direct", ID: "user-1"},
-	}
-	startResponse, _, err := al.processMessageCore(context.Background(), msg, false)
+	}, false)
 	if err != nil {
-		t.Fatalf("start error = %v", err)
+		t.Fatalf("processMessageCore(unrelated) error = %v", err)
 	}
-	code := turtleSoupCodeFromResponse(t, startResponse)
+	if response != "normal answer" {
+		t.Fatalf("unrelated response = %q, want normal answer", response)
+	}
+	if len(provider.judgeCalls) != 0 {
+		t.Fatalf("unrelated message should not be captured by turtle soup judge, got %d judge calls", len(provider.judgeCalls))
+	}
+}
 
-	msg.Content = code + " 這跟八樓的人有關嗎？"
-	response, _, err := al.processMessageCore(context.Background(), msg, false)
+func TestTurtleSoupToolTurnUsesJudge(t *testing.T) {
+	provider := &turtleSoupProvider{
+		agentResponses: []providers.LLMResponse{
+			turtleSoupToolResponse("turn", "is it about food?"),
+			{Content: "是", FinishReason: "stop"},
+		},
+		judgeResponse: `{"kind":"question","label":"yes"}`,
+	}
+	al, _ := newTurtleSoupTestLoop(t, provider)
+	sessionKey := "agent:main:telegram:direct:user-1"
+	if _, err := al.turtleSoup.Start(sessionKey); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	response, _, err := al.processMessageCore(context.Background(), bus.InboundMessage{
+		Channel:  "telegram",
+		ChatID:   "chat-1",
+		SenderID: "user-1",
+		Content:  "is it about food?",
+		Peer:     bus.Peer{Kind: "direct", ID: "user-1"},
+	}, false)
 	if err != nil {
-		t.Fatalf("question with code error = %v", err)
+		t.Fatalf("processMessageCore(turn) error = %v", err)
 	}
 	if response != "是" {
-		t.Fatalf("question response = %q, want 是", response)
+		t.Fatalf("turn response = %q, want 是", response)
 	}
-	if len(provider.calls) != 1 {
-		t.Fatalf("coded question should call only the judge once, got %d calls", len(provider.calls))
+	if len(provider.judgeCalls) != 1 {
+		t.Fatalf("judge calls = %d, want 1", len(provider.judgeCalls))
 	}
-	judgePayload := provider.calls[0][1].Content
-	if strings.Contains(judgePayload, code) {
-		t.Fatalf("judge payload should receive stripped question without public code: %s", judgePayload)
+	payload := provider.judgeCalls[0][1].Content
+	if !strings.Contains(payload, "hidden_solution") || !strings.Contains(payload, "hidden answer") {
+		t.Fatalf("judge payload should include hidden solution: %s", payload)
 	}
-	if !strings.Contains(judgePayload, "這跟八樓的人有關嗎？") {
-		t.Fatalf("judge payload should include stripped player question: %s", judgePayload)
-	}
-
-	msg.Content = "/turtle TS-0000 status"
-	response, _, err = al.processMessageCore(context.Background(), msg, false)
-	if err != nil {
-		t.Fatalf("wrong code error = %v", err)
-	}
-	if !strings.Contains(response, "找不到這局海龜湯") {
-		t.Fatalf("wrong-code response = %q", response)
-	}
-	if len(provider.calls) != 1 {
-		t.Fatalf("wrong code should not call judge or normal loop, got %d provider calls", len(provider.calls))
+	if !strings.Contains(payload, "is it about food?") {
+		t.Fatalf("judge payload should include player message: %s", payload)
 	}
 }
 
-func TestTurtleSoupUnknownPublicCodeDoesNotEnterNormalLoop(t *testing.T) {
-	provider := &turtleSoupProvider{response: `normal model response`}
-	al, _ := newTurtleSoupTestLoop(t, provider)
-	msg := bus.InboundMessage{
-		Channel:  "telegram",
-		ChatID:   "chat-1",
-		SenderID: "user-1",
-		Content:  "TS-0000 這跟八樓有關嗎？",
-		Peer:     bus.Peer{Kind: "direct", ID: "user-1"},
+func TestTurtleSoupToolRegisteredForAutoProvisionedAgent(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         t.TempDir(),
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+			AutoProvision: config.AutoProvisionConfig{
+				Enabled: true,
+			},
+		},
 	}
-
-	response, _, err := al.processMessageCore(context.Background(), msg, false)
-	if err != nil {
-		t.Fatalf("unknown code error = %v", err)
+	provider := &turtleSoupProvider{
+		agentResponses: []providers.LLMResponse{{Content: "ok", FinishReason: "stop"}},
 	}
-	if !strings.Contains(response, "找不到這局海龜湯") {
-		t.Fatalf("unknown-code response = %q", response)
-	}
-	if len(provider.calls) != 0 {
-		t.Fatalf("unknown turtle-soup code should not enter normal model loop, got %d calls", len(provider.calls))
-	}
-}
-
-func TestTurtleSoupDirectSessionsAreIsolated(t *testing.T) {
-	provider := &turtleSoupProvider{response: `{"kind":"question","label":"yes"}`}
-	al, _ := newTurtleSoupTestLoop(t, provider)
-
-	start := bus.InboundMessage{
-		Channel:  "telegram",
-		ChatID:   "chat-1",
-		SenderID: "user-1",
-		Content:  "開一局海龜湯",
-		Peer:     bus.Peer{Kind: "direct", ID: "user-1"},
-	}
-	if _, _, err := al.processMessageCore(context.Background(), start, false); err != nil {
-		t.Fatalf("start error = %v", err)
-	}
-
-	other := start
-	other.ChatID = "chat-2"
-	other.SenderID = "user-2"
-	other.Peer = bus.Peer{Kind: "direct", ID: "user-2"}
-	other.Content = "這跟八樓的人有關嗎？"
-	response, _, err := al.processMessageCore(context.Background(), other, false)
-	if err != nil {
-		t.Fatalf("other session message error = %v", err)
-	}
-	if response == "是" {
-		t.Fatalf("other session should not be routed to active game")
-	}
-}
-
-func turtleSoupCodeFromResponse(t *testing.T, response string) string {
-	t.Helper()
-	idx := strings.Index(response, "TS-")
-	if idx < 0 || len(response[idx:]) < len("TS-7K3P") {
-		t.Fatalf("response does not include turtle soup code: %q", response)
-	}
-	return response[idx : idx+len("TS-7K3P")]
-}
-
-func readAllFilesForTest(t *testing.T, root string) string {
-	t.Helper()
-	var b strings.Builder
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
-		b.Write(data)
-		b.WriteByte('\n')
-		return nil
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	route := al.registry.ResolveRoute(routing.RouteInput{
+		Channel: "telegram",
+		Peer:    &routing.RoutePeer{Kind: "direct", ID: "user42"},
 	})
+	if route.MatchedBy != "auto-provision" {
+		t.Fatalf("MatchedBy = %q, want auto-provision", route.MatchedBy)
+	}
+
+	_, _, err := al.processMessageCore(context.Background(), bus.InboundMessage{
+		Channel:  "telegram",
+		ChatID:   "chat42",
+		SenderID: "user42",
+		Content:  "hello",
+		Peer:     bus.Peer{Kind: "direct", ID: "user42"},
+	}, false)
 	if err != nil {
-		t.Fatalf("WalkDir(%s) error = %v", root, err)
+		t.Fatalf("processMessageCore(auto-provision) error = %v", err)
+	}
+	agent, ok := al.registry.GetAgent(route.AgentID)
+	if !ok {
+		t.Fatalf("expected auto-provisioned agent %q", route.AgentID)
+	}
+	if _, ok := agent.Tools.Get("turtle_soup"); !ok {
+		t.Fatalf("expected turtle_soup tool to be registered on auto-provisioned agent")
+	}
+}
+
+func hasTool(names []string, want string) bool {
+	for _, name := range names {
+		if name == want {
+			return true
+		}
+	}
+	return false
+}
+
+func joinHistory(history []providers.Message) string {
+	var b strings.Builder
+	for _, msg := range history {
+		b.WriteString(msg.Content)
+		b.WriteByte('\n')
 	}
 	return b.String()
 }

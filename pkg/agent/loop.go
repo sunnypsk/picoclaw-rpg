@@ -147,9 +147,10 @@ func NewAgentLoop(
 	provider providers.LLMProvider,
 ) *AgentLoop {
 	registry := NewAgentRegistry(cfg, provider)
+	turtleSoup := newTurtleSoupEngine(cfg)
 
 	// Register shared tools to all agents
-	registerSharedTools(cfg, msgBus, registry, provider, nil)
+	registerSharedTools(cfg, msgBus, registry, provider, nil, turtleSoup)
 
 	// Set up shared fallback chain
 	cooldown := providers.NewCooldownTracker()
@@ -170,7 +171,7 @@ func NewAgentLoop(
 		summarizing:          sync.Map{},
 		globalTools:          make(map[string]tools.Tool),
 		fallback:             fallbackChain,
-		turtleSoup:           newTurtleSoupEngine(cfg),
+		turtleSoup:           turtleSoup,
 		retrySleep:           time.Sleep,
 		voiceNoteTranscriber: &sttSkillVoiceNoteTranscriber{},
 	}
@@ -192,9 +193,10 @@ func registerSharedTools(
 	registry *AgentRegistry,
 	provider providers.LLMProvider,
 	store media.MediaStore,
+	turtleSoup *turtlesoup.Engine,
 ) {
 	for _, agentID := range registry.ListAgentIDs() {
-		registerSharedToolsForAgent(cfg, msgBus, registry, provider, store, agentID)
+		registerSharedToolsForAgent(cfg, msgBus, registry, provider, store, turtleSoup, agentID)
 	}
 }
 
@@ -204,6 +206,7 @@ func registerSharedToolsForAgent(
 	registry *AgentRegistry,
 	provider providers.LLMProvider,
 	store media.MediaStore,
+	turtleSoup *turtlesoup.Engine,
 	agentID string,
 ) {
 	agent, ok := registry.GetAgent(agentID)
@@ -298,6 +301,7 @@ func registerSharedToolsForAgent(
 	imageTool := tools.NewGenerateImageTool(agent.Workspace, cfg.Agents.Defaults.RestrictToWorkspace)
 	imageTool.SetMediaStore(store)
 	agent.Tools.Register(imageTool)
+	agent.Tools.Register(tools.NewTurtleSoupTool(turtleSoup, agent.Provider, agent.Model))
 
 	// Skill discovery and installation tools
 	registryMgr := skills.NewRegistryManagerFromConfig(skills.RegistryConfig{
@@ -574,7 +578,7 @@ func (al *AgentLoop) resolveAgentForRoute(route routing.ResolvedRoute) *AgentIns
 		created := false
 		agent, created = al.registry.GetOrCreateAgent(route.AgentID)
 		if created {
-			registerSharedToolsForAgent(al.cfg, al.bus, al.registry, al.registry.provider, al.mediaStore, route.AgentID)
+			registerSharedToolsForAgent(al.cfg, al.bus, al.registry, al.registry.provider, al.mediaStore, al.turtleSoup, route.AgentID)
 		}
 		al.registerGlobalToolsForAgent(agent)
 	} else {
@@ -669,17 +673,6 @@ func (al *AgentLoop) processMessageCore(
 			updateCtx = context.WithoutCancel(turnCtx)
 		}
 		go al.maybeUpdateNPCStateAfterReply(updateCtx, agent, msg, route.MatchedBy, sessionKey, reply)
-	}
-
-	if response, handled := al.handleTurtleSoupTurn(turnCtx, agent, msg, sessionKey); handled {
-		if response != "" {
-			al.persistTurtleSoupVisibleTurn(agent, sessionKey, msg, response)
-		}
-		if sendResponse && response != "" {
-			al.publishAgentMessage(turnCtx, agent, msg.Channel, msg.ChatID, response, false)
-			scheduleReplyStateUpdate()
-		}
-		return response, agent, nil
 	}
 
 	// Check for commands after routing so successful replied turns can update state once.
