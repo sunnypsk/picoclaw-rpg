@@ -31,6 +31,8 @@ config/config.json
 coverage.txt
 coverage.html
 .gocache/
+.gotestcache/
+.goappdata/
 .gomodcache/
 .gotmp/
 .codex-cache/

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
+	"github.com/sipeed/picoclaw/pkg/gamemode/turtlesoup"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/mcp"
 	"github.com/sipeed/picoclaw/pkg/media"
@@ -46,6 +48,7 @@ type AgentLoop struct {
 	fallback             *providers.FallbackChain
 	channelManager       *channels.Manager
 	mediaStore           media.MediaStore
+	turtleSoup           *turtlesoup.Engine
 	retrySleep           func(time.Duration)
 	voiceNoteTranscriber voiceNoteTranscriber
 }
@@ -167,9 +170,19 @@ func NewAgentLoop(
 		summarizing:          sync.Map{},
 		globalTools:          make(map[string]tools.Tool),
 		fallback:             fallbackChain,
+		turtleSoup:           newTurtleSoupEngine(cfg),
 		retrySleep:           time.Sleep,
 		voiceNoteTranscriber: &sttSkillVoiceNoteTranscriber{},
 	}
+}
+
+func newTurtleSoupEngine(cfg *config.Config) *turtlesoup.Engine {
+	workspace := "."
+	if cfg != nil && strings.TrimSpace(cfg.WorkspacePath()) != "" {
+		workspace = cfg.WorkspacePath()
+	}
+	root := filepath.Join(filepath.Dir(workspace), "games", "turtle_soup")
+	return turtlesoup.NewEngine(turtlesoup.NewStore(root), nil)
 }
 
 // registerSharedTools registers tools that are shared across all agents (web, message, spawn).
@@ -656,6 +669,17 @@ func (al *AgentLoop) processMessageCore(
 			updateCtx = context.WithoutCancel(turnCtx)
 		}
 		go al.maybeUpdateNPCStateAfterReply(updateCtx, agent, msg, route.MatchedBy, sessionKey, reply)
+	}
+
+	if response, handled := al.handleTurtleSoupTurn(turnCtx, agent, msg, sessionKey); handled {
+		if response != "" {
+			al.persistTurtleSoupVisibleTurn(agent, sessionKey, msg, response)
+		}
+		if sendResponse && response != "" {
+			al.publishAgentMessage(turnCtx, agent, msg.Channel, msg.ChatID, response, false)
+			scheduleReplyStateUpdate()
+		}
+		return response, agent, nil
 	}
 
 	// Check for commands after routing so successful replied turns can update state once.
