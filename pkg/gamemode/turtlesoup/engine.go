@@ -212,9 +212,7 @@ func (e *Engine) hint(sessionKey string, state *GameState) (string, error) {
 }
 
 func (e *Engine) revealAndEnd(sessionKey string, state *GameState, prefix, outcome string) (string, error) {
-	if err := e.recordCompletedGame(sessionKey, state, outcome); err != nil {
-		return "", err
-	}
+	_ = e.recordCompletedGame(sessionKey, state, outcome)
 	if err := e.store.Delete(sessionKey); err != nil {
 		return "", err
 	}

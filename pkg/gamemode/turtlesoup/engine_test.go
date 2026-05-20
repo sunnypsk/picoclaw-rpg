@@ -251,6 +251,37 @@ func TestSurrenderRecordsPrivateSummary(t *testing.T) {
 	}
 }
 
+func TestSurrenderStillEndsWhenHistoryIsCorrupt(t *testing.T) {
+	root := t.TempDir()
+	engine := NewEngine(NewStore(root), []Puzzle{{
+		ID:       "test",
+		Surface:  "surface text",
+		Solution: "solution secret",
+	}})
+	sessionKey := "agent:main:test"
+	if _, err := engine.Start(sessionKey); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	historyPath, err := engine.store.historyPathForSession(sessionKey)
+	if err != nil {
+		t.Fatalf("historyPathForSession() error = %v", err)
+	}
+	if err := os.WriteFile(historyPath, []byte("{not json"), 0o600); err != nil {
+		t.Fatalf("WriteFile(history) error = %v", err)
+	}
+
+	reveal, err := engine.Handle(context.Background(), sessionKey, "giveup", nil)
+	if err != nil {
+		t.Fatalf("Handle(giveup) error = %v", err)
+	}
+	if !strings.Contains(reveal, "solution secret") {
+		t.Fatalf("reveal response = %q", reveal)
+	}
+	if _, err := engine.Handle(context.Background(), sessionKey, "status", nil); !errors.Is(err, ErrNoActiveGame) {
+		t.Fatalf("expected active game to be deleted despite history error, got %v", err)
+	}
+}
+
 func TestStartWithGeneratedPuzzleReceivesRecentGameSummary(t *testing.T) {
 	engine := NewEngine(NewStore(t.TempDir()), nil)
 	generator := &scriptedGenerator{puzzles: []Puzzle{
