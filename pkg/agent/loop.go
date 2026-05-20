@@ -301,7 +301,10 @@ func registerSharedToolsForAgent(
 	imageTool := tools.NewGenerateImageTool(agent.Workspace, cfg.Agents.Defaults.RestrictToWorkspace)
 	imageTool.SetMediaStore(store)
 	agent.Tools.Register(imageTool)
-	agent.Tools.Register(tools.NewTurtleSoupTool(turtleSoup, agent.Provider, agent.Model))
+	agentRef := agent
+	agent.Tools.Register(tools.NewTurtleSoupToolWithModelResolver(turtleSoup, agent.Provider, func() string {
+		return agentRef.Model
+	}))
 
 	// Skill discovery and installation tools
 	registryMgr := skills.NewRegistryManagerFromConfig(skills.RegistryConfig{

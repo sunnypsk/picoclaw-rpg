@@ -15,27 +15,39 @@ import (
 )
 
 type turtleSoupProvider struct {
-	agentResponses []providers.LLMResponse
-	judgeResponse  string
-	agentCalls     [][]providers.Message
-	judgeCalls     [][]providers.Message
-	toolNames      [][]string
+	agentResponses    []providers.LLMResponse
+	generatorResponse string
+	judgeResponse     string
+	agentCalls        [][]providers.Message
+	generatorCalls    [][]providers.Message
+	judgeCalls        [][]providers.Message
+	judgeModels       []string
+	toolNames         [][]string
 }
 
 func (p *turtleSoupProvider) Chat(
 	_ context.Context,
 	messages []providers.Message,
 	toolDefs []providers.ToolDefinition,
-	_ string,
+	model string,
 	_ map[string]any,
 ) (*providers.LLMResponse, error) {
 	cloned := make([]providers.Message, len(messages))
 	copy(cloned, messages)
 	if len(messages) >= 2 && strings.Contains(messages[0].Content, "internal judge for a turtle soup") {
 		p.judgeCalls = append(p.judgeCalls, cloned)
+		p.judgeModels = append(p.judgeModels, model)
 		response := p.judgeResponse
 		if response == "" {
 			response = `{"kind":"question","label":"cannot_answer"}`
+		}
+		return &providers.LLMResponse{Content: response, FinishReason: "stop"}, nil
+	}
+	if len(messages) >= 2 && strings.Contains(messages[0].Content, "create original turtle soup") {
+		p.generatorCalls = append(p.generatorCalls, cloned)
+		response := p.generatorResponse
+		if response == "" {
+			response = `{"surface":"surface text","solution":"hidden answer","hints":["first hint","second hint","third hint"]}`
 		}
 		return &providers.LLMResponse{Content: response, FinishReason: "stop"}, nil
 	}
@@ -95,7 +107,10 @@ func installTestTurtleSoup(t *testing.T, al *AgentLoop, root string) {
 		if !ok {
 			continue
 		}
-		agent.Tools.Register(tools.NewTurtleSoupTool(engine, agent.Provider, agent.Model))
+		agentRef := agent
+		agent.Tools.Register(tools.NewTurtleSoupToolWithModelResolver(engine, agent.Provider, func() string {
+			return agentRef.Model
+		}))
 	}
 }
 
@@ -166,7 +181,6 @@ func TestTurtleSoupActiveGameDoesNotCaptureUnrelatedMessage(t *testing.T) {
 	if _, err := al.turtleSoup.Start(sessionKey); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-
 	response, _, err := al.processMessageCore(context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
 		ChatID:   "chat-1",
@@ -198,6 +212,11 @@ func TestTurtleSoupToolTurnUsesJudge(t *testing.T) {
 	if _, err := al.turtleSoup.Start(sessionKey); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+	agent.Model = "new-model"
 
 	response, _, err := al.processMessageCore(context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
@@ -214,6 +233,9 @@ func TestTurtleSoupToolTurnUsesJudge(t *testing.T) {
 	}
 	if len(provider.judgeCalls) != 1 {
 		t.Fatalf("judge calls = %d, want 1", len(provider.judgeCalls))
+	}
+	if len(provider.judgeModels) != 1 || provider.judgeModels[0] != "new-model" {
+		t.Fatalf("judge models = %v, want [new-model]", provider.judgeModels)
 	}
 	payload := provider.judgeCalls[0][1].Content
 	if !strings.Contains(payload, "hidden_solution") || !strings.Contains(payload, "hidden answer") {

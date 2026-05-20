@@ -30,6 +30,268 @@ func (j *scriptedJudge) Evaluate(_ context.Context, _ GameState, input string) (
 	return result, nil
 }
 
+type scriptedGenerator struct {
+	puzzles  []Puzzle
+	err      error
+	calls    int
+	requests []GenerationRequest
+}
+
+func (g *scriptedGenerator) Generate(_ context.Context, request GenerationRequest) (Puzzle, error) {
+	g.calls++
+	g.requests = append(g.requests, request)
+	if g.err != nil {
+		return Puzzle{}, g.err
+	}
+	if len(g.puzzles) == 0 {
+		return Puzzle{}, errors.New("no scripted puzzle")
+	}
+	puzzle := g.puzzles[0]
+	g.puzzles = g.puzzles[1:]
+	return puzzle, nil
+}
+
+func TestStartWithGeneratedPuzzleStoresSettingsAndHidesSolution(t *testing.T) {
+	privateRoot := filepath.Join(t.TempDir(), "private-games")
+	secret := "the librarian moved the clock"
+	engine := NewEngine(NewStore(privateRoot), nil)
+	generator := &scriptedGenerator{puzzles: []Puzzle{{
+		Surface:  "A guest leaves the library smiling after hearing the clock strike thirteen.",
+		Solution: secret,
+		Hints:    []string{"It is not a supernatural clock.", "The room matters.", "The guest wanted proof of tampering."},
+	}}}
+
+	response, err := engine.StartWithOptions(context.Background(), "agent:main:test", StartOptions{
+		Difficulty: "harder than last time",
+		Themes:     []string{"library", "time"},
+		Message:    "start a harder turtle soup about a library",
+		Generator:  generator,
+	})
+	if err != nil {
+		t.Fatalf("StartWithOptions() error = %v", err)
+	}
+	if generator.calls != 1 {
+		t.Fatalf("generator calls = %d, want 1", generator.calls)
+	}
+	if got := generator.requests[0].Difficulty; got != "harder than last time" {
+		t.Fatalf("generator difficulty = %q", got)
+	}
+	if strings.Contains(response, secret) {
+		t.Fatalf("start response leaked solution: %s", response)
+	}
+	for _, want := range []string{"TS-", "harder than last time", "library", "time"} {
+		if !strings.Contains(response, want) {
+			t.Fatalf("start response missing %q: %s", want, response)
+		}
+	}
+
+	state, err := engine.store.Load("agent:main:test")
+	if err != nil {
+		t.Fatalf("Load(started state) error = %v", err)
+	}
+	if state.Solution != secret {
+		t.Fatalf("state solution = %q, want hidden solution", state.Solution)
+	}
+	if state.Difficulty != "harder than last time" {
+		t.Fatalf("state difficulty = %q", state.Difficulty)
+	}
+	if strings.Join(state.Themes, ",") != "library,time" {
+		t.Fatalf("state themes = %v", state.Themes)
+	}
+}
+
+func TestStartWithGeneratedPuzzleRetriesInvalidResponse(t *testing.T) {
+	engine := NewEngine(NewStore(t.TempDir()), nil)
+	generator := &scriptedGenerator{puzzles: []Puzzle{
+		{Surface: "missing solution", Hints: []string{"one", "two", "three"}},
+		{Surface: "valid surface", Solution: "valid secret", Hints: []string{"one", "two", "three"}},
+	}}
+
+	response, err := engine.StartWithOptions(context.Background(), "agent:main:test", StartOptions{Generator: generator})
+	if err != nil {
+		t.Fatalf("StartWithOptions() error = %v", err)
+	}
+	if generator.calls != 2 {
+		t.Fatalf("generator calls = %d, want retry once", generator.calls)
+	}
+	if !strings.Contains(response, "valid surface") || strings.Contains(response, "valid secret") {
+		t.Fatalf("unexpected start response: %s", response)
+	}
+}
+
+func TestStartWithGeneratedPuzzleFailsWithoutSavingAfterTwoInvalidResponses(t *testing.T) {
+	engine := NewEngine(NewStore(t.TempDir()), nil)
+	generator := &scriptedGenerator{puzzles: []Puzzle{
+		{Surface: "missing solution", Hints: []string{"one", "two", "three"}},
+		{Surface: "still missing solution", Hints: []string{"one", "two", "three"}},
+	}}
+
+	_, err := engine.StartWithOptions(context.Background(), "agent:main:test", StartOptions{Generator: generator})
+	if err == nil {
+		t.Fatal("expected generation error")
+	}
+	if generator.calls != 2 {
+		t.Fatalf("generator calls = %d, want 2", generator.calls)
+	}
+	if _, loadErr := engine.store.Load("agent:main:test"); !errors.Is(loadErr, ErrNoActiveGame) {
+		t.Fatalf("expected no saved game after generation failure, got %v", loadErr)
+	}
+}
+
+func TestStartWithActiveGameDoesNotGenerateAgain(t *testing.T) {
+	engine := NewEngine(NewStore(t.TempDir()), nil)
+	generator := &scriptedGenerator{puzzles: []Puzzle{{
+		Surface:  "first surface",
+		Solution: "first secret",
+		Hints:    []string{"one", "two", "three"},
+	}}}
+	sessionKey := "agent:main:test"
+	if _, err := engine.StartWithOptions(context.Background(), sessionKey, StartOptions{Generator: generator}); err != nil {
+		t.Fatalf("initial StartWithOptions() error = %v", err)
+	}
+	if _, err := engine.StartWithOptions(context.Background(), sessionKey, StartOptions{Generator: generator}); err != nil {
+		t.Fatalf("active StartWithOptions() error = %v", err)
+	}
+	if generator.calls != 1 {
+		t.Fatalf("active start should not generate again, got %d calls", generator.calls)
+	}
+}
+
+func TestStartWithInvalidDifficultyReturnsError(t *testing.T) {
+	engine := NewEngine(NewStore(t.TempDir()), nil)
+	tooLong := strings.Repeat("hard ", 40)
+
+	_, err := engine.StartWithOptions(context.Background(), "agent:main:test", StartOptions{
+		Difficulty: tooLong,
+		Generator: &scriptedGenerator{puzzles: []Puzzle{{
+			Surface:  "surface",
+			Solution: "secret",
+			Hints:    []string{"one", "two", "three"},
+		}}},
+	})
+	if err == nil {
+		t.Fatal("expected invalid difficulty error")
+	}
+}
+
+func TestSolvedGameRecordsPrivateSummaryWithoutSolution(t *testing.T) {
+	privateRoot := t.TempDir()
+	engine := NewEngine(NewStore(privateRoot), []Puzzle{{
+		ID:         "test",
+		Surface:    "public surface",
+		Solution:   "secret solution",
+		Hints:      []string{"first hint"},
+		Difficulty: "tricky",
+		Themes:     []string{"clock"},
+	}})
+	sessionKey := "agent:main:test"
+	if _, err := engine.Start(sessionKey); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if _, err := engine.Handle(context.Background(), sessionKey, "hint", nil); err != nil {
+		t.Fatalf("Handle(hint) error = %v", err)
+	}
+	reveal, err := engine.Handle(context.Background(), sessionKey, "final guess", &scriptedJudge{
+		results: []Evaluation{{Kind: "guess", Solved: true}},
+	})
+	if err != nil {
+		t.Fatalf("Handle(solved guess) error = %v", err)
+	}
+	if !strings.Contains(reveal, "secret solution") {
+		t.Fatalf("reveal should include solution, got %q", reveal)
+	}
+
+	history, err := engine.store.LoadHistory(sessionKey, 3)
+	if err != nil {
+		t.Fatalf("LoadHistory() error = %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("history length = %d, want 1", len(history))
+	}
+	summary := history[0]
+	if summary.Outcome != OutcomeSolved || summary.HintsUsed != 1 || summary.Difficulty != "tricky" {
+		t.Fatalf("unexpected summary: %+v", summary)
+	}
+	if strings.Contains(summary.Surface, "secret solution") {
+		t.Fatalf("summary surface leaked solution: %+v", summary)
+	}
+	historyPath, err := engine.store.historyPathForSession(sessionKey)
+	if err != nil {
+		t.Fatalf("historyPathForSession() error = %v", err)
+	}
+	data, err := os.ReadFile(historyPath)
+	if err != nil {
+		t.Fatalf("ReadFile(history) error = %v", err)
+	}
+	if strings.Contains(string(data), "secret solution") {
+		t.Fatalf("private summary history leaked solution: %s", data)
+	}
+}
+
+func TestSurrenderRecordsPrivateSummary(t *testing.T) {
+	engine := NewEngine(NewStore(t.TempDir()), []Puzzle{{
+		ID:       "test",
+		Surface:  "surface text",
+		Solution: "solution secret",
+	}})
+	sessionKey := "agent:main:test"
+	if _, err := engine.Start(sessionKey); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if _, err := engine.Handle(context.Background(), sessionKey, "giveup", nil); err != nil {
+		t.Fatalf("Handle(giveup) error = %v", err)
+	}
+
+	history, err := engine.store.LoadHistory(sessionKey, 3)
+	if err != nil {
+		t.Fatalf("LoadHistory() error = %v", err)
+	}
+	if len(history) != 1 || history[0].Outcome != OutcomeSurrendered {
+		t.Fatalf("history = %+v, want one surrendered game", history)
+	}
+}
+
+func TestStartWithGeneratedPuzzleReceivesRecentGameSummary(t *testing.T) {
+	engine := NewEngine(NewStore(t.TempDir()), nil)
+	generator := &scriptedGenerator{puzzles: []Puzzle{
+		{Surface: "first surface", Solution: "first secret", Hints: []string{"one", "two", "three"}},
+		{Surface: "second surface", Solution: "second secret", Hints: []string{"one", "two", "three"}},
+	}}
+	sessionKey := "agent:main:test"
+	if _, err := engine.StartWithOptions(context.Background(), sessionKey, StartOptions{
+		Difficulty: "hard",
+		Themes:     []string{"library"},
+		Generator:  generator,
+	}); err != nil {
+		t.Fatalf("initial StartWithOptions() error = %v", err)
+	}
+	if _, err := engine.Handle(context.Background(), sessionKey, "final guess", &scriptedJudge{
+		results: []Evaluation{{Kind: "guess", Solved: true}},
+	}); err != nil {
+		t.Fatalf("Handle(solved guess) error = %v", err)
+	}
+
+	if _, err := engine.StartWithOptions(context.Background(), sessionKey, StartOptions{
+		Difficulty: "harder than last time",
+		Generator:  generator,
+	}); err != nil {
+		t.Fatalf("second StartWithOptions() error = %v", err)
+	}
+	if len(generator.requests) != 2 {
+		t.Fatalf("generator requests = %d, want 2", len(generator.requests))
+	}
+	recent := generator.requests[1].RecentGames
+	if len(recent) != 1 {
+		t.Fatalf("recent games = %+v, want one completed game", recent)
+	}
+	if recent[0].Difficulty != "hard" || recent[0].Outcome != OutcomeSolved {
+		t.Fatalf("recent game = %+v", recent[0])
+	}
+	if strings.Contains(recent[0].Surface, "first secret") {
+		t.Fatalf("recent game leaked solution: %+v", recent[0])
+	}
+}
+
 func TestStartStoresHiddenSolutionOnlyInPrivateStore(t *testing.T) {
 	workspace := t.TempDir()
 	privateRoot := filepath.Join(t.TempDir(), "private-games")

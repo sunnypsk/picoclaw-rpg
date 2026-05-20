@@ -13,6 +13,31 @@ import (
 
 const publicCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
+const recentGameSummaryLimit = 3
+
+const (
+	OutcomeSolved      = "solved"
+	OutcomeSurrendered = "surrendered"
+)
+
+type StartOptions struct {
+	Difficulty string
+	Themes     []string
+	Message    string
+	Generator  PuzzleGenerator
+}
+
+type GenerationRequest struct {
+	Difficulty  string
+	Themes      []string
+	Message     string
+	RecentGames []GameSummary
+}
+
+type PuzzleGenerator interface {
+	Generate(ctx context.Context, request GenerationRequest) (Puzzle, error)
+}
+
 type Engine struct {
 	store   *Store
 	puzzles []Puzzle
@@ -20,9 +45,6 @@ type Engine struct {
 }
 
 func NewEngine(store *Store, puzzles []Puzzle) *Engine {
-	if len(puzzles) == 0 {
-		puzzles = DefaultPuzzles()
-	}
 	return &Engine{
 		store:   store,
 		puzzles: append([]Puzzle(nil), puzzles...),
@@ -48,11 +70,12 @@ func (e *Engine) ReferencesGameCode(input string) bool {
 }
 
 func (e *Engine) Start(sessionKey string) (string, error) {
+	return e.StartWithOptions(context.Background(), sessionKey, StartOptions{})
+}
+
+func (e *Engine) StartWithOptions(ctx context.Context, sessionKey string, options StartOptions) (string, error) {
 	if e == nil || e.store == nil {
 		return "", errors.New("turtle soup engine is not configured")
-	}
-	if len(e.puzzles) == 0 {
-		return "", errors.New("no turtle soup puzzles configured")
 	}
 	if state, err := e.store.Load(sessionKey); err == nil && state != nil {
 		if err := e.ensurePublicCode(sessionKey, state); err != nil {
@@ -65,15 +88,37 @@ func (e *Engine) Start(sessionKey string) (string, error) {
 		), nil
 	}
 
-	puzzle := e.pickPuzzle()
+	difficulty, err := normalizeDifficulty(options.Difficulty)
+	if err != nil {
+		return "", err
+	}
+	themes, err := normalizeThemes(options.Themes)
+	if err != nil {
+		return "", err
+	}
+	recentGames, err := e.store.LoadHistory(sessionKey, recentGameSummaryLimit)
+	if err != nil {
+		return "", err
+	}
+	puzzle, err := e.startPuzzle(ctx, GenerationRequest{
+		Difficulty:  difficulty,
+		Themes:      themes,
+		Message:     strings.TrimSpace(options.Message),
+		RecentGames: recentGames,
+	}, options.Generator)
+	if err != nil {
+		return "", err
+	}
 	now := e.now()
 	state := &GameState{
 		GameID:     newGameID(),
 		PublicCode: newPublicCode(),
 		PuzzleID:   puzzle.ID,
-		Surface:    puzzle.Surface,
+		Surface:    surfaceWithPublicSettings(puzzle.Surface, puzzle.Difficulty, puzzle.Themes),
 		Solution:   puzzle.Solution,
 		Hints:      append([]string(nil), puzzle.Hints...),
+		Difficulty: defaultString(puzzle.Difficulty, difficulty),
+		Themes:     append([]string(nil), firstNonEmptyThemes(puzzle.Themes, themes)...),
 		StartedAt:  now,
 		UpdatedAt:  now,
 	}
@@ -120,7 +165,7 @@ func (e *Engine) Handle(ctx context.Context, sessionKey, input string, judge Jud
 		return statusText(*state), nil
 	}
 	if isSurrenderRequest(input) {
-		return e.revealAndEnd(sessionKey, state, "揭曉湯底")
+		return e.revealAndEnd(sessionKey, state, "揭曉湯底", OutcomeSurrendered)
 	}
 	if isStartRequest(input) {
 		return fmt.Sprintf(
@@ -139,7 +184,7 @@ func (e *Engine) Handle(ctx context.Context, sessionKey, input string, judge Jud
 	}
 	if eval.Kind == "guess" {
 		if eval.Solved {
-			return e.revealAndEnd(sessionKey, state, "答對了！")
+			return e.revealAndEnd(sessionKey, state, "答對了！", OutcomeSolved)
 		}
 		return "還不是湯底。你可以繼續問。", nil
 	}
@@ -166,11 +211,33 @@ func (e *Engine) hint(sessionKey string, state *GameState) (string, error) {
 	return fmt.Sprintf("代號：%s\n提示 %d：%s", state.PublicCode, state.HintsUsed, hint), nil
 }
 
-func (e *Engine) revealAndEnd(sessionKey string, state *GameState, prefix string) (string, error) {
+func (e *Engine) revealAndEnd(sessionKey string, state *GameState, prefix, outcome string) (string, error) {
+	if err := e.recordCompletedGame(sessionKey, state, outcome); err != nil {
+		return "", err
+	}
 	if err := e.store.Delete(sessionKey); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%s\n代號：%s\n\n湯底：%s", prefix, state.PublicCode, state.Solution), nil
+}
+
+func (e *Engine) recordCompletedGame(sessionKey string, state *GameState, outcome string) error {
+	if e == nil || e.store == nil || state == nil {
+		return nil
+	}
+	return e.store.AppendHistory(sessionKey, GameSummary{
+		GameID:        state.GameID,
+		PublicCode:    state.PublicCode,
+		PuzzleID:      state.PuzzleID,
+		Surface:       state.Surface,
+		Difficulty:    state.Difficulty,
+		Themes:        append([]string(nil), state.Themes...),
+		QuestionCount: state.QuestionCount,
+		HintsUsed:     state.HintsUsed,
+		Outcome:       outcome,
+		StartedAt:     state.StartedAt,
+		EndedAt:       e.now(),
+	})
 }
 
 func (e *Engine) ensurePublicCode(sessionKey string, state *GameState) error {
@@ -201,6 +268,162 @@ func (e *Engine) pickPuzzle() Puzzle {
 	}
 	idx := int(binary.BigEndian.Uint64(buf[:]) % uint64(len(e.puzzles)))
 	return e.puzzles[idx]
+}
+
+func (e *Engine) startPuzzle(ctx context.Context, request GenerationRequest, generator PuzzleGenerator) (Puzzle, error) {
+	if generator != nil {
+		var lastErr error
+		for attempt := 0; attempt < 2; attempt++ {
+			puzzle, err := generator.Generate(ctx, request)
+			if err == nil {
+				puzzle = normalizePuzzleMetadata(puzzle, request)
+				if validateErr := validatePuzzle(puzzle, true); validateErr == nil {
+					return puzzle, nil
+				} else {
+					err = validateErr
+				}
+			}
+			lastErr = err
+		}
+		if lastErr == nil {
+			lastErr = errors.New("invalid turtle soup puzzle")
+		}
+		return Puzzle{}, fmt.Errorf("generate turtle soup puzzle: %w", lastErr)
+	}
+
+	if len(e.puzzles) == 0 {
+		return Puzzle{}, errors.New("turtle soup puzzle generator is not configured")
+	}
+	puzzle := normalizePuzzleMetadata(e.pickPuzzle(), request)
+	if err := validatePuzzle(puzzle, false); err != nil {
+		return Puzzle{}, err
+	}
+	return puzzle, nil
+}
+
+func normalizePuzzleMetadata(puzzle Puzzle, request GenerationRequest) Puzzle {
+	puzzle.ID = strings.TrimSpace(puzzle.ID)
+	if puzzle.ID == "" {
+		puzzle.ID = "generated-" + newGameID()
+	}
+	puzzle.Surface = strings.TrimSpace(puzzle.Surface)
+	puzzle.Solution = strings.TrimSpace(puzzle.Solution)
+	puzzle.Difficulty = defaultString(strings.TrimSpace(puzzle.Difficulty), request.Difficulty)
+	puzzle.Themes = firstNonEmptyThemes(puzzle.Themes, request.Themes)
+	hints := make([]string, 0, len(puzzle.Hints))
+	for _, hint := range puzzle.Hints {
+		hint = strings.TrimSpace(hint)
+		if hint != "" {
+			hints = append(hints, hint)
+		}
+	}
+	if len(hints) > 3 {
+		hints = hints[:3]
+	}
+	puzzle.Hints = hints
+	return puzzle
+}
+
+func validatePuzzle(puzzle Puzzle, generated bool) error {
+	if strings.TrimSpace(puzzle.Surface) == "" {
+		return errors.New("turtle soup puzzle surface is empty")
+	}
+	if strings.TrimSpace(puzzle.Solution) == "" {
+		return errors.New("turtle soup puzzle solution is empty")
+	}
+	if generated && len(puzzle.Hints) < 3 {
+		return errors.New("generated turtle soup puzzle must include at least 3 hints")
+	}
+	if visibleContainsSolution(puzzle.Surface, puzzle.Solution) {
+		return errors.New("generated turtle soup puzzle surface leaks the solution")
+	}
+	for _, hint := range puzzle.Hints {
+		if visibleContainsSolution(hint, puzzle.Solution) {
+			return errors.New("generated turtle soup puzzle hint leaks the solution")
+		}
+	}
+	return nil
+}
+
+func visibleContainsSolution(visible, solution string) bool {
+	visible = strings.ToLower(strings.TrimSpace(visible))
+	solution = strings.ToLower(strings.TrimSpace(solution))
+	return solution != "" && visible != "" && strings.Contains(visible, solution)
+}
+
+func normalizeDifficulty(value string) (string, error) {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if len([]rune(value)) > 120 {
+		return "", errors.New("turtle soup difficulty must be 120 characters or fewer")
+	}
+	return value, nil
+}
+
+func normalizeThemes(values []string) ([]string, error) {
+	const (
+		maxThemes     = 8
+		maxThemeRunes = 40
+	)
+	if len(values) == 0 {
+		return nil, nil
+	}
+	themes := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+		if value == "" {
+			continue
+		}
+		if len([]rune(value)) > maxThemeRunes {
+			return nil, errors.New("turtle soup theme tags must be 40 characters or fewer")
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		themes = append(themes, value)
+		if len(themes) > maxThemes {
+			return nil, fmt.Errorf("turtle soup supports at most %d theme tags", maxThemes)
+		}
+	}
+	return themes, nil
+}
+
+func firstNonEmptyThemes(first, second []string) []string {
+	if len(first) > 0 {
+		themes, err := normalizeThemes(first)
+		if err == nil && len(themes) > 0 {
+			return themes
+		}
+	}
+	return append([]string(nil), second...)
+}
+
+func surfaceWithPublicSettings(surface, difficulty string, themes []string) string {
+	settings := publicSettingsText(difficulty, themes)
+	if settings == "" {
+		return surface
+	}
+	return surface + "\n\n" + settings
+}
+
+func publicSettingsText(difficulty string, themes []string) string {
+	parts := make([]string, 0, 2)
+	if difficulty = strings.TrimSpace(difficulty); difficulty != "" {
+		parts = append(parts, "Difficulty: "+difficulty)
+	}
+	if len(themes) > 0 {
+		parts = append(parts, "Themes: "+strings.Join(themes, ", "))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func defaultString(value, fallback string) string {
+	if strings.TrimSpace(value) != "" {
+		return value
+	}
+	return fallback
 }
 
 func statusText(state GameState) string {

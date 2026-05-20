@@ -12,18 +12,20 @@ import (
 type turtleSoupToolProvider struct {
 	response string
 	calls    [][]providers.Message
+	models   []string
 }
 
 func (p *turtleSoupToolProvider) Chat(
 	_ context.Context,
 	messages []providers.Message,
 	_ []providers.ToolDefinition,
-	_ string,
+	model string,
 	_ map[string]any,
 ) (*providers.LLMResponse, error) {
 	cloned := make([]providers.Message, len(messages))
 	copy(cloned, messages)
 	p.calls = append(p.calls, cloned)
+	p.models = append(p.models, model)
 	return &providers.LLMResponse{Content: p.response}, nil
 }
 
@@ -73,6 +75,38 @@ func TestTurtleSoupToolStartDoesNotLeakSolution(t *testing.T) {
 	}
 }
 
+func TestTurtleSoupToolStartGeneratesPuzzleWithSettings(t *testing.T) {
+	provider := &turtleSoupToolProvider{
+		response: `{"surface":"A musician cancels a concert after hearing one silent note.","solution":"The silent note was a coded warning from the stage tuner.","hints":["The sound matters less than who noticed it.","The musician expected a signal.","The note was used as a warning."],"difficulty":"harder than last time","themes":["music","signals"]}`,
+	}
+	engine := turtlesoup.NewEngine(turtlesoup.NewStore(t.TempDir()), nil)
+	model := "old-model"
+	tool := NewTurtleSoupToolWithModelResolver(engine, provider, func() string { return model })
+	ctx := WithToolExecutionContext(context.Background(), "telegram", "chat-1", "", "", "session-1", nil)
+	model = "new-model"
+
+	result := tool.Execute(ctx, map[string]any{
+		"action":     "start",
+		"message":    "start a harder turtle soup about music",
+		"difficulty": "harder than last time",
+		"themes":     []any{"music", "signals"},
+	})
+	if result == nil || result.IsError {
+		t.Fatalf("start result error = %+v", result)
+	}
+	if strings.Contains(result.ForLLM, "coded warning") {
+		t.Fatalf("start result leaked hidden solution: %q", result.ForLLM)
+	}
+	for _, want := range []string{"silent note", "harder than last time", "music", "signals"} {
+		if !strings.Contains(result.ForLLM, want) {
+			t.Fatalf("start result missing %q: %q", want, result.ForLLM)
+		}
+	}
+	if len(provider.models) != 1 || provider.models[0] != "new-model" {
+		t.Fatalf("generator model calls = %v, want [new-model]", provider.models)
+	}
+}
+
 func TestTurtleSoupToolTurnUsesJudge(t *testing.T) {
 	root := t.TempDir()
 	provider := &turtleSoupToolProvider{response: `{"kind":"question","label":"yes"}`}
@@ -86,8 +120,8 @@ func TestTurtleSoupToolTurnUsesJudge(t *testing.T) {
 	)
 	tool := NewTurtleSoupTool(engine, provider, "mock-model")
 	ctx := WithToolExecutionContext(context.Background(), "telegram", "chat-1", "", "", "session-1", nil)
-	if result := tool.Execute(ctx, map[string]any{"action": "start"}); result.IsError {
-		t.Fatalf("start result error = %+v", result)
+	if _, err := engine.Start("session-1"); err != nil {
+		t.Fatalf("Start() error = %v", err)
 	}
 
 	result := tool.Execute(ctx, map[string]any{
@@ -126,13 +160,13 @@ func TestTurtleSoupToolControlActionsDoNotCallJudge(t *testing.T) {
 	)
 	tool := NewTurtleSoupTool(engine, provider, "mock-model")
 	ctx := WithToolExecutionContext(context.Background(), "telegram", "chat-1", "", "", "session-1", nil)
-	start := tool.Execute(ctx, map[string]any{"action": "start"})
-	if start == nil || start.IsError {
-		t.Fatalf("start result error = %+v", start)
+	start, err := engine.Start("session-1")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
 	}
-	code := turtleSoupPublicCode(start.ForLLM)
+	code := turtleSoupPublicCode(start)
 	if code == "" {
-		t.Fatalf("start result should include public code, got %q", start.ForLLM)
+		t.Fatalf("start result should include public code, got %q", start)
 	}
 
 	hint := tool.Execute(ctx, map[string]any{
