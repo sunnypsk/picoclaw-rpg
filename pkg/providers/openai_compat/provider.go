@@ -214,6 +214,10 @@ func (p *Provider) Chat(
 	return out, nil
 }
 
+func (p *Provider) SupportsMessageMedia() bool {
+	return true
+}
+
 func wrapHTMLResponseError(statusCode int, body []byte, contentType, apiBase string) error {
 	respPreview := responsePreview(body, 128)
 	return fmt.Errorf("API request failed: %s returned HTML instead of JSON (content-type: %s); check api_base or proxy configuration.\n  Status: %d\n  Body:   %s", apiBase, contentType, statusCode, respPreview)

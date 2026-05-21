@@ -55,3 +55,7 @@ func (p *HTTPProvider) Chat(
 func (p *HTTPProvider) GetDefaultModel() string {
 	return ""
 }
+
+func (p *HTTPProvider) SupportsMessageMedia() bool {
+	return p != nil && p.delegate != nil && p.delegate.SupportsMessageMedia()
+}

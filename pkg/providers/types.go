@@ -32,6 +32,12 @@ type LLMProvider interface {
 	GetDefaultModel() string
 }
 
+// MessageMediaSupporter is implemented by providers that serialize Message.Media
+// into outbound LLM requests.
+type MessageMediaSupporter interface {
+	SupportsMessageMedia() bool
+}
+
 type StatefulProvider interface {
 	LLMProvider
 	Close()

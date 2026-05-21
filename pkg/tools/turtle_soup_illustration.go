@@ -199,6 +199,9 @@ func (i turtleSoupStartIllustrator) review(
 	if i.provider == nil {
 		return errTurtleSoupIllustrationUnavailable
 	}
+	if len(mediaRefs) > 0 && !providerSupportsMessageMedia(i.provider) {
+		return fmt.Errorf("%w: reviewer provider does not serialize image media", errTurtleSoupIllustrationUnavailable)
+	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("%w: encode review payload", errTurtleSoupIllustrationUnavailable)
@@ -222,6 +225,11 @@ func (i turtleSoupStartIllustrator) review(
 		return errTurtleSoupIllustrationUnsafe
 	}
 	return nil
+}
+
+func providerSupportsMessageMedia(provider providers.LLMProvider) bool {
+	supporter, ok := provider.(providers.MessageMediaSupporter)
+	return ok && supporter.SupportsMessageMedia()
 }
 
 func parseTurtleSoupIllustrationReview(raw string) (bool, error) {

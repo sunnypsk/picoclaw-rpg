@@ -13,9 +13,10 @@ import (
 )
 
 type turtleSoupReviewProvider struct {
-	responses []string
-	calls     [][]providers.Message
-	models    []string
+	responses            []string
+	supportsMessageMedia bool
+	calls                [][]providers.Message
+	models               []string
 }
 
 func (p *turtleSoupReviewProvider) Chat(
@@ -41,6 +42,10 @@ func (p *turtleSoupReviewProvider) GetDefaultModel() string {
 	return "mock-model"
 }
 
+func (p *turtleSoupReviewProvider) SupportsMessageMedia() bool {
+	return p.supportsMessageMedia
+}
+
 type fakeTurtleSoupImageGenerator struct {
 	result *ToolResult
 	calls  []map[string]any
@@ -64,7 +69,10 @@ func TestTurtleSoupToolStartReturnsReviewedIllustrationMedia(t *testing.T) {
 	store := media.NewFileMediaStore()
 	ref, _ := storeTestIllustration(t, store, true)
 	imageGenerator := &fakeTurtleSoupImageGenerator{result: MediaResult("generated", []string{ref})}
-	provider := &turtleSoupReviewProvider{responses: []string{`{"safe":true}`, `{"safe":true}`}}
+	provider := &turtleSoupReviewProvider{
+		responses:            []string{`{"safe":true}`, `{"safe":true}`},
+		supportsMessageMedia: true,
+	}
 	tool := NewTurtleSoupTool(engine, nil, "")
 	tool.setStartIllustrator(turtleSoupStartIllustrator{
 		provider:      provider,
@@ -114,7 +122,10 @@ func TestTurtleSoupToolSuppressesUnsafeGeneratedIllustration(t *testing.T) {
 	store := media.NewFileMediaStore()
 	ref, imagePath := storeTestIllustration(t, store, true)
 	imageGenerator := &fakeTurtleSoupImageGenerator{result: MediaResult("generated", []string{ref})}
-	provider := &turtleSoupReviewProvider{responses: []string{`{"safe":true}`, `{"safe":false}`}}
+	provider := &turtleSoupReviewProvider{
+		responses:            []string{`{"safe":true}`, `{"safe":false}`},
+		supportsMessageMedia: true,
+	}
 	tool := NewTurtleSoupTool(engine, nil, "")
 	tool.setStartIllustrator(turtleSoupStartIllustrator{
 		provider:      provider,
@@ -142,6 +153,42 @@ func TestTurtleSoupToolSuppressesUnsafeGeneratedIllustration(t *testing.T) {
 	}
 }
 
+func TestTurtleSoupToolSuppressesIllustrationWhenReviewerCannotReceiveMedia(t *testing.T) {
+	engine := turtlesoup.NewEngine(turtlesoup.NewStore(t.TempDir()), []turtlesoup.Puzzle{{
+		ID:       "test",
+		Surface:  "public taxi scene",
+		Solution: "hidden police station rescue",
+	}})
+	store := media.NewFileMediaStore()
+	ref, imagePath := storeTestIllustration(t, store, true)
+	imageGenerator := &fakeTurtleSoupImageGenerator{result: MediaResult("generated", []string{ref})}
+	provider := &turtleSoupReviewProvider{
+		responses: []string{`{"safe":true}`, `{"safe":true}`},
+	}
+	tool := NewTurtleSoupTool(engine, nil, "")
+	tool.setStartIllustrator(turtleSoupStartIllustrator{
+		provider:      provider,
+		modelResolver: func() string { return "text-only-review-model" },
+		imageTool:     imageGenerator,
+		mediaStore:    func() media.MediaStore { return store },
+	})
+	ctx := WithToolExecutionContext(context.Background(), "telegram", "chat-1", "", "", "session-1", nil)
+
+	result := tool.Execute(ctx, map[string]any{"action": "start"})
+	if result == nil || result.IsError {
+		t.Fatalf("start result error = %+v", result)
+	}
+	if len(result.Media) != 0 {
+		t.Fatalf("reviewer without media support should suppress media, got %v", result.Media)
+	}
+	if len(provider.calls) != 1 {
+		t.Fatalf("provider calls = %d, want only prompt review before fail-closed image review", len(provider.calls))
+	}
+	if _, err := os.Stat(imagePath); !os.IsNotExist(err) {
+		t.Fatalf("unreviewed generated media should be deleted, stat err = %v", err)
+	}
+}
+
 func TestTurtleSoupToolDoesNotIllustrateAlreadyActiveStart(t *testing.T) {
 	engine := turtlesoup.NewEngine(turtlesoup.NewStore(t.TempDir()), []turtlesoup.Puzzle{{
 		ID:       "test",
@@ -151,7 +198,10 @@ func TestTurtleSoupToolDoesNotIllustrateAlreadyActiveStart(t *testing.T) {
 	store := media.NewFileMediaStore()
 	ref, _ := storeTestIllustration(t, store, true)
 	imageGenerator := &fakeTurtleSoupImageGenerator{result: MediaResult("generated", []string{ref})}
-	provider := &turtleSoupReviewProvider{responses: []string{`{"safe":true}`, `{"safe":true}`}}
+	provider := &turtleSoupReviewProvider{
+		responses:            []string{`{"safe":true}`, `{"safe":true}`},
+		supportsMessageMedia: true,
+	}
 	tool := NewTurtleSoupTool(engine, nil, "")
 	tool.setStartIllustrator(turtleSoupStartIllustrator{
 		provider:      provider,
@@ -191,7 +241,10 @@ func TestTurtleSoupToolDoesNotIllustrateNonStartActions(t *testing.T) {
 	store := media.NewFileMediaStore()
 	ref, _ := storeTestIllustration(t, store, true)
 	imageGenerator := &fakeTurtleSoupImageGenerator{result: MediaResult("generated", []string{ref})}
-	reviewProvider := &turtleSoupReviewProvider{responses: []string{`{"safe":true}`, `{"safe":true}`}}
+	reviewProvider := &turtleSoupReviewProvider{
+		responses:            []string{`{"safe":true}`, `{"safe":true}`},
+		supportsMessageMedia: true,
+	}
 	judgeProvider := &turtleSoupToolProvider{response: `{"kind":"question","label":"yes"}`}
 	tool := NewTurtleSoupTool(engine, judgeProvider, "judge-model")
 	tool.setStartIllustrator(turtleSoupStartIllustrator{
