@@ -14,11 +14,13 @@ type scriptedJudge struct {
 	err     error
 	calls   int
 	inputs  []string
+	states  []GameState
 }
 
-func (j *scriptedJudge) Evaluate(_ context.Context, _ GameState, input string) (Evaluation, error) {
+func (j *scriptedJudge) Evaluate(_ context.Context, state GameState, input string) (Evaluation, error) {
 	j.calls++
 	j.inputs = append(j.inputs, input)
+	j.states = append(j.states, state)
 	if j.err != nil {
 		return Evaluation{}, j.err
 	}
@@ -49,6 +51,22 @@ func (g *scriptedGenerator) Generate(_ context.Context, request GenerationReques
 	puzzle := g.puzzles[0]
 	g.puzzles = g.puzzles[1:]
 	return puzzle, nil
+}
+
+type scriptedHintProvider struct {
+	hint   string
+	err    error
+	calls  int
+	states []GameState
+}
+
+func (p *scriptedHintProvider) GenerateHint(_ context.Context, state GameState) (string, error) {
+	p.calls++
+	p.states = append(p.states, state)
+	if p.err != nil {
+		return "", p.err
+	}
+	return p.hint, nil
 }
 
 func TestStartWithGeneratedPuzzleStoresSettingsAndHidesSolution(t *testing.T) {
@@ -424,6 +442,86 @@ func TestHandleQuestionHintAndSolvedGuess(t *testing.T) {
 	}
 	if _, err := engine.Handle(context.Background(), sessionKey, "還能問嗎？", judge); !errors.Is(err, ErrNoActiveGame) {
 		t.Fatalf("expected ErrNoActiveGame after solved game, got %v", err)
+	}
+}
+
+func TestHandleStoresTurnHistoryForLaterJudging(t *testing.T) {
+	engine := NewEngine(NewStore(t.TempDir()), []Puzzle{{
+		ID:       "test",
+		Surface:  "surface text",
+		Solution: "solution secret",
+		Hints:    []string{"first hint"},
+	}})
+	sessionKey := "agent:main:test"
+	if _, err := engine.Start(sessionKey); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	judge := &scriptedJudge{results: []Evaluation{
+		{Kind: "question", Label: LabelYes},
+		{Kind: "question", Label: LabelNo},
+	}}
+	if _, err := engine.Handle(context.Background(), sessionKey, "is the driver involved?", judge); err != nil {
+		t.Fatalf("Handle(first question) error = %v", err)
+	}
+	if _, err := engine.Handle(context.Background(), sessionKey, "is the passenger the victim?", judge); err != nil {
+		t.Fatalf("Handle(second question) error = %v", err)
+	}
+	if len(judge.states) != 2 {
+		t.Fatalf("judge states = %d, want 2", len(judge.states))
+	}
+	if len(judge.states[0].Turns) != 0 {
+		t.Fatalf("first judge call should not see current turn history, got %+v", judge.states[0].Turns)
+	}
+	if len(judge.states[1].Turns) != 1 || judge.states[1].Turns[0].Label != LabelYes {
+		t.Fatalf("second judge call should see first turn, got %+v", judge.states[1].Turns)
+	}
+
+	state, err := engine.store.Load(sessionKey)
+	if err != nil {
+		t.Fatalf("Load(state) error = %v", err)
+	}
+	if state.QuestionCount != 2 || len(state.Turns) != 2 {
+		t.Fatalf("state question count/turns = %d/%d, want 2/2", state.QuestionCount, len(state.Turns))
+	}
+	if state.Turns[0].PlayerMessage != "is the driver involved?" || state.Turns[0].Label != LabelYes {
+		t.Fatalf("first stored turn = %+v", state.Turns[0])
+	}
+	if state.Turns[1].PlayerMessage != "is the passenger the victim?" || state.Turns[1].Label != LabelNo {
+		t.Fatalf("second stored turn = %+v", state.Turns[1])
+	}
+}
+
+func TestContextAwareHintReceivesPriorTurns(t *testing.T) {
+	engine := NewEngine(NewStore(t.TempDir()), []Puzzle{{
+		ID:       "test",
+		Surface:  "surface text",
+		Solution: "solution secret",
+		Hints:    []string{"static hint one", "static hint two"},
+	}})
+	sessionKey := "agent:main:test"
+	if _, err := engine.Start(sessionKey); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if _, err := engine.Handle(context.Background(), sessionKey, "is the driver involved?", &scriptedJudge{
+		results: []Evaluation{{Kind: "question", Label: LabelYes}},
+	}); err != nil {
+		t.Fatalf("Handle(question) error = %v", err)
+	}
+
+	hints := &scriptedHintProvider{hint: "new useful hint"}
+	response, err := engine.HandleWithOptions(context.Background(), sessionKey, "hint", HandleOptions{HintProvider: hints})
+	if err != nil {
+		t.Fatalf("HandleWithOptions(hint) error = %v", err)
+	}
+	if !strings.Contains(response, "new useful hint") {
+		t.Fatalf("hint response = %q", response)
+	}
+	if hints.calls != 1 {
+		t.Fatalf("hint provider calls = %d, want 1", hints.calls)
+	}
+	if len(hints.states) != 1 || len(hints.states[0].Turns) != 1 {
+		t.Fatalf("hint provider should receive prior turn history, got %+v", hints.states)
 	}
 }
 

@@ -41,16 +41,19 @@ func (j LLMJudge) Evaluate(ctx context.Context, state GameState, input string) (
 	}
 
 	system := `You are an internal judge for a turtle soup / situation puzzle game.
-You will receive a public puzzle surface, a hidden solution, and the player's latest message.
+You will receive a public puzzle surface, a hidden solution, previous judged turns, and the player's latest message.
 Classify the latest message without revealing the hidden solution.
 If the player is asking a yes/no style question, return {"kind":"question","label":"yes|no|irrelevant|partial|cannot_answer"}.
 If the player is making a final guess at the hidden solution, return {"kind":"guess","solved":true|false}.
-Use "cannot_answer" when the question asks for the answer directly, asks for hidden text, or cannot be answered safely as yes/no.
+Preserve consistency with previous judged turns and do not contradict established answers.
+If the latest question is ambiguous, uses unclear pronouns, bundles multiple questions, or asks for the answer directly, use "cannot_answer".
+Use "partial" for group questions where some but not all referenced subjects satisfy the question.
 Return JSON only.`
 
-	payload := map[string]string{
+	payload := map[string]any{
 		"surface":         state.Surface,
 		"hidden_solution": state.Solution,
+		"turn_history":    promptTurnHistory(state.Turns),
 		"player_message":  strings.TrimSpace(input),
 	}
 	payloadBytes, _ := json.Marshal(payload)

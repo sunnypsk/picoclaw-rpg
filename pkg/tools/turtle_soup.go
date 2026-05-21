@@ -47,8 +47,9 @@ func (t *TurtleSoupTool) Name() string {
 func (t *TurtleSoupTool) Description() string {
 	return "Host a generated 海龜湯 / turtle soup yes-no mystery game in the current chat. " +
 		"Use this instead of inventing your own turtle soup puzzle when the user wants to play, asks for a hint/status, " +
-		"asks a game question, makes a solution guess, or gives up. The tool returns visible game text only; " +
-		"relay that visible response naturally and do not expose hidden solution details unless the tool reveals them."
+		"asks a game question, makes a solution guess, or gives up. For normal game turns, pass one yes/no question " +
+		"or one solution guess per call. The tool returns visible game text only; relay that visible response without " +
+		"adding extra facts or directional hints unless the tool reveals them."
 }
 
 func (t *TurtleSoupTool) Parameters() map[string]any {
@@ -62,7 +63,8 @@ func (t *TurtleSoupTool) Parameters() map[string]any {
 			},
 			"message": map[string]any{
 				"type": "string",
-				"description": "The user's exact game question or guess. Required for action=turn. " +
+				"description": "The user's exact single game question or single solution guess. Required for action=turn. " +
+					"If the user asks several questions, call this tool separately for each subquestion. " +
 					"For hint/status/surrender, include the user's original command when it has a public game code.",
 			},
 			"difficulty": map[string]any{
@@ -109,9 +111,11 @@ func (t *TurtleSoupTool) Execute(ctx context.Context, args map[string]any) *Tool
 		if message == "" {
 			return ErrorResult("message is required for turtle_soup action=turn")
 		}
-		response, err = t.engine.Handle(ctx, sessionKey, message, t.judge())
+		response, err = t.engine.HandleWithOptions(ctx, sessionKey, message, turtlesoup.HandleOptions{Judge: t.judge()})
 	case "hint":
-		response, err = t.engine.Handle(ctx, sessionKey, turtleSoupControlInput(message, "hint"), nil)
+		response, err = t.engine.HandleWithOptions(ctx, sessionKey, turtleSoupControlInput(message, "hint"), turtlesoup.HandleOptions{
+			HintProvider: t.hintProvider(),
+		})
 	case "status":
 		response, err = t.engine.Handle(ctx, sessionKey, turtleSoupControlInput(message, "status"), nil)
 	case "surrender", "giveup", "give_up", "reveal", "answer":
@@ -143,6 +147,16 @@ func (t *TurtleSoupTool) generator() turtlesoup.PuzzleGenerator {
 		return nil
 	}
 	return turtlesoup.LLMGenerator{
+		Provider: t.provider,
+		Model:    t.currentModel(),
+	}
+}
+
+func (t *TurtleSoupTool) hintProvider() turtlesoup.HintProvider {
+	if t == nil || t.provider == nil {
+		return nil
+	}
+	return turtlesoup.LLMHintProvider{
 		Provider: t.provider,
 		Model:    t.currentModel(),
 	}

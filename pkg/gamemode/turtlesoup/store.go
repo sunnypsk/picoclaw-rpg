@@ -19,6 +19,7 @@ const (
 	stateVersion              = 1
 	historyVersion            = 1
 	maxCompletedGameSummaries = 10
+	maxActiveTurnHistory      = 40
 )
 
 var ErrNoActiveGame = errors.New("no active turtle soup game")
@@ -36,8 +37,17 @@ type GameState struct {
 	Themes        []string  `json:"themes,omitempty"`
 	HintsUsed     int       `json:"hints_used"`
 	QuestionCount int       `json:"question_count"`
+	Turns         []Turn    `json:"turns,omitempty"`
 	StartedAt     time.Time `json:"started_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type Turn struct {
+	PlayerMessage string    `json:"player_message"`
+	Kind          string    `json:"kind"`
+	Label         Label     `json:"label,omitempty"`
+	Solved        bool      `json:"solved,omitempty"`
+	RecordedAt    time.Time `json:"recorded_at"`
 }
 
 type GameSummary struct {

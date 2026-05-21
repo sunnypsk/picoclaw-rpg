@@ -38,6 +38,15 @@ type PuzzleGenerator interface {
 	Generate(ctx context.Context, request GenerationRequest) (Puzzle, error)
 }
 
+type HintProvider interface {
+	GenerateHint(ctx context.Context, state GameState) (string, error)
+}
+
+type HandleOptions struct {
+	Judge        Judge
+	HintProvider HintProvider
+}
+
 type Engine struct {
 	store   *Store
 	puzzles []Puzzle
@@ -133,6 +142,10 @@ func (e *Engine) StartWithOptions(ctx context.Context, sessionKey string, option
 }
 
 func (e *Engine) Handle(ctx context.Context, sessionKey, input string, judge Judge) (string, error) {
+	return e.HandleWithOptions(ctx, sessionKey, input, HandleOptions{Judge: judge})
+}
+
+func (e *Engine) HandleWithOptions(ctx context.Context, sessionKey, input string, options HandleOptions) (string, error) {
 	if e == nil || e.store == nil {
 		return "", errors.New("turtle soup engine is not configured")
 	}
@@ -159,7 +172,7 @@ func (e *Engine) Handle(ctx context.Context, sessionKey, input string, judge Jud
 		return "請問一個是非題，或輸入「提示」「放棄」。", nil
 	}
 	if isHintRequest(input) {
-		return e.hint(sessionKey, state)
+		return e.hint(ctx, sessionKey, state, options.HintProvider)
 	}
 	if isStatusRequest(input) {
 		return statusText(*state), nil
@@ -174,29 +187,59 @@ func (e *Engine) Handle(ctx context.Context, sessionKey, input string, judge Jud
 			state.Surface,
 		), nil
 	}
-	if judge == nil {
+	if options.Judge == nil {
 		return "不能回答", nil
 	}
 
-	eval, err := judge.Evaluate(ctx, *state, input)
+	eval, err := options.Judge.Evaluate(ctx, *state, input)
 	if err != nil {
 		return "不能回答", nil
 	}
 	if eval.Kind == "guess" {
 		if eval.Solved {
+			e.recordTurn(state, input, eval)
 			return e.revealAndEnd(sessionKey, state, "答對了！", OutcomeSolved)
+		}
+		e.recordTurn(state, input, eval)
+		if err := e.store.Save(sessionKey, state); err != nil {
+			return "", err
 		}
 		return "還不是湯底。你可以繼續問。", nil
 	}
 
 	state.QuestionCount++
+	e.recordTurn(state, input, eval)
 	if err := e.store.Save(sessionKey, state); err != nil {
 		return "", err
 	}
 	return labelText(eval.Label), nil
 }
 
-func (e *Engine) hint(sessionKey string, state *GameState) (string, error) {
+func (e *Engine) recordTurn(state *GameState, input string, eval Evaluation) {
+	if state == nil {
+		return
+	}
+	kind := strings.ToLower(strings.TrimSpace(eval.Kind))
+	if kind != "guess" {
+		kind = "question"
+	}
+	turn := Turn{
+		PlayerMessage: strings.TrimSpace(input),
+		Kind:          kind,
+		RecordedAt:    e.now(),
+	}
+	if kind == "guess" {
+		turn.Solved = eval.Solved
+	} else {
+		turn.Label = normalizeLabel(eval.Label)
+	}
+	state.Turns = append(state.Turns, turn)
+	if len(state.Turns) > maxActiveTurnHistory {
+		state.Turns = append([]Turn(nil), state.Turns[len(state.Turns)-maxActiveTurnHistory:]...)
+	}
+}
+
+func (e *Engine) hint(ctx context.Context, sessionKey string, state *GameState, hintProvider HintProvider) (string, error) {
 	if len(state.Hints) == 0 {
 		return "這題沒有提示。", nil
 	}
@@ -204,6 +247,13 @@ func (e *Engine) hint(sessionKey string, state *GameState) (string, error) {
 		return "提示已經用完。", nil
 	}
 	hint := state.Hints[state.HintsUsed]
+	if hintProvider != nil && len(state.Turns) > 0 {
+		if generated, err := hintProvider.GenerateHint(ctx, *state); err == nil {
+			if generated = strings.TrimSpace(generated); generated != "" && !visibleContainsSolution(generated, state.Solution) {
+				hint = generated
+			}
+		}
+	}
 	state.HintsUsed++
 	if err := e.store.Save(sessionKey, state); err != nil {
 		return "", err
