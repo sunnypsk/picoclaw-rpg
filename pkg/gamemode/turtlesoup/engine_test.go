@@ -523,6 +523,13 @@ func TestContextAwareHintReceivesPriorTurns(t *testing.T) {
 	if len(hints.states) != 1 || len(hints.states[0].Turns) != 1 {
 		t.Fatalf("hint provider should receive prior turn history, got %+v", hints.states)
 	}
+	state, err := engine.store.Load(sessionKey)
+	if err != nil {
+		t.Fatalf("Load(state) error = %v", err)
+	}
+	if len(state.ShownHints) != 1 || state.ShownHints[0] != "new useful hint" {
+		t.Fatalf("shown hints = %+v, want generated hint", state.ShownHints)
+	}
 }
 
 func TestHandleAcceptsPublicCodeReferences(t *testing.T) {

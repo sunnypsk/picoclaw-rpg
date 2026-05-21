@@ -6,7 +6,7 @@ type promptTurn struct {
 	PlayerMessage string `json:"player_message"`
 	Kind          string `json:"kind"`
 	Label         string `json:"label,omitempty"`
-	Solved        bool   `json:"solved,omitempty"`
+	Solved        *bool  `json:"solved,omitempty"`
 }
 
 func promptTurnHistory(turns []Turn) []promptTurn {
@@ -28,11 +28,15 @@ func promptTurnHistory(turns []Turn) []promptTurn {
 			Kind:          kind,
 		}
 		if kind == "guess" {
-			entry.Solved = turn.Solved
+			entry.Solved = boolPtr(turn.Solved)
 		} else {
 			entry.Label = string(normalizeLabel(turn.Label))
 		}
 		out = append(out, entry)
 	}
 	return out
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }

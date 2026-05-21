@@ -87,3 +87,30 @@ func TestLLMJudgeSendsTurnHistoryForConsistency(t *testing.T) {
 		t.Fatalf("player message = %q", payload.PlayerMessage)
 	}
 }
+
+func TestLLMJudgeSendsRejectedGuessVerdict(t *testing.T) {
+	provider := &judgeProvider{response: `{"kind":"question","label":"no"}`}
+	judge := LLMJudge{Provider: provider, Model: "mock-model"}
+	_, err := judge.Evaluate(context.Background(), GameState{
+		Surface:  "public surface",
+		Solution: "hidden answer",
+		Turns: []Turn{{
+			PlayerMessage: "the passenger was the victim",
+			Kind:          "guess",
+			Solved:        false,
+		}},
+	}, "was the victim elsewhere?")
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+
+	var payload struct {
+		TurnHistory []promptTurn `json:"turn_history"`
+	}
+	if err := json.Unmarshal([]byte(provider.calls[0][1].Content), &payload); err != nil {
+		t.Fatalf("decode judge payload: %v", err)
+	}
+	if len(payload.TurnHistory) != 1 || payload.TurnHistory[0].Solved == nil || *payload.TurnHistory[0].Solved {
+		t.Fatalf("failed guess should include solved=false, got %+v", payload.TurnHistory)
+	}
+}

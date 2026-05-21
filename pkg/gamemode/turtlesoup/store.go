@@ -33,6 +33,7 @@ type GameState struct {
 	Surface       string    `json:"surface"`
 	Solution      string    `json:"solution"`
 	Hints         []string  `json:"hints,omitempty"`
+	ShownHints    []string  `json:"shown_hints,omitempty"`
 	Difficulty    string    `json:"difficulty,omitempty"`
 	Themes        []string  `json:"themes,omitempty"`
 	HintsUsed     int       `json:"hints_used"`

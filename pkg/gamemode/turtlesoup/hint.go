@@ -29,13 +29,11 @@ Do not contradict previous judged turns.
 Prefer a hint that points to the next missing inference.
 Match the player's language when it is clear; otherwise use Traditional Chinese.`
 
-	usedHints := state.Hints[:minInt(state.HintsUsed, len(state.Hints))]
-	remainingHints := state.Hints[minInt(state.HintsUsed, len(state.Hints)):]
 	payload := map[string]any{
 		"surface":         state.Surface,
 		"hidden_solution": state.Solution,
-		"used_hints":      usedHints,
-		"remaining_hints": remainingHints,
+		"used_hints":      shownHintsForPrompt(state),
+		"remaining_hints": remainingHintsForPrompt(state),
 		"turn_history":    promptTurnHistory(state.Turns),
 	}
 	payloadBytes, _ := json.Marshal(payload)
@@ -92,4 +90,26 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func shownHintsForPrompt(state GameState) []string {
+	usedCount := minInt(state.HintsUsed, len(state.Hints))
+	usedHints := append([]string(nil), state.Hints[:usedCount]...)
+	for i, shown := range state.ShownHints {
+		shown = strings.TrimSpace(shown)
+		if shown == "" {
+			continue
+		}
+		if i < len(usedHints) {
+			usedHints[i] = shown
+			continue
+		}
+		usedHints = append(usedHints, shown)
+	}
+	return usedHints
+}
+
+func remainingHintsForPrompt(state GameState) []string {
+	start := minInt(state.HintsUsed, len(state.Hints))
+	return append([]string(nil), state.Hints[start:]...)
 }

@@ -254,6 +254,7 @@ func (e *Engine) hint(ctx context.Context, sessionKey string, state *GameState, 
 			}
 		}
 	}
+	state.ShownHints = append(shownHintsForPrompt(*state), hint)
 	state.HintsUsed++
 	if err := e.store.Save(sessionKey, state); err != nil {
 		return "", err

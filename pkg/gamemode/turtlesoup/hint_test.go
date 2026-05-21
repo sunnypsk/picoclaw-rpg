@@ -11,10 +11,11 @@ func TestLLMHintProviderUsesTurnHistory(t *testing.T) {
 	provider := &judgeProvider{response: `{"hint":"Focus on why the spoken destination was unsafe."}`}
 	hints := LLMHintProvider{Provider: provider, Model: "mock-model"}
 	hint, err := hints.GenerateHint(context.Background(), GameState{
-		Surface:   "public surface",
-		Solution:  "hidden answer",
-		Hints:     []string{"static hint one", "static hint two"},
-		HintsUsed: 1,
+		Surface:    "public surface",
+		Solution:   "hidden answer",
+		Hints:      []string{"static hint one", "static hint two"},
+		ShownHints: []string{"generated hint one"},
+		HintsUsed:  1,
 		Turns: []Turn{{
 			PlayerMessage: "is the passenger the victim?",
 			Kind:          "question",
@@ -43,7 +44,7 @@ func TestLLMHintProviderUsesTurnHistory(t *testing.T) {
 	if payload.HiddenSolution != "hidden answer" {
 		t.Fatalf("hidden solution = %q", payload.HiddenSolution)
 	}
-	if strings.Join(payload.UsedHints, ",") != "static hint one" {
+	if strings.Join(payload.UsedHints, ",") != "generated hint one" {
 		t.Fatalf("used hints = %+v", payload.UsedHints)
 	}
 	if strings.Join(payload.RemainingHints, ",") != "static hint two" {
