@@ -27,6 +27,16 @@ type StartOptions struct {
 	Generator  PuzzleGenerator
 }
 
+type StartResult struct {
+	Text       string
+	Started    bool
+	PublicCode string
+	Surface    string
+	Solution   string
+	Difficulty string
+	Themes     []string
+}
+
 type GenerationRequest struct {
 	Difficulty  string
 	Themes      []string
@@ -83,31 +93,46 @@ func (e *Engine) Start(sessionKey string) (string, error) {
 }
 
 func (e *Engine) StartWithOptions(ctx context.Context, sessionKey string, options StartOptions) (string, error) {
+	result, err := e.StartWithResult(ctx, sessionKey, options)
+	if err != nil {
+		return "", err
+	}
+	return result.Text, nil
+}
+
+func (e *Engine) StartWithResult(ctx context.Context, sessionKey string, options StartOptions) (StartResult, error) {
 	if e == nil || e.store == nil {
-		return "", errors.New("turtle soup engine is not configured")
+		return StartResult{}, errors.New("turtle soup engine is not configured")
 	}
 	if state, err := e.store.Load(sessionKey); err == nil && state != nil {
 		if err := e.ensurePublicCode(sessionKey, state); err != nil {
-			return "", err
+			return StartResult{}, err
 		}
-		return fmt.Sprintf(
+		text := fmt.Sprintf(
 			"已經有一局海龜湯進行中。\n代號：%s\n\n湯面：%s\n\n可以問是非題，或輸入「提示」「放棄」。",
 			state.PublicCode,
 			state.Surface,
-		), nil
+		)
+		return StartResult{
+			Text:       text,
+			PublicCode: state.PublicCode,
+			Surface:    state.Surface,
+			Difficulty: state.Difficulty,
+			Themes:     append([]string(nil), state.Themes...),
+		}, nil
 	}
 
 	difficulty, err := normalizeDifficulty(options.Difficulty)
 	if err != nil {
-		return "", err
+		return StartResult{}, err
 	}
 	themes, err := normalizeThemes(options.Themes)
 	if err != nil {
-		return "", err
+		return StartResult{}, err
 	}
 	recentGames, err := e.store.LoadHistory(sessionKey, recentGameSummaryLimit)
 	if err != nil {
-		return "", err
+		return StartResult{}, err
 	}
 	puzzle, err := e.startPuzzle(ctx, GenerationRequest{
 		Difficulty:  difficulty,
@@ -116,7 +141,7 @@ func (e *Engine) StartWithOptions(ctx context.Context, sessionKey string, option
 		RecentGames: recentGames,
 	}, options.Generator)
 	if err != nil {
-		return "", err
+		return StartResult{}, err
 	}
 	now := e.now()
 	state := &GameState{
@@ -132,13 +157,22 @@ func (e *Engine) StartWithOptions(ctx context.Context, sessionKey string, option
 		UpdatedAt:  now,
 	}
 	if err := e.store.Save(sessionKey, state); err != nil {
-		return "", err
+		return StartResult{}, err
 	}
-	return fmt.Sprintf(
+	text := fmt.Sprintf(
 		"海龜湯開始。\n代號：%s\n\n湯面：%s\n\n你可以問是非題；我只會回答「是 / 否 / 無關 / 部分是 / 不能回答」。",
 		state.PublicCode,
 		state.Surface,
-	), nil
+	)
+	return StartResult{
+		Text:       text,
+		Started:    true,
+		PublicCode: state.PublicCode,
+		Surface:    state.Surface,
+		Solution:   state.Solution,
+		Difficulty: state.Difficulty,
+		Themes:     append([]string(nil), state.Themes...),
+	}, nil
 }
 
 func (e *Engine) Handle(ctx context.Context, sessionKey, input string, judge Judge) (string, error) {

@@ -9,6 +9,13 @@ the tool can accept an optional free-text `difficulty` phrase (for example,
 requested generation fails validation twice, the tool returns an error and no
 game is started.
 
+When a new game starts, the `turtle_soup` tool also attempts one public-safe
+illustration. The image prompt is built only from the public setup and public
+settings, then reviewed before generation and reviewed again after generation
+against the hidden solution. If either review fails or the image cannot be
+reviewed, the game still starts but no illustration is sent. Hints, status,
+normal turns, and reveals do not generate images.
+
 Relative difficulty phrases such as `harder than last time` are grounded in the
 current chat's private completed-game summaries. Those summaries include public
 settings and play stats such as question count, hints used, and outcome, but not

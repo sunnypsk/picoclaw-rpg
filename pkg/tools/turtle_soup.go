@@ -14,10 +14,11 @@ import (
 var turtleSoupPublicCodePattern = regexp.MustCompile(`(?i)\bTS-?[A-Z0-9]{4}\b`)
 
 type TurtleSoupTool struct {
-	engine        *turtlesoup.Engine
-	provider      providers.LLMProvider
-	model         string
-	modelResolver func() string
+	engine           *turtlesoup.Engine
+	provider         providers.LLMProvider
+	model            string
+	modelResolver    func() string
+	startIllustrator turtleSoupStartIllustratorRunner
 }
 
 func NewTurtleSoupTool(engine *turtlesoup.Engine, provider providers.LLMProvider, model string) *TurtleSoupTool {
@@ -49,7 +50,8 @@ func (t *TurtleSoupTool) Description() string {
 		"Use this instead of inventing your own turtle soup puzzle when the user wants to play, asks for a hint/status, " +
 		"asks a game question, makes a solution guess, or gives up. For normal game turns, pass one yes/no question " +
 		"or one solution guess per call. The tool returns visible game text only; relay that visible response without " +
-		"adding extra facts or directional hints unless the tool reveals them."
+		"adding extra facts or directional hints unless the tool reveals them. New games may include one safety-reviewed " +
+		"illustration; do not call generate_image separately for turtle soup scenes."
 }
 
 func (t *TurtleSoupTool) Parameters() map[string]any {
@@ -101,12 +103,23 @@ func (t *TurtleSoupTool) Execute(ctx context.Context, args map[string]any) *Tool
 	)
 	switch action {
 	case "start", "new":
-		response, err = t.engine.StartWithOptions(ctx, sessionKey, turtlesoup.StartOptions{
+		startResult, startErr := t.engine.StartWithResult(ctx, sessionKey, turtlesoup.StartOptions{
 			Difficulty: turtleSoupStringArg(args, "difficulty"),
 			Themes:     turtleSoupStringSliceArg(args, "themes"),
 			Message:    message,
 			Generator:  t.generator(),
 		})
+		response, err = startResult.Text, startErr
+		if err == nil && startResult.Started && t.startIllustrator != nil {
+			illustration, illustrationErr := t.startIllustrator.IllustrateStart(ctx, startResult)
+			if illustrationErr == nil {
+				if note := strings.TrimSpace(illustration.Note); note != "" {
+					response = strings.TrimSpace(response) + "\n\n" + note
+				}
+				return turtleSoupResult(response, illustration.Media)
+			}
+			response = strings.TrimSpace(response) + "\n\n" + turtleSoupIllustrationFailureNote(illustrationErr)
+		}
 	case "turn", "ask", "question", "guess":
 		if message == "" {
 			return ErrorResult("message is required for turtle_soup action=turn")
@@ -129,7 +142,7 @@ func (t *TurtleSoupTool) Execute(ctx context.Context, args map[string]any) *Tool
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("turtle soup error: %v", err)).WithError(err)
 	}
-	return SilentResult(response)
+	return turtleSoupResult(response, nil)
 }
 
 func (t *TurtleSoupTool) judge() turtlesoup.Judge {
