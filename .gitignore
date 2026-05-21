@@ -38,6 +38,7 @@ coverage.html
 .codex-cache/
 .codex-cache-test/
 .codex-gocache/
+.codex-tmp/
 tmp_chat_probe_result.json
 
 # OS
