@@ -386,6 +386,11 @@ func DefaultConfig() *Config {
 		Heartbeat: HeartbeatConfig{
 			Enabled:  true,
 			Interval: 30,
+			SilentPeriod: HeartbeatSilentPeriodConfig{
+				Enabled: true,
+				Start:   "01:00",
+				End:     "06:00",
+			},
 			Location: HeartbeatLocationConfig{
 				Enabled:                true,
 				IdleThresholdMinutes:   60,

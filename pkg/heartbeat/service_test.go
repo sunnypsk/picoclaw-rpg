@@ -41,6 +41,130 @@ func TestJitteredHeartbeatIntervalClampsToMinimum(t *testing.T) {
 	}
 }
 
+func TestSilentPeriodActive(t *testing.T) {
+	hs := NewHeartbeatService("", 30, true)
+	if err := hs.SetSilentPeriod(true, "01:00", "06:00"); err != nil {
+		t.Fatalf("SetSilentPeriod() error = %v", err)
+	}
+
+	tests := []struct {
+		name string
+		hour int
+		min  int
+		want bool
+	}{
+		{name: "before start", hour: 0, min: 59, want: false},
+		{name: "at start", hour: 1, min: 0, want: true},
+		{name: "middle", hour: 3, min: 30, want: true},
+		{name: "just before end", hour: 5, min: 59, want: true},
+		{name: "at end", hour: 6, min: 0, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Date(2026, 1, 1, tt.hour, tt.min, 0, 0, time.Local)
+			got := hs.isSilentPeriodActive(now)
+			if got != tt.want {
+				t.Fatalf("isSilentPeriodActive(%02d:%02d) = %t, want %t", tt.hour, tt.min, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSilentPeriodActiveOvernight(t *testing.T) {
+	hs := NewHeartbeatService("", 30, true)
+	if err := hs.SetSilentPeriod(true, "23:00", "06:00"); err != nil {
+		t.Fatalf("SetSilentPeriod() error = %v", err)
+	}
+
+	tests := []struct {
+		name string
+		hour int
+		want bool
+	}{
+		{name: "before start", hour: 22, want: false},
+		{name: "after start", hour: 23, want: true},
+		{name: "after midnight", hour: 3, want: true},
+		{name: "at end", hour: 6, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Date(2026, 1, 1, tt.hour, 0, 0, 0, time.Local)
+			got := hs.isSilentPeriodActive(now)
+			if got != tt.want {
+				t.Fatalf("isSilentPeriodActive(%02d:00) = %t, want %t", tt.hour, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSetSilentPeriodRejectsInvalidTime(t *testing.T) {
+	hs := NewHeartbeatService("", 30, true)
+
+	tests := []struct {
+		name  string
+		start string
+		end   string
+	}{
+		{name: "missing leading zero", start: "1:00", end: "06:00"},
+		{name: "bad hour", start: "24:00", end: "06:00"},
+		{name: "bad minute", start: "01:60", end: "06:00"},
+		{name: "same time", start: "01:00", end: "01:00"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := hs.SetSilentPeriod(true, tt.start, tt.end); err == nil {
+				t.Fatal("SetSilentPeriod() error = nil, want error")
+			}
+		})
+	}
+}
+
+func TestExecuteScheduledHeartbeatSkipsSilentPeriod(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "heartbeat-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs.stopChan = make(chan struct{})
+	if err := hs.SetSilentPeriod(true, "01:00", "06:00"); err != nil {
+		t.Fatalf("SetSilentPeriod() error = %v", err)
+	}
+
+	handlerCalls := 0
+	tickCalls := 0
+	hs.SetHandler(func(prompt, channel, chatID string) *tools.ToolResult {
+		handlerCalls++
+		return tools.SilentResult("ok")
+	})
+	hs.SetTickHandler(func() {
+		tickCalls++
+	})
+	if err := os.WriteFile(filepath.Join(tmpDir, "HEARTBEAT.md"), []byte("Test task"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	hs.executeScheduledHeartbeat(time.Date(2026, 1, 1, 2, 0, 0, 0, time.Local))
+	if handlerCalls != 0 {
+		t.Fatalf("handler calls during silent period = %d, want 0", handlerCalls)
+	}
+	if tickCalls != 0 {
+		t.Fatalf("tick calls during silent period = %d, want 0", tickCalls)
+	}
+
+	hs.executeScheduledHeartbeat(time.Date(2026, 1, 1, 6, 0, 0, 0, time.Local))
+	if handlerCalls != 1 {
+		t.Fatalf("handler calls after silent period = %d, want 1", handlerCalls)
+	}
+	if tickCalls != 1 {
+		t.Fatalf("tick calls after silent period = %d, want 1", tickCalls)
+	}
+}
+
 func TestExecuteHeartbeat_Async(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "heartbeat-test-*")
 	if err != nil {

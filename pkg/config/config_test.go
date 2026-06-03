@@ -236,6 +236,15 @@ func TestDefaultConfig_HeartbeatEnabled(t *testing.T) {
 	if !cfg.Heartbeat.Enabled {
 		t.Error("Heartbeat should be enabled by default")
 	}
+	if !cfg.Heartbeat.SilentPeriod.Enabled {
+		t.Error("Heartbeat silent period should be enabled by default")
+	}
+	if cfg.Heartbeat.SilentPeriod.Start != "01:00" {
+		t.Errorf("Heartbeat silent period start = %q, want 01:00", cfg.Heartbeat.SilentPeriod.Start)
+	}
+	if cfg.Heartbeat.SilentPeriod.End != "06:00" {
+		t.Errorf("Heartbeat silent period end = %q, want 06:00", cfg.Heartbeat.SilentPeriod.End)
+	}
 	if !cfg.Heartbeat.Location.Enabled {
 		t.Error("Heartbeat location policy should be enabled by default")
 	}

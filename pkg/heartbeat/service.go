@@ -12,6 +12,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,15 +38,24 @@ type HeartbeatHandler func(prompt, channel, chatID string) *tools.ToolResult
 
 // HeartbeatService manages periodic heartbeat checks
 type HeartbeatService struct {
-	workspace   string
-	bus         *bus.MessageBus
-	state       *state.Manager
-	handler     HeartbeatHandler
-	tickHandler func()
-	interval    time.Duration
-	enabled     bool
-	mu          sync.RWMutex
-	stopChan    chan struct{}
+	workspace    string
+	bus          *bus.MessageBus
+	state        *state.Manager
+	handler      HeartbeatHandler
+	tickHandler  func()
+	silentPeriod silentPeriod
+	interval     time.Duration
+	enabled      bool
+	mu           sync.RWMutex
+	stopChan     chan struct{}
+}
+
+type silentPeriod struct {
+	enabled      bool
+	startMinutes int
+	endMinutes   int
+	start        string
+	end          string
 }
 
 // NewHeartbeatService creates a new heartbeat service
@@ -90,6 +100,20 @@ func (hs *HeartbeatService) SetTickHandler(handler func()) {
 	hs.tickHandler = handler
 }
 
+// SetSilentPeriod configures a server-local quiet-hours window for scheduled
+// heartbeat executions. The start is inclusive and the end is exclusive.
+func (hs *HeartbeatService) SetSilentPeriod(enabled bool, start, end string) error {
+	period, err := newSilentPeriod(enabled, start, end)
+	if err != nil {
+		return err
+	}
+
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	hs.silentPeriod = period
+	return nil
+}
+
 // Start begins the heartbeat service
 func (hs *HeartbeatService) Start() error {
 	hs.mu.Lock()
@@ -111,6 +135,7 @@ func (hs *HeartbeatService) Start() error {
 	logger.InfoCF("heartbeat", "Heartbeat service started", map[string]any{
 		"interval_minutes": hs.interval.Minutes(),
 		"jitter_percent":   20,
+		"silent_period":    hs.silentPeriod.logValue(),
 	})
 
 	return nil
@@ -142,7 +167,7 @@ func (hs *HeartbeatService) runLoop(stopChan chan struct{}) {
 	if !waitForHeartbeatDelay(stopChan, time.Second) {
 		return
 	}
-	hs.executeHeartbeat()
+	hs.executeScheduledHeartbeat(time.Now())
 
 	for {
 		delay := hs.nextInterval()
@@ -152,8 +177,22 @@ func (hs *HeartbeatService) runLoop(stopChan chan struct{}) {
 		if !waitForHeartbeatDelay(stopChan, delay) {
 			return
 		}
-		hs.executeHeartbeat()
+		hs.executeScheduledHeartbeat(time.Now())
 	}
+}
+
+func (hs *HeartbeatService) executeScheduledHeartbeat(now time.Time) {
+	period, active := hs.activeSilentPeriod(now)
+	if active {
+		hs.logInfof("Heartbeat skipped during silent period (%s)", period.logValue())
+		logger.DebugCF("heartbeat", "Heartbeat skipped during silent period", map[string]any{
+			"silent_period": period.logValue(),
+			"server_time":   now.Format("15:04"),
+		})
+		return
+	}
+
+	hs.executeHeartbeat()
 }
 
 func waitForHeartbeatDelay(stopChan chan struct{}, delay time.Duration) bool {
@@ -189,6 +228,82 @@ func jitteredHeartbeatInterval(base time.Duration, roll float64) time.Duration {
 		return minDelay
 	}
 	return delay
+}
+
+func (hs *HeartbeatService) isSilentPeriodActive(now time.Time) bool {
+	_, active := hs.activeSilentPeriod(now)
+	return active
+}
+
+func (hs *HeartbeatService) activeSilentPeriod(now time.Time) (silentPeriod, bool) {
+	hs.mu.RLock()
+	period := hs.silentPeriod
+	hs.mu.RUnlock()
+
+	if !period.enabled || period.startMinutes == period.endMinutes {
+		return period, false
+	}
+
+	currentMinutes := now.Hour()*60 + now.Minute()
+	return period, isMinuteInSilentPeriod(currentMinutes, period.startMinutes, period.endMinutes)
+}
+
+func newSilentPeriod(enabled bool, start, end string) (silentPeriod, error) {
+	if !enabled {
+		return silentPeriod{}, nil
+	}
+
+	start = strings.TrimSpace(start)
+	end = strings.TrimSpace(end)
+	startMinutes, err := parseClockMinutes(start)
+	if err != nil {
+		return silentPeriod{}, fmt.Errorf("invalid heartbeat silent period start %q: %w", start, err)
+	}
+	endMinutes, err := parseClockMinutes(end)
+	if err != nil {
+		return silentPeriod{}, fmt.Errorf("invalid heartbeat silent period end %q: %w", end, err)
+	}
+	if startMinutes == endMinutes {
+		return silentPeriod{}, fmt.Errorf("heartbeat silent period start and end must be different")
+	}
+
+	return silentPeriod{
+		enabled:      true,
+		startMinutes: startMinutes,
+		endMinutes:   endMinutes,
+		start:        start,
+		end:          end,
+	}, nil
+}
+
+func parseClockMinutes(value string) (int, error) {
+	if len(value) != len("15:04") || value[2] != ':' {
+		return 0, fmt.Errorf("must use HH:MM")
+	}
+
+	hour, err := strconv.Atoi(value[:2])
+	if err != nil || hour < 0 || hour > 23 {
+		return 0, fmt.Errorf("hour must be 00-23")
+	}
+	minute, err := strconv.Atoi(value[3:])
+	if err != nil || minute < 0 || minute > 59 {
+		return 0, fmt.Errorf("minute must be 00-59")
+	}
+	return hour*60 + minute, nil
+}
+
+func isMinuteInSilentPeriod(currentMinutes, startMinutes, endMinutes int) bool {
+	if startMinutes < endMinutes {
+		return currentMinutes >= startMinutes && currentMinutes < endMinutes
+	}
+	return currentMinutes >= startMinutes || currentMinutes < endMinutes
+}
+
+func (p silentPeriod) logValue() string {
+	if !p.enabled {
+		return "disabled"
+	}
+	return fmt.Sprintf("%s-%s", p.start, p.end)
 }
 
 // executeHeartbeat performs a single heartbeat check

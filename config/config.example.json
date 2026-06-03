@@ -350,6 +350,11 @@
   "heartbeat": {
     "enabled": true,
     "interval": 30,
+    "silent_period": {
+      "enabled": true,
+      "start": "01:00",
+      "end": "06:00"
+    },
     "location": {
       "enabled": true,
       "idle_threshold_minutes": 60,

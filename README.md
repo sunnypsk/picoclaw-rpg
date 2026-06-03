@@ -1075,6 +1075,11 @@ The subagent has access to tools (message, web_search, etc.) and can communicate
   "heartbeat": {
     "enabled": true,
     "interval": 30,
+    "silent_period": {
+      "enabled": true,
+      "start": "01:00",
+      "end": "06:00"
+    },
     "proactive": {
       "enabled": false,
       "base_tolerance_minutes": 240,
@@ -1093,16 +1098,22 @@ The subagent has access to tools (message, web_search, etc.) and can communicate
 | ------------ | ------- | ------------------------------------------- |
 | `enabled`    | `true`  | Enable/disable heartbeat                    |
 | `interval`   | `30`    | Base check interval in minutes (min: 5)     |
+| `silent_period` | `{...}` | Server-local quiet-hours window          |
 | `proactive`  | `{...}` | Optional relationship-aware outreach policy |
 
 **Environment variables:**
 
 * `PICOCLAW_HEARTBEAT_ENABLED=false` to disable
 * `PICOCLAW_HEARTBEAT_INTERVAL=60` to change base interval
+* `PICOCLAW_HEARTBEAT_SILENT_PERIOD_ENABLED=false` to disable quiet hours
+* `PICOCLAW_HEARTBEAT_SILENT_PERIOD_START=01:00` and `PICOCLAW_HEARTBEAT_SILENT_PERIOD_END=06:00` to change quiet hours
 
 Scheduled heartbeat checks after startup use a fresh +/-20% jitter around the
 base interval. For example, an interval of `60` minutes schedules each next
 check between `48` and `72` minutes, clamped to the 5-minute minimum.
+The silent period uses the server's local time with an inclusive start and
+exclusive end; the default `01:00`-`06:00` skips scheduled heartbeat work from
+1:00 AM through 5:59 AM and resumes at 6:00 AM.
 
 **Proactive outreach:**
 
@@ -1463,6 +1474,11 @@ picoclaw agent -m "Hello"
   "heartbeat": {
     "enabled": true,
     "interval": 30,
+    "silent_period": {
+      "enabled": true,
+      "start": "01:00",
+      "end": "06:00"
+    },
     "proactive": {
       "enabled": false,
       "base_tolerance_minutes": 240,

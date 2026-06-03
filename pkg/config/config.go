@@ -468,10 +468,17 @@ type PicoConfig struct {
 }
 
 type HeartbeatConfig struct {
-	Enabled   bool                     `json:"enabled"             env:"PICOCLAW_HEARTBEAT_ENABLED"`
-	Interval  int                      `json:"interval"            env:"PICOCLAW_HEARTBEAT_INTERVAL"` // minutes, min 5
-	Location  HeartbeatLocationConfig  `json:"location,omitempty"`
-	Proactive HeartbeatProactiveConfig `json:"proactive,omitempty"`
+	Enabled      bool                        `json:"enabled"             env:"PICOCLAW_HEARTBEAT_ENABLED"`
+	Interval     int                         `json:"interval"            env:"PICOCLAW_HEARTBEAT_INTERVAL"` // minutes, min 5
+	SilentPeriod HeartbeatSilentPeriodConfig `json:"silent_period,omitempty"`
+	Location     HeartbeatLocationConfig     `json:"location,omitempty"`
+	Proactive    HeartbeatProactiveConfig    `json:"proactive,omitempty"`
+}
+
+type HeartbeatSilentPeriodConfig struct {
+	Enabled bool   `json:"enabled,omitempty" env:"PICOCLAW_HEARTBEAT_SILENT_PERIOD_ENABLED"`
+	Start   string `json:"start,omitempty"   env:"PICOCLAW_HEARTBEAT_SILENT_PERIOD_START"`
+	End     string `json:"end,omitempty"     env:"PICOCLAW_HEARTBEAT_SILENT_PERIOD_END"`
 }
 
 type HeartbeatLocationConfig struct {

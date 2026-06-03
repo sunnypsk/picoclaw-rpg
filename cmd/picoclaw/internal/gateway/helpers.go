@@ -96,6 +96,13 @@ func gatewayCmd(debug bool) error {
 		cfg.Heartbeat.Interval,
 		cfg.Heartbeat.Enabled,
 	)
+	if err := heartbeatService.SetSilentPeriod(
+		cfg.Heartbeat.SilentPeriod.Enabled,
+		cfg.Heartbeat.SilentPeriod.Start,
+		cfg.Heartbeat.SilentPeriod.End,
+	); err != nil {
+		return fmt.Errorf("error configuring heartbeat silent period: %w", err)
+	}
 	heartbeatService.SetBus(msgBus)
 	heartbeatService.SetHandler(func(prompt, channel, chatID string) *tools.ToolResult {
 		// Use cli:direct as fallback if no valid channel
