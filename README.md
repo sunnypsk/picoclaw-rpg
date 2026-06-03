@@ -1092,13 +1092,17 @@ The subagent has access to tools (message, web_search, etc.) and can communicate
 | Option       | Default | Description                                 |
 | ------------ | ------- | ------------------------------------------- |
 | `enabled`    | `true`  | Enable/disable heartbeat                    |
-| `interval`   | `30`    | Check interval in minutes (min: 5)          |
+| `interval`   | `30`    | Base check interval in minutes (min: 5)     |
 | `proactive`  | `{...}` | Optional relationship-aware outreach policy |
 
 **Environment variables:**
 
 * `PICOCLAW_HEARTBEAT_ENABLED=false` to disable
-* `PICOCLAW_HEARTBEAT_INTERVAL=60` to change interval
+* `PICOCLAW_HEARTBEAT_INTERVAL=60` to change base interval
+
+Scheduled heartbeat checks after startup use a fresh +/-20% jitter around the
+base interval. For example, an interval of `60` minutes schedules each next
+check between `48` and `72` minutes, clamped to the 5-minute minimum.
 
 **Proactive outreach:**
 

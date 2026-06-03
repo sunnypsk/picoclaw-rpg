@@ -9,6 +9,38 @@ import (
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
+func TestJitteredHeartbeatInterval(t *testing.T) {
+	base := 60 * time.Minute
+
+	tests := []struct {
+		name string
+		roll float64
+		want time.Duration
+	}{
+		{name: "minimum roll", roll: 0, want: 48 * time.Minute},
+		{name: "middle roll", roll: 0.5, want: 60 * time.Minute},
+		{name: "maximum roll", roll: 1, want: 72 * time.Minute},
+		{name: "negative roll clamps", roll: -1, want: 48 * time.Minute},
+		{name: "high roll clamps", roll: 2, want: 72 * time.Minute},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := jitteredHeartbeatInterval(base, tt.roll)
+			if got != tt.want {
+				t.Fatalf("jitteredHeartbeatInterval(%s, %v) = %s, want %s", base, tt.roll, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestJitteredHeartbeatIntervalClampsToMinimum(t *testing.T) {
+	got := jitteredHeartbeatInterval(5*time.Minute, 0)
+	if got != 5*time.Minute {
+		t.Fatalf("jitteredHeartbeatInterval() = %s, want minimum 5m", got)
+	}
+}
+
 func TestExecuteHeartbeat_Async(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "heartbeat-test-*")
 	if err != nil {

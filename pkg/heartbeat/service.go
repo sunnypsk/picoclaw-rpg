@@ -9,6 +9,7 @@ package heartbeat
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,7 @@ import (
 const (
 	minIntervalMinutes     = 5
 	defaultIntervalMinutes = 30
+	intervalJitterDivisor  = 5 // +/-20%
 )
 
 // HeartbeatHandler is the function type for handling heartbeat.
@@ -108,6 +110,7 @@ func (hs *HeartbeatService) Start() error {
 
 	logger.InfoCF("heartbeat", "Heartbeat service started", map[string]any{
 		"interval_minutes": hs.interval.Minutes(),
+		"jitter_percent":   20,
 	})
 
 	return nil
@@ -134,24 +137,58 @@ func (hs *HeartbeatService) IsRunning() bool {
 	return hs.stopChan != nil
 }
 
-// runLoop runs the heartbeat ticker
+// runLoop runs the heartbeat timer loop.
 func (hs *HeartbeatService) runLoop(stopChan chan struct{}) {
-	ticker := time.NewTicker(hs.interval)
-	defer ticker.Stop()
-
-	// Run first heartbeat after initial delay
-	time.AfterFunc(time.Second, func() {
-		hs.executeHeartbeat()
-	})
+	if !waitForHeartbeatDelay(stopChan, time.Second) {
+		return
+	}
+	hs.executeHeartbeat()
 
 	for {
-		select {
-		case <-stopChan:
+		delay := hs.nextInterval()
+		logger.DebugCF("heartbeat", "Next heartbeat scheduled", map[string]any{
+			"delay_minutes": delay.Minutes(),
+		})
+		if !waitForHeartbeatDelay(stopChan, delay) {
 			return
-		case <-ticker.C:
-			hs.executeHeartbeat()
 		}
+		hs.executeHeartbeat()
 	}
+}
+
+func waitForHeartbeatDelay(stopChan chan struct{}, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-stopChan:
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func (hs *HeartbeatService) nextInterval() time.Duration {
+	return jitteredHeartbeatInterval(hs.interval, rand.Float64())
+}
+
+func jitteredHeartbeatInterval(base time.Duration, roll float64) time.Duration {
+	if base <= 0 {
+		base = time.Duration(defaultIntervalMinutes) * time.Minute
+	}
+	if roll < 0 {
+		roll = 0
+	} else if roll > 1 {
+		roll = 1
+	}
+
+	spread := base / intervalJitterDivisor
+	delay := base - spread + time.Duration(float64(spread*2)*roll)
+	minDelay := time.Duration(minIntervalMinutes) * time.Minute
+	if delay < minDelay {
+		return minDelay
+	}
+	return delay
 }
 
 // executeHeartbeat performs a single heartbeat check
