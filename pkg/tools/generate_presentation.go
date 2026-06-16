@@ -53,11 +53,13 @@ var (
 		"scale-in":  {},
 		"draw-line": {},
 		"count-up":  {},
+		"spotlight": {},
 	}
 	presentationThemes = map[string]struct{}{
 		"executive": {},
 		"studio":    {},
 		"signal":    {},
+		"classroom": {},
 	}
 	slugUnsafePattern = regexp.MustCompile(`[^a-z0-9]+`)
 )
@@ -150,7 +152,7 @@ func (t *GeneratePresentationTool) Parameters() map[string]any {
 			},
 			"theme": map[string]any{
 				"type":        "string",
-				"enum":        []string{"executive", "studio", "signal"},
+				"enum":        []string{"executive", "studio", "signal", "classroom"},
 				"description": "Visual theme. Defaults to executive.",
 			},
 			"output": map[string]any{
@@ -184,7 +186,7 @@ func (t *GeneratePresentationTool) Parameters() map[string]any {
 						"subtitle":  map[string]any{"type": "string"},
 						"body":      map[string]any{"type": "string"},
 						"bullets":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-						"animation": map[string]any{"type": "string", "enum": []string{"auto", "none", "fade-up", "stagger", "scale-in", "draw-line", "count-up"}},
+						"animation": map[string]any{"type": "string", "enum": []string{"auto", "none", "fade-up", "stagger", "scale-in", "draw-line", "count-up", "spotlight"}},
 						"image": map[string]any{
 							"type": "object",
 							"properties": map[string]any{
@@ -737,9 +739,12 @@ const presentationHTMLTemplate = `<!doctype html>
       --gold: #a56f00;
       --indigo: #3544a3;
       --shadow: 0 26px 90px rgba(17, 20, 24, 0.24);
+      --viewport-bg: #c8d0d7;
+      --grid-x: rgba(17, 20, 24, 0.05);
+      --grid-y: rgba(17, 20, 24, 0.04);
     }
     * { box-sizing: border-box; }
-    html, body { margin: 0; min-height: 100%; background: #c8d0d7; color: var(--ink); }
+    html, body { margin: 0; min-height: 100%; background: var(--viewport-bg); color: var(--ink); }
     body {
       min-height: 100dvh;
       display: grid;
@@ -760,8 +765,8 @@ const presentationHTMLTemplate = `<!doctype html>
       position: absolute;
       inset: 0;
       background:
-        linear-gradient(90deg, rgba(17, 20, 24, 0.05) 1px, transparent 1px) 0 0 / 4rem 4rem,
-        linear-gradient(0deg, rgba(17, 20, 24, 0.04) 1px, transparent 1px) 0 0 / 4rem 4rem;
+        linear-gradient(90deg, var(--grid-x) 1px, transparent 1px) 0 0 / 4rem 4rem,
+        linear-gradient(0deg, var(--grid-y) 1px, transparent 1px) 0 0 / 4rem 4rem;
       pointer-events: none;
     }
     .theme-studio {
@@ -783,6 +788,22 @@ const presentationHTMLTemplate = `<!doctype html>
       --coral: #c94a31;
       --gold: #9a7500;
       --indigo: #273f9b;
+    }
+    .theme-classroom {
+      --paper: #f1f5ff;
+      --ink: #171233;
+      --muted: #515a7b;
+      --soft: #dceafe;
+      --line: rgba(30, 27, 75, 0.18);
+      --surface: rgba(255, 253, 247, 0.9);
+      --surface-strong: #fffdf7;
+      --teal: #008f87;
+      --coral: #df5b3f;
+      --gold: #b77900;
+      --indigo: #4f46e5;
+      --shadow: 0 26px 80px rgba(23, 18, 51, 0.2);
+      --grid-x: rgba(79, 70, 229, 0.075);
+      --grid-y: rgba(0, 143, 135, 0.055);
     }
     .slide {
       position: absolute;
@@ -856,6 +877,7 @@ const presentationHTMLTemplate = `<!doctype html>
       line-height: 0.92;
       font-weight: 900;
       letter-spacing: 0;
+      text-wrap: balance;
     }
     h2 {
       max-width: 12.5ch;
@@ -863,6 +885,7 @@ const presentationHTMLTemplate = `<!doctype html>
       line-height: 0.98;
       font-weight: 900;
       letter-spacing: 0;
+      text-wrap: balance;
     }
     h3 {
       font-size: 1.16rem;
@@ -945,6 +968,33 @@ const presentationHTMLTemplate = `<!doctype html>
     .closing .subtitle,
     .closing .body {
       color: rgba(248, 250, 252, 0.78);
+    }
+    .theme-classroom .section,
+    .theme-classroom .closing {
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px) 0 0 / 4rem 4rem,
+        linear-gradient(0deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px) 0 0 / 4rem 4rem,
+        #171233;
+    }
+    .theme-classroom .panel,
+    .theme-classroom .bullets li,
+    .theme-classroom .image-wrap {
+      border: 2px solid rgba(30, 27, 75, 0.18);
+      box-shadow:
+        0 8px 0 rgba(79, 70, 229, 0.08),
+        0 22px 48px rgba(23, 18, 51, 0.12);
+    }
+    .theme-classroom .panel::before {
+      height: 0.42rem;
+    }
+    :lang(zh-HK) h1,
+    :lang(zh-HK) h2,
+    :lang(zh-Hant) h1,
+    :lang(zh-Hant) h2,
+    :lang(zh) h1,
+    :lang(zh) h2 {
+      line-height: 1.02;
+      max-width: 14.5ch;
     }
     .title-bullets .content {
       grid-template-columns: minmax(0, 0.88fr) minmax(0, 1.12fr);
@@ -1059,19 +1109,27 @@ const presentationHTMLTemplate = `<!doctype html>
       gap: 0.9rem;
       padding-top: 1rem;
     }
-    .timeline-list::before {
-      content: "";
+    .timeline-rule {
       position: absolute;
       left: 0.45rem;
       right: 0.45rem;
       top: 1.75rem;
-      height: 2px;
-      background: rgba(17, 20, 24, 0.18);
+      height: 4px;
+      border-radius: 999px;
+      background: var(--accent);
+      opacity: 0.32;
+      transform-origin: left center;
+      transform: scaleX(1);
+      z-index: 2;
     }
     .timeline-list .panel {
       min-height: 12rem;
       padding-top: 2.25rem;
       background: rgba(255, 255, 255, 0.76);
+      z-index: 1;
+    }
+    .timeline-list .panel::before {
+      display: none;
     }
     .timeline-list .panel::after {
       content: "";
@@ -1083,6 +1141,7 @@ const presentationHTMLTemplate = `<!doctype html>
       border-radius: 50%;
       background: var(--accent);
       box-shadow: 0 0 0 0.35rem var(--paper);
+      z-index: 3;
     }
     .image-hero .layout-grid {
       grid-template-columns: minmax(0, 0.86fr) minmax(0, 1.14fr);
@@ -1139,9 +1198,10 @@ const presentationHTMLTemplate = `<!doctype html>
     }
     .progress-bar {
       height: 100%;
-      width: 0;
+      width: 100%;
       background: var(--accent);
-      transition: width 220ms ease-out;
+      transform: scaleX(0);
+      transform-origin: left center;
     }
     .accent-teal { --accent: var(--teal); }
     .accent-coral { --accent: var(--coral); }
@@ -1271,6 +1331,7 @@ const presentationHTMLTemplate = `<!doctype html>
         {{else if eq .Layout "timeline"}}
           <h2 data-animate>{{.Title}}</h2>
           <div class="timeline-list">
+            <span class="timeline-rule" data-line aria-hidden="true"></span>
             {{range .Items}}<article class="panel" data-step>{{if .Label}}<div class="kicker">{{.Label}}</div>{{end}}<h3>{{.Title}}</h3>{{if .Body}}<p>{{.Body}}</p>{{end}}</article>{{end}}
           </div>
         {{else if eq .Layout "metrics"}}
@@ -1300,6 +1361,7 @@ const presentationHTMLTemplate = `<!doctype html>
       const progress = document.querySelector('.progress-bar');
       const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       let index = Math.max(0, Math.min(slides.length - 1, Number((location.hash || '#1').slice(1)) - 1 || 0));
+      let progressValue = 0;
 
       function activeSteps(slide) {
         return Array.from(slide.querySelectorAll('[data-step]'));
@@ -1319,12 +1381,65 @@ const presentationHTMLTemplate = `<!doctype html>
           const state = { n: 0 };
           window.anime.animate(state, {
             n: end,
-            duration: 720,
+            duration: 480,
             ease: 'out(3)',
             onUpdate: () => { value.textContent = finalText.replace(match[0], Math.round(state.n).toString()); },
             onComplete: () => { value.textContent = finalText; }
           });
         });
+      }
+      function updateProgress() {
+        const nextValue = (index + 1) / slides.length;
+        if (prefersReduced || !window.anime || !window.anime.animate) {
+          progress.style.transform = 'scaleX(' + nextValue + ')';
+          progressValue = nextValue;
+          return;
+        }
+        window.anime.animate(progress, {
+          scaleX: [progressValue, nextValue],
+          duration: 240,
+          ease: 'out(3)'
+        });
+        progressValue = nextValue;
+      }
+      function animateSlideShell(slide, direction) {
+        if (prefersReduced || !window.anime || !window.anime.animate) {
+          slide.style.opacity = '';
+          slide.style.transform = '';
+          return;
+        }
+        const offset = direction === 0 ? 10 : direction * 18;
+        window.anime.animate(slide, {
+          opacity: [0, 1],
+          translateX: [offset + 'px', '0px'],
+          scale: [0.992, 1],
+          duration: 260,
+          ease: 'out(3)'
+        });
+      }
+      function animateSlideDetails(slide, preset) {
+        const lines = Array.from(slide.querySelectorAll('[data-line]'));
+        const media = Array.from(slide.querySelectorAll('.image-wrap img'));
+        lines.forEach((line) => { line.style.transform = 'scaleX(0)'; });
+        if (prefersReduced || !window.anime || !window.anime.animate) {
+          lines.forEach((line) => { line.style.transform = 'scaleX(1)'; });
+          return;
+        }
+        if (lines.length) {
+          window.anime.animate(lines, {
+            scaleX: [0, 1],
+            duration: 360,
+            delay: 120,
+            ease: 'out(3)'
+          });
+        }
+        if (media.length && (preset === 'spotlight' || slide.classList.contains('image-hero'))) {
+          window.anime.animate(media, {
+            scale: [1.045, 1],
+            duration: 420,
+            ease: 'out(3)'
+          });
+        }
       }
       function animateIn(targets, preset) {
         if (!targets.length) return;
@@ -1343,10 +1458,10 @@ const presentationHTMLTemplate = `<!doctype html>
         if (introTargets.length) {
           window.anime.animate(introTargets, {
             opacity: [0, 1],
-            translateY: preset === 'scale-in' ? ['0px', '0px'] : ['18px', '0px'],
-            scale: preset === 'scale-in' ? [0.96, 1] : [1, 1],
+            translateY: preset === 'scale-in' || preset === 'spotlight' ? ['0px', '0px'] : ['18px', '0px'],
+            scale: preset === 'scale-in' ? [0.96, 1] : preset === 'spotlight' ? [0.94, 1] : [1, 1],
             delay: window.anime.stagger ? window.anime.stagger(55) : 0,
-            duration: 500,
+            duration: preset === 'spotlight' ? 420 : 360,
             ease: 'out(3)'
           });
           introTargets.forEach((el) => el.classList.add('visible'));
@@ -1368,6 +1483,7 @@ const presentationHTMLTemplate = `<!doctype html>
       }
       function showSlide(nextIndex) {
         slides[index]?.classList.remove('active');
+        const oldIndex = index;
         index = Math.max(0, Math.min(slides.length - 1, nextIndex));
         const slide = slides[index];
         slide.classList.add('active');
@@ -1375,7 +1491,9 @@ const presentationHTMLTemplate = `<!doctype html>
         const animated = Array.from(slide.querySelectorAll('[data-animate]'));
         animated.forEach((el) => el.classList.remove('visible'));
         animateIn(animated, slide.dataset.animation || 'auto');
-        progress.style.width = (((index + 1) / slides.length) * 100) + '%';
+        animateSlideShell(slide, Math.sign(index - oldIndex));
+        animateSlideDetails(slide, slide.dataset.animation || 'auto');
+        updateProgress();
         history.replaceState(null, '', '#' + (index + 1));
       }
       function next() {

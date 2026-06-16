@@ -153,6 +153,58 @@ func TestGeneratePresentationTool_CopiesMediaImageIntoPackage(t *testing.T) {
 	}
 }
 
+func TestGeneratePresentationTool_RendersClassroomThemeAndMotion(t *testing.T) {
+	workspace := t.TempDir()
+	tool := NewGeneratePresentationTool(workspace, true)
+	tool.now = func() time.Time { return time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC) }
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"title":  "Lesson Deck",
+		"theme":  "classroom",
+		"output": "folder",
+		"slides": []any{
+			map[string]any{
+				"layout":    "cover",
+				"title":     "Lesson Deck",
+				"subtitle":  "A clear classroom introduction",
+				"animation": "spotlight",
+			},
+			map[string]any{
+				"layout":    "timeline",
+				"title":     "Three steps",
+				"animation": "draw-line",
+				"items": []any{
+					map[string]any{"label": "01", "title": "Start", "body": "Set the goal."},
+					map[string]any{"label": "02", "title": "Practice", "body": "Try the move."},
+					map[string]any{"label": "03", "title": "Reflect", "body": "Name what improved."},
+				},
+			},
+		},
+	})
+	if result.IsError {
+		t.Fatalf("Execute() returned error: %s", result.ForLLM)
+	}
+
+	html := readTestFile(t, filepath.Join(
+		workspace,
+		"generated-presentations",
+		"lesson-deck-20260616-120000",
+		"index.html",
+	))
+	for _, want := range []string{
+		"theme-classroom",
+		`data-animation="spotlight"`,
+		`class="timeline-rule"`,
+		"animateSlideShell",
+		"animateSlideDetails",
+		"scaleX",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("generated HTML missing %q", want)
+		}
+	}
+}
+
 func TestGeneratePresentationTool_RejectsRemoteImages(t *testing.T) {
 	tool := NewGeneratePresentationTool(t.TempDir(), true)
 	result := tool.Execute(context.Background(), map[string]any{

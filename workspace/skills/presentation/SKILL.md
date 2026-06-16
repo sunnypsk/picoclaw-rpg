@@ -34,6 +34,7 @@ Do not use the removed `generate-slides` skill or any PPTX workflow for this tas
 - Prefer strong hierarchy, generous spacing, high contrast, and restrained motion.
 - Use varied layouts instead of repeated bullet slides.
 - Keep text short: titles should be direct, bullets should be scannable.
+- For teaching, sports, school, youth, or classroom decks, prefer the `classroom` theme.
 - Use images only when they carry meaning; decorative images are optional, not required.
 - Do not generate arbitrary HTML, JavaScript, or CSS yourself.
 - Do not use remote image URLs. Use local workspace files or `media://...` refs.
@@ -48,7 +49,7 @@ Required:
 - `slides`
 
 Useful optional fields:
-- `theme`: `executive`, `studio`, or `signal`
+- `theme`: `executive`, `studio`, `signal`, or `classroom`
 - `output`: `offline_zip` by default
 - `language`
 - `slug`
@@ -73,6 +74,9 @@ Supported animation presets:
 - `scale-in`
 - `draw-line`
 - `count-up`
+- `spotlight`
+
+Use `spotlight` for a cover, image hero, or single key idea that should feel more energetic. Use `draw-line` for timeline or process slides, and `count-up` only for numeric metric slides.
 
 ## Example
 
