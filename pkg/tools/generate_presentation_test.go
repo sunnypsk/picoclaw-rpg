@@ -3,6 +3,7 @@ package tools
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,6 +101,54 @@ func TestGeneratePresentationTool_GeneratesOfflineZipPackage(t *testing.T) {
 	}
 }
 
+func TestGeneratePresentationTool_UsesUniqueDirectoryForSameSecondOutputs(t *testing.T) {
+	workspace := t.TempDir()
+	tool := NewGeneratePresentationTool(workspace, true)
+	tool.now = func() time.Time { return time.Date(2026, 6, 16, 10, 30, 0, 0, time.UTC) }
+	args := map[string]any{
+		"title":  "Repeat Deck",
+		"output": "folder",
+		"slides": []any{
+			map[string]any{
+				"layout":   "cover",
+				"title":    "Repeat Deck",
+				"subtitle": "The same deck generated twice in one second",
+			},
+		},
+	}
+
+	first := tool.Execute(context.Background(), args)
+	if first.IsError {
+		t.Fatalf("first Execute() returned error: %s", first.ForLLM)
+	}
+	firstFolder := decodeToolResultString(t, first, "folder")
+	assertFileExists(t, filepath.Join(firstFolder, "index.html"))
+	if filepath.Base(firstFolder) != "repeat-deck-20260616-103000" {
+		t.Fatalf("first folder should keep the stable base name, got %s", firstFolder)
+	}
+	if err := os.WriteFile(filepath.Join(firstFolder, "assets", "images", "stale.png"), testPNGBytes(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	second := tool.Execute(context.Background(), args)
+	if second.IsError {
+		t.Fatalf("second Execute() returned error: %s", second.ForLLM)
+	}
+	secondFolder := decodeToolResultString(t, second, "folder")
+	assertFileExists(t, filepath.Join(secondFolder, "index.html"))
+	if secondFolder == firstFolder {
+		t.Fatalf("expected second output to use a unique folder, got %s", secondFolder)
+	}
+	if !strings.HasPrefix(filepath.Base(secondFolder), "repeat-deck-20260616-103000-") {
+		t.Fatalf("second folder should use the same base with a uniqueness suffix, got %s", secondFolder)
+	}
+	if _, err := os.Stat(filepath.Join(secondFolder, "assets", "images", "stale.png")); err == nil {
+		t.Fatalf("second output reused stale image assets from first output")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat stale asset in second output: %v", err)
+	}
+}
+
 func TestGeneratePresentationTool_CopiesMediaImageIntoPackage(t *testing.T) {
 	workspace := t.TempDir()
 	tool := NewGeneratePresentationTool(workspace, true)
@@ -150,6 +199,13 @@ func TestGeneratePresentationTool_CopiesMediaImageIntoPackage(t *testing.T) {
 	}
 	if strings.Contains(html, ref) {
 		t.Fatalf("generated HTML should not expose media ref")
+	}
+	deckJSON := readTestFile(t, filepath.Join(deckDir, "deck.json"))
+	if !strings.Contains(deckJSON, `"src": "assets/images/slide-01-hero.png"`) {
+		t.Fatalf("deck metadata does not reference copied image: %s", deckJSON)
+	}
+	if strings.Contains(deckJSON, ref) {
+		t.Fatalf("deck metadata should not expose media ref")
 	}
 }
 
@@ -202,6 +258,52 @@ func TestGeneratePresentationTool_RendersClassroomThemeAndMotion(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Fatalf("generated HTML missing %q", want)
 		}
+	}
+}
+
+func TestGeneratePresentationTool_AnimationNoneSkipsShellAndDetailMotion(t *testing.T) {
+	workspace := t.TempDir()
+	tool := NewGeneratePresentationTool(workspace, true)
+	tool.now = func() time.Time { return time.Date(2026, 6, 16, 12, 30, 0, 0, time.UTC) }
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"title":  "Still Deck",
+		"output": "folder",
+		"slides": []any{
+			map[string]any{
+				"layout":    "timeline",
+				"title":     "No motion steps",
+				"animation": "none",
+				"items": []any{
+					map[string]any{"label": "01", "title": "Plan", "body": "Set the target."},
+					map[string]any{"label": "02", "title": "Build", "body": "Make the change."},
+					map[string]any{"label": "03", "title": "Check", "body": "Verify the result."},
+				},
+			},
+		},
+	})
+	if result.IsError {
+		t.Fatalf("Execute() returned error: %s", result.ForLLM)
+	}
+
+	html := readTestFile(t, filepath.Join(
+		workspace,
+		"generated-presentations",
+		"still-deck-20260616-123000",
+		"index.html",
+	))
+	for _, want := range []string{
+		`data-animation="none"`,
+		"const preset = slide.dataset.animation || 'auto';",
+		"if (preset !== 'none')",
+		"animateSlideDetails(slide, preset)",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("generated HTML missing %q", want)
+		}
+	}
+	if strings.Contains(html, "animateSlideDetails(slide, slide.dataset.animation || 'auto')") {
+		t.Fatalf("generated HTML still calls detail animation with the raw slide preset")
 	}
 }
 
@@ -314,4 +416,17 @@ func readTestFile(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(data)
+}
+
+func decodeToolResultString(t *testing.T, result *ToolResult, key string) string {
+	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result.ForLLM), &payload); err != nil {
+		t.Fatalf("decode ForLLM: %v", err)
+	}
+	value, ok := payload[key].(string)
+	if !ok || value == "" {
+		t.Fatalf("ForLLM missing string field %q: %s", key, result.ForLLM)
+	}
+	return value
 }

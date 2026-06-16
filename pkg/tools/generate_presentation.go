@@ -279,8 +279,8 @@ func (t *GeneratePresentationTool) generate(ctx context.Context, args map[string
 	}
 	deck.Slug = baseSlug
 
-	deckDir := filepath.Join(root, baseSlug+"-"+timestamp)
-	if err := os.MkdirAll(filepath.Join(deckDir, "assets", "images"), 0o755); err != nil {
+	deckDir, err := createUniquePresentationPackageDir(filepath.Join(root, baseSlug+"-"+timestamp))
+	if err != nil {
 		return presentationOutput{}, fmt.Errorf("create presentation package: %w", err)
 	}
 
@@ -295,6 +295,7 @@ func (t *GeneratePresentationTool) generate(ctx context.Context, args map[string
 			return presentationOutput{}, fmt.Errorf("slide %d image: %w", i+1, err)
 		}
 		deck.Slides[i].Image.ResolvedSrc = resolved
+		deck.Slides[i].Image.Src = resolved
 	}
 	warnings := presentationQualityWarnings(deck)
 
@@ -800,6 +801,26 @@ Keyboard:
 
 This package is offline-ready. It includes a local Anime.js v4.4.1 bundle under assets/.
 `, deck.Title)
+}
+
+func createUniquePresentationPackageDir(baseDir string) (string, error) {
+	for attempt := 0; attempt < 1000; attempt++ {
+		deckDir := baseDir
+		if attempt > 0 {
+			deckDir = fmt.Sprintf("%s-%02d", baseDir, attempt+1)
+		}
+		if err := os.Mkdir(deckDir, 0o755); err != nil {
+			if os.IsExist(err) {
+				continue
+			}
+			return "", err
+		}
+		if err := os.MkdirAll(filepath.Join(deckDir, "assets", "images"), 0o755); err != nil {
+			return "", err
+		}
+		return deckDir, nil
+	}
+	return "", fmt.Errorf("could not allocate a unique presentation directory for %s", baseDir)
 }
 
 func sanitizePresentationSlug(value string) string {
@@ -1628,9 +1649,15 @@ const presentationHTMLTemplate = `<!doctype html>
         prepare(slide);
         const animated = Array.from(slide.querySelectorAll('[data-animate]'));
         animated.forEach((el) => el.classList.remove('visible'));
-        animateIn(animated, slide.dataset.animation || 'auto');
-        animateSlideShell(slide, Math.sign(index - oldIndex));
-        animateSlideDetails(slide, slide.dataset.animation || 'auto');
+        const preset = slide.dataset.animation || 'auto';
+        animateIn(animated, preset);
+        if (preset !== 'none') {
+          animateSlideShell(slide, Math.sign(index - oldIndex));
+          animateSlideDetails(slide, preset);
+        } else {
+          slide.style.opacity = '';
+          slide.style.transform = '';
+        }
         updateProgress();
         history.replaceState(null, '', '#' + (index + 1));
       }
