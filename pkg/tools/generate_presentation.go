@@ -15,6 +15,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/media"
@@ -29,6 +31,7 @@ const (
 	defaultPresentationOutput     = "offline_zip"
 	defaultPresentationAspect     = "16:9"
 	maxPresentationSlides         = 40
+	maxPresentationQualityNotes   = 16
 	generatedPresentationsDirName = "generated-presentations"
 )
 
@@ -115,6 +118,7 @@ type presentationOutput struct {
 	ZipPath    string
 	ZipMedia   string
 	OutputMode string
+	Warnings   []string
 }
 
 func NewGeneratePresentationTool(workspace string, restrict bool) *GeneratePresentationTool {
@@ -230,13 +234,14 @@ func (t *GeneratePresentationTool) Execute(ctx context.Context, args map[string]
 	}
 
 	llm := map[string]any{
-		"title":      output.Deck.Title,
-		"slides":     len(output.Deck.Slides),
-		"folder":     output.DeckDir,
-		"index_html": output.IndexPath,
-		"zip":        output.ZipPath,
-		"theme":      output.Deck.Theme,
-		"output":     output.OutputMode,
+		"title":            output.Deck.Title,
+		"slides":           len(output.Deck.Slides),
+		"folder":           output.DeckDir,
+		"index_html":       output.IndexPath,
+		"zip":              output.ZipPath,
+		"theme":            output.Deck.Theme,
+		"output":           output.OutputMode,
+		"quality_warnings": output.Warnings,
 	}
 	llmJSON, _ := json.MarshalIndent(llm, "", "  ")
 
@@ -291,6 +296,7 @@ func (t *GeneratePresentationTool) generate(ctx context.Context, args map[string
 		}
 		deck.Slides[i].Image.ResolvedSrc = resolved
 	}
+	warnings := presentationQualityWarnings(deck)
 
 	if err := writeEmbeddedPresentationAsset(deckDir, "anime.umd.min.js"); err != nil {
 		return presentationOutput{}, err
@@ -347,6 +353,7 @@ func (t *GeneratePresentationTool) generate(ctx context.Context, args map[string
 		ZipPath:    zipPath,
 		ZipMedia:   zipMedia,
 		OutputMode: deck.Output,
+		Warnings:   warnings,
 	}, nil
 }
 
@@ -468,6 +475,137 @@ func validatePresentationSlideContent(slide presentationSlide) error {
 		}
 	}
 	return nil
+}
+
+func presentationQualityWarnings(deck presentationDeck) []string {
+	var warnings []string
+	for i, slide := range deck.Slides {
+		slideNo := i + 1
+		warnings = appendPresentationLengthWarning(warnings, slideNo, "title", slide.Title, 18, 54)
+		warnings = appendPresentationLengthWarning(warnings, slideNo, "subtitle", slide.Subtitle, 54, 130)
+		warnings = appendPresentationLengthWarning(warnings, slideNo, "body", slide.Body, 64, 150)
+
+		if len(slide.Bullets) > 5 {
+			warnings = appendPresentationQualityWarning(
+				warnings,
+				fmt.Sprintf("slide %d has %d bullets; keep to 5 or fewer for a cleaner presentation", slideNo, len(slide.Bullets)),
+			)
+		}
+		for j, bullet := range slide.Bullets {
+			warnings = appendPresentationLengthWarning(
+				warnings,
+				slideNo,
+				fmt.Sprintf("bullet %d", j+1),
+				bullet,
+				34,
+				90,
+			)
+		}
+
+		switch slide.Layout {
+		case "metrics":
+			if len(slide.Items) > 3 {
+				warnings = appendPresentationQualityWarning(
+					warnings,
+					fmt.Sprintf("slide %d metrics layout works best with 3 items; got %d", slideNo, len(slide.Items)),
+				)
+			}
+		case "comparison", "two-column":
+			if len(slide.Items) > 4 {
+				warnings = appendPresentationQualityWarning(
+					warnings,
+					fmt.Sprintf("slide %d %s layout works best with 2 to 4 items; got %d", slideNo, slide.Layout, len(slide.Items)),
+				)
+			}
+		case "timeline":
+			if len(slide.Items) > 5 {
+				warnings = appendPresentationQualityWarning(
+					warnings,
+					fmt.Sprintf("slide %d timeline layout works best with 3 to 5 steps; got %d", slideNo, len(slide.Items)),
+				)
+			}
+		}
+
+		for j, item := range slide.Items {
+			warnings = appendPresentationLengthWarning(
+				warnings,
+				slideNo,
+				fmt.Sprintf("item %d title", j+1),
+				item.Title,
+				16,
+				42,
+			)
+			warnings = appendPresentationLengthWarning(
+				warnings,
+				slideNo,
+				fmt.Sprintf("item %d body", j+1),
+				item.Body,
+				38,
+				96,
+			)
+			warnings = appendPresentationLengthWarning(
+				warnings,
+				slideNo,
+				fmt.Sprintf("item %d value", j+1),
+				item.Value,
+				4,
+				8,
+			)
+		}
+
+		if slide.Image != nil && strings.TrimSpace(slide.Image.Alt) == "" {
+			warnings = appendPresentationQualityWarning(
+				warnings,
+				fmt.Sprintf("slide %d image is missing alt text", slideNo),
+			)
+		}
+	}
+	return warnings
+}
+
+func appendPresentationLengthWarning(
+	warnings []string,
+	slideNo int,
+	label string,
+	value string,
+	cjkLimit int,
+	latinLimit int,
+) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return warnings
+	}
+	limit := latinLimit
+	if presentationContainsCJK(value) {
+		limit = cjkLimit
+	}
+	count := utf8.RuneCountInString(value)
+	if count <= limit {
+		return warnings
+	}
+	return appendPresentationQualityWarning(
+		warnings,
+		fmt.Sprintf("slide %d %s is %d characters; aim for %d or fewer", slideNo, label, count, limit),
+	)
+}
+
+func appendPresentationQualityWarning(warnings []string, warning string) []string {
+	if len(warnings) >= maxPresentationQualityNotes {
+		return warnings
+	}
+	return append(warnings, warning)
+}
+
+func presentationContainsCJK(value string) bool {
+	for _, r := range value {
+		switch {
+		case unicode.Is(unicode.Han, r):
+			return true
+		case unicode.Is(unicode.Hiragana, r), unicode.Is(unicode.Katakana, r), unicode.Is(unicode.Hangul, r):
+			return true
+		}
+	}
+	return false
 }
 
 func parsePresentationItems(raw any) []presentationItem {

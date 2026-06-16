@@ -26,7 +26,9 @@ Do not use the removed `generate-slides` skill or any PPTX workflow for this tas
 3. Use short slide text. Each slide should have one clear message.
 4. Use the `generate_image` tool first only when an image would materially improve understanding or visual impact.
 5. Call `generate_presentation` with a structured slide spec.
-6. Tell the user where the ZIP and `index.html` were created.
+6. Check the tool result for `quality_warnings`. If warnings mention long text, too many items, missing alt text, or dense slides, revise the slide spec and generate again.
+7. When local browser rendering is available, open or screenshot the generated `index.html` before finalizing. Check for awkward title wraps, overlapping text, missing images, tiny body text, and weak contrast.
+8. Tell the user where the ZIP and `index.html` were created, and mention whether a visual check was completed.
 
 ## Design rules
 
@@ -35,6 +37,8 @@ Do not use the removed `generate-slides` skill or any PPTX workflow for this tas
 - Use varied layouts instead of repeated bullet slides.
 - Keep text short: titles should be direct, bullets should be scannable.
 - For teaching, sports, school, youth, or classroom decks, prefer the `classroom` theme.
+- Keep CJK/Cantonese titles especially short, ideally 12 to 18 characters.
+- Keep metric slides to 3 items, comparison slides to 2 to 4 items, and timeline slides to 3 to 5 steps.
 - Use images only when they carry meaning; decorative images are optional, not required.
 - Do not generate arbitrary HTML, JavaScript, or CSS yourself.
 - Do not use remote image URLs. Use local workspace files or `media://...` refs.

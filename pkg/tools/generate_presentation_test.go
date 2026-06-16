@@ -205,6 +205,41 @@ func TestGeneratePresentationTool_RendersClassroomThemeAndMotion(t *testing.T) {
 	}
 }
 
+func TestGeneratePresentationTool_ReportsQualityWarnings(t *testing.T) {
+	tool := NewGeneratePresentationTool(t.TempDir(), true)
+	result := tool.Execute(context.Background(), map[string]any{
+		"title": "Dense Deck",
+		"slides": []any{
+			map[string]any{
+				"layout": "title-bullets",
+				"title":  "This title is intentionally much too long for a polished presentation slide",
+				"body":   "This body copy is also intentionally long enough to be a warning because it asks the slide to carry too much explanatory detail in one view, then keeps going with extra detail that should be moved into speaker notes or a separate slide.",
+				"bullets": []any{
+					"First long bullet that should be shortened before presenting to an audience",
+					"Second long bullet that repeats the same problem and adds density",
+					"Third bullet",
+					"Fourth bullet",
+					"Fifth bullet",
+					"Sixth bullet",
+				},
+			},
+		},
+	})
+	if result.IsError {
+		t.Fatalf("Execute() returned error: %s", result.ForLLM)
+	}
+	for _, want := range []string{
+		"quality_warnings",
+		"slide 1 title",
+		"slide 1 body",
+		"has 6 bullets",
+	} {
+		if !strings.Contains(result.ForLLM, want) {
+			t.Fatalf("expected warning %q in ForLLM, got %s", want, result.ForLLM)
+		}
+	}
+}
+
 func TestGeneratePresentationTool_RejectsRemoteImages(t *testing.T) {
 	tool := NewGeneratePresentationTool(t.TempDir(), true)
 	result := tool.Execute(context.Background(), map[string]any{
