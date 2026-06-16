@@ -301,6 +301,9 @@ func registerSharedToolsForAgent(
 	imageTool := tools.NewGenerateImageTool(agent.Workspace, cfg.Agents.Defaults.RestrictToWorkspace)
 	imageTool.SetMediaStore(store)
 	agent.Tools.Register(imageTool)
+	presentationTool := tools.NewGeneratePresentationTool(agent.Workspace, cfg.Agents.Defaults.RestrictToWorkspace)
+	presentationTool.SetMediaStore(store)
+	agent.Tools.Register(presentationTool)
 	agentRef := agent
 	turtleSoupTool := tools.NewTurtleSoupToolWithModelResolver(turtleSoup, agent.Provider, func() string {
 		return agentRef.Model

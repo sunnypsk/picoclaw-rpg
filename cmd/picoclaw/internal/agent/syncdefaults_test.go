@@ -188,6 +188,40 @@ func TestSyncDefaultsCommandDoesNotCopyRemovedGenerateSlidesSkill(t *testing.T) 
 	}
 }
 
+func TestSyncDefaultsCommandCopiesPresentationSkill(t *testing.T) {
+	root := t.TempDir()
+	defaultWorkspace := filepath.Join(root, "workspace")
+	legacyWorkspace := filepath.Join(root, "workspace-legacy")
+	configPath := filepath.Join(root, "config.json")
+
+	writeCommandWorkspaceFile(t, defaultWorkspace, "AGENTS.md", "# source agents\n")
+	writeCommandWorkspaceFile(t, defaultWorkspace, "SOUL.md", "# source soul\n")
+	writeCommandWorkspaceFile(t, defaultWorkspace, "IDENTITY.md", "# source identity\n")
+	writeCommandWorkspaceFile(t, legacyWorkspace, "AGENTS.md", "# legacy agents\n")
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = defaultWorkspace
+	if err := config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	t.Setenv("PICOCLAW_CONFIG", configPath)
+
+	cmd := newSyncDefaultsCommand()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--force-legacy"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute force-legacy: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(legacyWorkspace, "skills", "presentation", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("expected presentation skill to be copied: %v", err)
+	}
+	if !bytes.Contains(data, []byte("generate_presentation")) {
+		t.Fatalf("expected copied presentation skill to mention generate_presentation")
+	}
+}
+
 func writeCommandWorkspaceFile(t *testing.T, workspace, relPath, content string) {
 	t.Helper()
 	fullPath := filepath.Join(workspace, filepath.FromSlash(relPath))

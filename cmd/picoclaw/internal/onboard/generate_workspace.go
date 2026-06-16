@@ -79,6 +79,9 @@ func shouldSkipGeneratedPath(relPath string, isDir bool) bool {
 	if relPath == "generated-slides" || strings.HasPrefix(relPath, "generated-slides/") {
 		return true
 	}
+	if relPath == "generated-presentations" || strings.HasPrefix(relPath, "generated-presentations/") {
+		return true
+	}
 	if relPath == "generated-images" || strings.HasPrefix(relPath, "generated-images/") {
 		return true
 	}

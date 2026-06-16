@@ -143,6 +143,8 @@ func shouldSkipWorkspaceFixturePath(relPath string) bool {
 		strings.HasPrefix(relPath, "node_modules/") ||
 		relPath == "generated-slides" ||
 		strings.HasPrefix(relPath, "generated-slides/") ||
+		relPath == "generated-presentations" ||
+		strings.HasPrefix(relPath, "generated-presentations/") ||
 		relPath == "generated-images" ||
 		strings.HasPrefix(relPath, "generated-images/")
 }
@@ -156,5 +158,21 @@ func TestCopyEmbeddedWorkspaceTemplates_ExcludesGenerateSlidesSkill(t *testing.T
 
 	if _, err := os.Stat(filepath.Join(targetDir, "skills", "generate-slides")); !os.IsNotExist(err) {
 		t.Fatalf("expected generate-slides skill to be absent, got err=%v", err)
+	}
+}
+
+func TestCopyEmbeddedWorkspaceTemplates_IncludesPresentationSkill(t *testing.T) {
+	targetDir := t.TempDir()
+
+	if err := CopyEmbeddedWorkspaceTemplates(targetDir); err != nil {
+		t.Fatalf("CopyEmbeddedWorkspaceTemplates() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(targetDir, "skills", "presentation", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("expected presentation skill to exist: %v", err)
+	}
+	if !strings.Contains(string(data), "generate_presentation") {
+		t.Fatalf("expected presentation skill to mention generate_presentation")
 	}
 }

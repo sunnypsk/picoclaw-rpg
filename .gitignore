@@ -57,6 +57,7 @@ ralph/
 tasks/
 workspace/generated-slides/
 workspace/generated-images/
+workspace/generated-presentations/
 
 # Editors
 .vscode/
