@@ -58,6 +58,8 @@ tasks/
 workspace/generated-slides/
 workspace/generated-images/
 workspace/generated-presentations/
+generated-presentations/
+workspace/presentation-assets/
 
 # Editors
 .vscode/
