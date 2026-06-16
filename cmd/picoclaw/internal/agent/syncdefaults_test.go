@@ -158,7 +158,7 @@ func TestSyncDefaultsCommandCopiesManagedSkillIntoExistingWorkspace(t *testing.T
 	)
 }
 
-func TestSyncDefaultsCommandCopiesGenerateSlidesSkillFromEmbeddedWorkspace(t *testing.T) {
+func TestSyncDefaultsCommandDoesNotCopyRemovedGenerateSlidesSkill(t *testing.T) {
 	root := t.TempDir()
 	defaultWorkspace := filepath.Join(root, "workspace")
 	legacyWorkspace := filepath.Join(root, "workspace-legacy")
@@ -176,10 +176,6 @@ func TestSyncDefaultsCommandCopiesGenerateSlidesSkillFromEmbeddedWorkspace(t *te
 	}
 	t.Setenv("PICOCLAW_CONFIG", configPath)
 
-	wantSkill := embeddedCommandWorkspaceFile(t, "skills/generate-slides/SKILL.md")
-	wantPackageJSON := embeddedCommandWorkspaceFile(t, "skills/generate-slides/package.json")
-	wantScript := embeddedCommandWorkspaceFile(t, "skills/generate-slides/scripts/generate_slides.mjs")
-
 	cmd := newSyncDefaultsCommand()
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetArgs([]string{"--force-legacy"})
@@ -187,21 +183,9 @@ func TestSyncDefaultsCommandCopiesGenerateSlidesSkillFromEmbeddedWorkspace(t *te
 		t.Fatalf("Execute force-legacy: %v", err)
 	}
 
-	assertCommandFileContent(
-		t,
-		filepath.Join(legacyWorkspace, "skills", "generate-slides", "SKILL.md"),
-		wantSkill,
-	)
-	assertCommandFileContent(
-		t,
-		filepath.Join(legacyWorkspace, "skills", "generate-slides", "package.json"),
-		wantPackageJSON,
-	)
-	assertCommandFileContent(
-		t,
-		filepath.Join(legacyWorkspace, "skills", "generate-slides", "scripts", "generate_slides.mjs"),
-		wantScript,
-	)
+	if _, err := os.Stat(filepath.Join(legacyWorkspace, "skills", "generate-slides")); !os.IsNotExist(err) {
+		t.Fatalf("expected generate-slides skill to be absent, got err=%v", err)
+	}
 }
 
 func writeCommandWorkspaceFile(t *testing.T, workspace, relPath, content string) {

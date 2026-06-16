@@ -62,7 +62,7 @@ func TestCopyEmbeddedWorkspaceTemplates_IncludesVerificationGuidance(t *testing.
 	}
 
 	text := string(data)
-	if !strings.Contains(text, "verify with `web_search` and usually `web_fetch` before answering") {
+	if !strings.Contains(text, "verify with available web tools before answering") {
 		t.Fatalf("expected fresh-fact verification guidance in embedded AGENTS.md")
 	}
 	if !strings.Contains(text, "Do not claim a mutating action succeeded until you have checked the result") {
@@ -109,15 +109,18 @@ func workspaceFixtureSnapshot(t *testing.T, root string) []string {
 		if walkErr != nil {
 			return walkErr
 		}
-		if d.IsDir() {
-			return nil
-		}
 
 		relPath, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
 		}
 		relPath = filepath.ToSlash(relPath)
+		if d.IsDir() {
+			if relPath != "." && shouldSkipWorkspaceFixturePath(relPath) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if shouldSkipWorkspaceFixturePath(relPath) {
 			return nil
 		}
@@ -139,32 +142,19 @@ func shouldSkipWorkspaceFixturePath(relPath string) bool {
 		strings.Contains(relPath, "/node_modules/") ||
 		strings.HasPrefix(relPath, "node_modules/") ||
 		relPath == "generated-slides" ||
-		strings.HasPrefix(relPath, "generated-slides/")
+		strings.HasPrefix(relPath, "generated-slides/") ||
+		relPath == "generated-images" ||
+		strings.HasPrefix(relPath, "generated-images/")
 }
 
-func TestCopyEmbeddedWorkspaceTemplates_IncludesGenerateSlidesWithoutRuntimeArtifacts(t *testing.T) {
+func TestCopyEmbeddedWorkspaceTemplates_ExcludesGenerateSlidesSkill(t *testing.T) {
 	targetDir := t.TempDir()
 
 	if err := CopyEmbeddedWorkspaceTemplates(targetDir); err != nil {
 		t.Fatalf("CopyEmbeddedWorkspaceTemplates() error = %v", err)
 	}
 
-	requiredFiles := []string{
-		filepath.Join(targetDir, "skills", "generate-slides", "SKILL.md"),
-		filepath.Join(targetDir, "skills", "generate-slides", "package.json"),
-		filepath.Join(targetDir, "skills", "generate-slides", "scripts", "generate_slides.mjs"),
-	}
-
-	for _, path := range requiredFiles {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("expected %s to exist: %v", path, err)
-		}
-	}
-
-	if _, err := os.Stat(filepath.Join(targetDir, "skills", "generate-slides", "node_modules")); !os.IsNotExist(err) {
-		t.Fatalf("expected generate-slides node_modules to be excluded, got err=%v", err)
-	}
-	if _, err := os.Stat(filepath.Join(targetDir, "generated-slides")); !os.IsNotExist(err) {
-		t.Fatalf("expected generated-slides artifacts to be excluded, got err=%v", err)
+	if _, err := os.Stat(filepath.Join(targetDir, "skills", "generate-slides")); !os.IsNotExist(err) {
+		t.Fatalf("expected generate-slides skill to be absent, got err=%v", err)
 	}
 }
