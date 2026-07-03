@@ -151,6 +151,8 @@ func (p *Provider) Chat(
 		}
 	}
 
+	applyReasoningDefaults(requestBody, options, model, p.apiBase)
+
 	// Prompt caching: pass a stable cache key so OpenAI can bucket requests
 	// with the same key and reuse prefix KV cache across calls.
 	// The key is typically the agent ID — stable per agent, shared across requests.
@@ -450,6 +452,26 @@ func normalizeModel(model, apiBase string) string {
 	default:
 		return model
 	}
+}
+
+func applyReasoningDefaults(requestBody map[string]any, options map[string]any, model, apiBase string) {
+	if !shouldEnableReasoningByDefault(model, apiBase) {
+		return
+	}
+	if reasoning, ok := options["reasoning"]; ok {
+		requestBody["reasoning"] = reasoning
+		return
+	}
+	requestBody["reasoning"] = map[string]any{"enabled": true}
+}
+
+func shouldEnableReasoningByDefault(model, apiBase string) bool {
+	if !strings.Contains(strings.ToLower(apiBase), "openrouter.ai") {
+		return false
+	}
+	model = strings.ToLower(strings.TrimSpace(model))
+	model = strings.TrimPrefix(model, "openrouter/")
+	return model == "minimax/minimax-m3"
 }
 
 func asInt(v any) (int, bool) {

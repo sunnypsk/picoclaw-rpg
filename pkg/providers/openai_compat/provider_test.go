@@ -201,6 +201,74 @@ func TestProviderChat_PreservesReasoningContentInHistory(t *testing.T) {
 	}
 }
 
+func TestProviderChat_EnablesReasoningByDefaultForOpenRouterMinimaxM3(t *testing.T) {
+	var requestBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message":       map[string]any{"content": "ok"},
+					"finish_reason": "stop",
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := NewProvider("key", server.URL+"/openrouter.ai/api/v1", "")
+	_, err := p.Chat(t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, "minimax/minimax-m3", nil)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	reasoning, ok := requestBody["reasoning"].(map[string]any)
+	if !ok {
+		t.Fatalf("reasoning = %T, want map[string]any", requestBody["reasoning"])
+	}
+	if reasoning["enabled"] != true {
+		t.Fatalf("reasoning.enabled = %v, want true", reasoning["enabled"])
+	}
+}
+
+func TestProviderChat_DoesNotEnableReasoningByDefaultForOtherOpenRouterModels(t *testing.T) {
+	var requestBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message":       map[string]any{"content": "ok"},
+					"finish_reason": "stop",
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := NewProvider("key", server.URL+"/openrouter.ai/api/v1", "")
+	_, err := p.Chat(t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, "openai/gpt-5.2", nil)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	if _, ok := requestBody["reasoning"]; ok {
+		t.Fatalf("did not expect reasoning in request body")
+	}
+}
+
 func TestProviderChat_HTTPError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
