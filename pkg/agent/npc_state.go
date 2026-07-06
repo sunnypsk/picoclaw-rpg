@@ -1369,7 +1369,10 @@ func (al *AgentLoop) updateNPCStateOnly(
 
 	nextState, err := al.requestNPCStateOnlyUpdate(ctx, agent, previousState, msg, sessionKey, assistantReply)
 	if err != nil {
-		return err
+		logger.InfoCF("agent", "NPC state updater fallback used", npcUpdaterFallbackFields(
+			agent, "state_only", err,
+		))
+		nextState = deterministicNPCReplyState(previousState, msg, assistantReply)
 	}
 
 	return saveNPCReplyState(agent, nextState, trackedTurns, msg, sessionKey, time.Now())
@@ -1394,7 +1397,23 @@ func (al *AgentLoop) updateNPCStateAndMemory(
 
 	update, err := al.requestNPCStateUpdate(ctx, agent, previousState, memoryNotes, msg, sessionKey, assistantReply)
 	if err != nil {
-		return err
+		logger.InfoCF("agent", "NPC state/memory updater retrying", npcUpdaterFallbackFields(
+			agent, "state_memory", err,
+		))
+		update, err = al.requestNPCStateUpdateRepair(ctx, agent, previousState, memoryNotes, msg, sessionKey, assistantReply)
+	}
+	if err != nil {
+		logger.InfoCF("agent", "NPC state/memory updater fallback used", npcUpdaterFallbackFields(
+			agent, "state_memory_repair", err,
+		))
+		nextState, stateErr := al.requestNPCStateOnlyUpdate(ctx, agent, previousState, msg, sessionKey, assistantReply)
+		if stateErr != nil {
+			logger.InfoCF("agent", "NPC state updater fallback used", npcUpdaterFallbackFields(
+				agent, "state_only_after_memory_failure", stateErr,
+			))
+			nextState = deterministicNPCReplyState(previousState, msg, assistantReply)
+		}
+		return saveNPCReplyState(agent, nextState, trackedTurns, msg, sessionKey, time.Now())
 	}
 
 	if err := saveNPCReplyState(agent, update.State, trackedTurns, msg, sessionKey, time.Now()); err != nil {
@@ -1411,6 +1430,29 @@ func (al *AgentLoop) updateNPCStateAndMemory(
 	}
 
 	return nil
+}
+
+func deterministicNPCReplyState(previousState NPCState, msg bus.InboundMessage, assistantReply string) NPCState {
+	nextState := normalizeNPCState(previousState)
+	applyMinimalTurnUpdate(&nextState, msg, assistantReply)
+	return normalizeNPCState(nextState)
+}
+
+func npcUpdaterFallbackFields(agent *AgentInstance, stage string, err error) map[string]any {
+	fields := map[string]any{
+		"agent_id": agentIDOrUnknown(agent),
+		"stage":    stage,
+	}
+	if status := maintenanceJSONStatusString(err); status != "" {
+		fields["error_status"] = status
+	}
+	if preview := maintenanceJSONPreview(err); preview != "" {
+		fields["response_preview"] = preview
+	}
+	if err != nil {
+		fields["error"] = maintenancePreviewForLog(err.Error(), 160)
+	}
+	return fields
 }
 
 func npcUpdaterContext(parentCtx context.Context) (context.Context, context.CancelFunc) {
@@ -1890,6 +1932,16 @@ Rules:
 - Return valid JSON object only.`, npcUpdaterPromptTag, personRef, personRef, npcStateUpdateRules(personRef), maxNPCMemoryNotes)
 }
 
+func buildNPCStateAndMemoryRepairSystemPrompt(personRef string) string {
+	return buildNPCStateAndMemorySystemPrompt(personRef) + `
+
+STRICT RETRY:
+- The previous response could not be parsed as JSON.
+- Return one complete JSON object only.
+- Do not include markdown fences, comments, prose, or partial fragments.
+- Include both top-level keys: "state" and "memory_notes".`
+}
+
 func (al *AgentLoop) requestNPCStateOnlyUpdate(
 	ctx context.Context,
 	agent *AgentInstance,
@@ -1918,30 +1970,23 @@ func (al *AgentLoop) requestNPCStateOnlyUpdate(
 		nil,
 		agent.Model,
 		map[string]any{
-			"max_tokens":       1200,
-			"temperature":      0.2,
+			"max_tokens":       1600,
+			"temperature":      0.0,
 			"prompt_cache_key": agent.ID + ":npc-state-only",
 		},
 	)
 	if err != nil {
+		return NPCState{}, newMaintenanceJSONProviderError("npc state updater provider error", err)
+	}
+	if response == nil {
+		return NPCState{}, newMaintenanceJSONProviderError("nil NPC state update response", nil)
+	}
+
+	nextState, err := decodeNPCStateOnlyResponse(response.Content)
+	if err != nil {
 		return NPCState{}, err
 	}
-
-	raw := extractJSONObjectFromContent(response.Content)
-	if strings.TrimSpace(raw) == "" {
-		return NPCState{}, fmt.Errorf("empty JSON state update response")
-	}
-
-	var nextState NPCState
-	if err := json.Unmarshal([]byte(raw), &nextState); err != nil {
-		var wrapped npcStateUpdateResult
-		if err2 := json.Unmarshal([]byte(raw), &wrapped); err2 != nil {
-			return NPCState{}, err
-		}
-		nextState = wrapped.State
-	}
-
-	return normalizeNPCState(nextState), nil
+	return nextState, nil
 }
 
 func (al *AgentLoop) requestNPCStateUpdate(
@@ -1953,6 +1998,52 @@ func (al *AgentLoop) requestNPCStateUpdate(
 	sessionKey string,
 	assistantReply string,
 ) (*npcStateUpdateResult, error) {
+	return al.requestNPCStateUpdateWithPrompt(
+		ctx,
+		agent,
+		state,
+		memoryNotes,
+		msg,
+		sessionKey,
+		assistantReply,
+		buildNPCStateAndMemorySystemPrompt,
+		"npc-state-memory",
+	)
+}
+
+func (al *AgentLoop) requestNPCStateUpdateRepair(
+	ctx context.Context,
+	agent *AgentInstance,
+	state NPCState,
+	memoryNotes []string,
+	msg bus.InboundMessage,
+	sessionKey string,
+	assistantReply string,
+) (*npcStateUpdateResult, error) {
+	return al.requestNPCStateUpdateWithPrompt(
+		ctx,
+		agent,
+		state,
+		memoryNotes,
+		msg,
+		sessionKey,
+		assistantReply,
+		buildNPCStateAndMemoryRepairSystemPrompt,
+		"npc-state-memory-repair",
+	)
+}
+
+func (al *AgentLoop) requestNPCStateUpdateWithPrompt(
+	ctx context.Context,
+	agent *AgentInstance,
+	state NPCState,
+	memoryNotes []string,
+	msg bus.InboundMessage,
+	sessionKey string,
+	assistantReply string,
+	buildPrompt func(string) string,
+	cacheSuffix string,
+) (*npcStateUpdateResult, error) {
 	if agent.Provider == nil {
 		return nil, fmt.Errorf("agent provider is nil")
 	}
@@ -1962,7 +2053,7 @@ func (al *AgentLoop) requestNPCStateUpdate(
 		return nil, err
 	}
 
-	systemPrompt := buildNPCStateAndMemorySystemPrompt(relationshipKey)
+	systemPrompt := buildPrompt(relationshipKey)
 
 	response, err := agent.Provider.Chat(
 		ctx,
@@ -1973,33 +2064,87 @@ func (al *AgentLoop) requestNPCStateUpdate(
 		nil,
 		agent.Model,
 		map[string]any{
-			"max_tokens":       1400,
-			"temperature":      0.2,
-			"prompt_cache_key": agent.ID + ":npc-state-memory",
+			"max_tokens":       3200,
+			"temperature":      0.0,
+			"prompt_cache_key": agent.ID + ":" + cacheSuffix,
 		},
 	)
 	if err != nil {
+		return nil, newMaintenanceJSONProviderError("npc state/memory updater provider error", err)
+	}
+	if response == nil {
+		return nil, newMaintenanceJSONProviderError("nil NPC state/memory update response", nil)
+	}
+
+	update, err := decodeNPCStateUpdateResponse(response.Content)
+	if err != nil {
 		return nil, err
 	}
+	return update, nil
+}
 
-	raw := extractJSONObjectFromContent(response.Content)
-	if strings.TrimSpace(raw) == "" {
-		return nil, fmt.Errorf("empty JSON update response")
+func decodeNPCStateOnlyResponse(content string) (NPCState, error) {
+	var wrapped npcStateUpdateResult
+	if err := decodeMaintenanceJSON(content, &wrapped); err == nil && !isEmptyNPCState(wrapped.State) {
+		return normalizeNPCState(wrapped.State), nil
 	}
 
-	var update npcStateUpdateResult
-	if err := json.Unmarshal([]byte(raw), &update); err != nil {
-		var stateOnly NPCState
-		if err2 := json.Unmarshal([]byte(raw), &stateOnly); err2 != nil {
-			return nil, err
+	var state NPCState
+	if err := decodeMaintenanceJSON(content, &state); err != nil {
+		return NPCState{}, err
+	}
+	if isEmptyNPCState(state) {
+		return NPCState{}, &maintenanceJSONError{
+			status:  maintenanceJSONStatusInvalidJSON,
+			message: "empty NPC state in JSON response",
+			preview: maintenancePreviewForLog(content, 160),
 		}
-		update.State = stateOnly
+	}
+	return normalizeNPCState(state), nil
+}
+
+func decodeNPCStateUpdateResponse(content string) (*npcStateUpdateResult, error) {
+	var update npcStateUpdateResult
+	firstErr := decodeMaintenanceJSON(content, &update)
+	if firstErr == nil && !isEmptyNPCState(update.State) {
+		update.State = normalizeNPCState(update.State)
+		update.MemoryNotes = normalizeMemoryNotes(update.MemoryNotes)
+		return &update, nil
 	}
 
-	update.State = normalizeNPCState(update.State)
+	var stateOnly NPCState
+	if err := decodeMaintenanceJSON(content, &stateOnly); err != nil {
+		if firstErr != nil {
+			return nil, firstErr
+		}
+		return nil, err
+	}
+	if isEmptyNPCState(stateOnly) {
+		return nil, &maintenanceJSONError{
+			status:  maintenanceJSONStatusInvalidJSON,
+			message: "empty NPC state in JSON response",
+			preview: maintenancePreviewForLog(content, 160),
+		}
+	}
+	update.State = normalizeNPCState(stateOnly)
 	update.MemoryNotes = normalizeMemoryNotes(update.MemoryNotes)
-
 	return &update, nil
+}
+
+func isEmptyNPCState(state NPCState) bool {
+	return state.Version == 0 &&
+		strings.TrimSpace(state.UpdatedAt) == "" &&
+		state.TrackedTurns == 0 &&
+		strings.TrimSpace(state.Emotion.Name) == "" &&
+		strings.TrimSpace(state.Emotion.Reason) == "" &&
+		strings.TrimSpace(state.Location.Area) == "" &&
+		strings.TrimSpace(state.Location.Scene) == "" &&
+		strings.TrimSpace(state.Location.Activity) == "" &&
+		len(state.People) == 0 &&
+		len(state.IdentifierMap) == 0 &&
+		len(state.Relationships) == 0 &&
+		len(state.Habits) == 0 &&
+		len(state.RecentEvents) == 0
 }
 
 func ensureRelationshipPresent(state *NPCState, msg bus.InboundMessage) {

@@ -389,7 +389,7 @@ func TestAutoRecallInjectsMemoryContextFromMultilingualKeywords(t *testing.T) {
 	}
 }
 
-func TestAutoRecallSkipsWhenKeywordExtractionReturnsInvalidJSON(t *testing.T) {
+func TestAutoRecallFallsBackWhenKeywordExtractionReturnsInvalidJSON(t *testing.T) {
 	tmpDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(tmpDir, "memory"), 0o755); err != nil {
 		t.Fatalf("create memory dir: %v", err)
@@ -433,12 +433,15 @@ func TestAutoRecallSkipsWhenKeywordExtractionReturnsInvalidJSON(t *testing.T) {
 	}
 
 	system := provider.allCalls[len(provider.allCalls)-1][0].Content
-	if strings.Contains(system, "RELEVANT_MEMORY (keyword recall)") {
-		t.Fatalf("system prompt should not include auto-recall block on invalid JSON:\n%s", system)
+	if !strings.Contains(system, "RELEVANT_MEMORY (keyword recall)") {
+		t.Fatalf("system prompt missing fallback auto-recall block:\n%s", system)
+	}
+	if !strings.Contains(system, "Asia/Hong_Kong") {
+		t.Fatalf("system prompt missing fallback recalled snippet:\n%s", system)
 	}
 }
 
-func TestAutoRecallSkipsWhenKeywordExtractionFails(t *testing.T) {
+func TestAutoRecallFallsBackWhenKeywordExtractionFails(t *testing.T) {
 	tmpDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(tmpDir, "memory"), 0o755); err != nil {
 		t.Fatalf("create memory dir: %v", err)
@@ -483,8 +486,11 @@ func TestAutoRecallSkipsWhenKeywordExtractionFails(t *testing.T) {
 	}
 
 	system := provider.allCalls[len(provider.allCalls)-1][0].Content
-	if strings.Contains(system, "RELEVANT_MEMORY (keyword recall)") {
-		t.Fatalf("system prompt should not include auto-recall block on provider error:\n%s", system)
+	if !strings.Contains(system, "RELEVANT_MEMORY (keyword recall)") {
+		t.Fatalf("system prompt missing fallback auto-recall block:\n%s", system)
+	}
+	if !strings.Contains(system, "Asia/Hong_Kong") {
+		t.Fatalf("system prompt missing fallback recalled snippet:\n%s", system)
 	}
 }
 
@@ -534,6 +540,33 @@ func TestAutoRecallSkipsWhenKeywordExtractionReturnsEmpty(t *testing.T) {
 	system := provider.allCalls[len(provider.allCalls)-1][0].Content
 	if strings.Contains(system, "RELEVANT_MEMORY (keyword recall)") {
 		t.Fatalf("system prompt should not include auto-recall block on empty keywords:\n%s", system)
+	}
+}
+
+func TestAutoRecallFallbackUsesLatestUserPreviewFromLongProactivePrompt(t *testing.T) {
+	prompt := `# Proactive Outreach Check
+
+Current time: 2026-07-06T09:21:48+08:00
+Relationship key: person_contact
+Latest user turn preview: timezone preference
+Latest assistant turn preview: none
+
+Relationship snapshot:
+{"notes":"do not search this whole prompt"}`
+
+	keywords := fallbackAutoRecallKeywords(prompt)
+	joined := strings.Join(keywords, " ")
+	if !strings.Contains(joined, "timezone") {
+		t.Fatalf("fallback keywords = %#v, want latest user preview terms", keywords)
+	}
+	if strings.Contains(strings.ToLower(joined), "relationship") {
+		t.Fatalf("fallback keywords = %#v, should not include prompt body terms", keywords)
+	}
+}
+
+func TestAutoRecallKeywordExtractionTimeoutAllowsSlowModels(t *testing.T) {
+	if autoRecallKeywordExtractionTimeout != time.Minute {
+		t.Fatalf("autoRecallKeywordExtractionTimeout = %v, want %v", autoRecallKeywordExtractionTimeout, time.Minute)
 	}
 }
 

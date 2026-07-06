@@ -2,11 +2,11 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -85,6 +85,8 @@ func (al *AgentLoop) extractAutoRecallQuery(ctx context.Context, agent *AgentIns
 	keywords := []string{}
 	keywordQuery := ""
 	logErr := ""
+	logPreview := ""
+	fallbackReason := ""
 	start := time.Now()
 
 	defer func() {
@@ -106,11 +108,28 @@ func (al *AgentLoop) extractAutoRecallQuery(ctx context.Context, agent *AgentIns
 		if logErr != "" {
 			fields["error"] = logErr
 		}
+		if logPreview != "" {
+			fields["response_preview"] = logPreview
+		}
+		if fallbackReason != "" {
+			fields["fallback_reason"] = fallbackReason
+		}
 		logger.InfoCF("memory", "Auto recall keyword extraction completed", fields)
 	}()
 
 	if agent == nil || agent.Provider == nil {
 		return ""
+	}
+
+	useFallback := func(reason string) string {
+		fallbackReason = reason
+		keywords = fallbackAutoRecallKeywords(userMessage)
+		if len(keywords) == 0 {
+			return ""
+		}
+		keywordQuery = strings.Join(keywords, " ")
+		status = "fallback"
+		return keywordQuery
 	}
 
 	baseCtx := ctx
@@ -170,27 +189,21 @@ Examples:
 		default:
 			status = "provider_error"
 		}
-		logErr = err.Error()
-		return ""
+		logErr = maintenancePreviewForLog(err.Error(), 160)
+		return useFallback(status)
 	}
 	if response == nil {
 		status = "provider_error"
 		logErr = "nil keyword extraction response"
-		return ""
-	}
-
-	rawJSON := extractJSONObjectFromContent(response.Content)
-	if strings.TrimSpace(rawJSON) == "" {
-		status = "invalid_json"
-		logErr = "empty JSON extraction response"
-		return ""
+		return useFallback(status)
 	}
 
 	var payload autoRecallKeywordResponse
-	if err := json.Unmarshal([]byte(rawJSON), &payload); err != nil {
-		status = "invalid_json"
+	if err := decodeMaintenanceJSON(response.Content, &payload); err != nil {
+		status = maintenanceJSONStatusString(err)
 		logErr = err.Error()
-		return ""
+		logPreview = maintenanceJSONPreview(err)
+		return useFallback(status)
 	}
 
 	keywords = normalizeAutoRecallKeywords(payload.Keywords)
@@ -202,6 +215,119 @@ Examples:
 	keywordQuery = strings.Join(keywords, " ")
 	status = "hit"
 	return keywordQuery
+}
+
+func fallbackAutoRecallKeywords(userMessage string) []string {
+	source := fallbackAutoRecallSource(userMessage)
+	if source == "" {
+		return nil
+	}
+
+	candidates := make([]string, 0, autoRecallKeywordExtractionMaxResults)
+	addCandidate := func(value string) {
+		value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+		if value == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if strings.EqualFold(existing, value) {
+				return
+			}
+		}
+		candidates = append(candidates, value)
+	}
+
+	if len([]rune(source)) <= 80 {
+		addCandidate(source)
+	}
+
+	tokens := fallbackAutoRecallTokens(source)
+	for _, token := range tokens {
+		addCandidate(token)
+		if len(candidates) >= autoRecallKeywordExtractionMaxResults {
+			return candidates
+		}
+	}
+	for i := 0; i+1 < len(tokens); i++ {
+		addCandidate(tokens[i] + " " + tokens[i+1])
+		if len(candidates) >= autoRecallKeywordExtractionMaxResults {
+			return candidates
+		}
+	}
+
+	return candidates
+}
+
+func fallbackAutoRecallSource(userMessage string) string {
+	message := strings.Join(strings.Fields(strings.TrimSpace(userMessage)), " ")
+	if message == "" {
+		return ""
+	}
+	if strings.HasPrefix(message, "# Proactive Outreach Check") || strings.HasPrefix(message, "# Heartbeat Check") {
+		return fallbackPromptField(message, "Latest user turn preview:")
+	}
+
+	runes := []rune(message)
+	if len(runes) > 320 {
+		return string(runes[:320])
+	}
+	return message
+}
+
+func fallbackPromptField(message, label string) string {
+	idx := strings.Index(message, label)
+	if idx < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(message[idx+len(label):])
+	if rest == "" {
+		return ""
+	}
+	end := len(rest)
+	for _, marker := range []string{" Latest assistant turn preview:", " Relationship snapshot:", " Rules:"} {
+		if markerIdx := strings.Index(rest, marker); markerIdx >= 0 && markerIdx < end {
+			end = markerIdx
+		}
+	}
+	value := strings.TrimSpace(rest[:end])
+	if value == "" || strings.EqualFold(value, "none") {
+		return ""
+	}
+	return value
+}
+
+func fallbackAutoRecallTokens(source string) []string {
+	rawTokens := strings.FieldsFunc(source, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	})
+	tokens := make([]string, 0, len(rawTokens))
+	for _, token := range rawTokens {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		if isAutoRecallFallbackStopWord(token) {
+			continue
+		}
+		if len([]rune(token)) < 2 {
+			continue
+		}
+		tokens = append(tokens, token)
+		if len(tokens) >= autoRecallKeywordExtractionMaxResults {
+			break
+		}
+	}
+	return tokens
+}
+
+func isAutoRecallFallbackStopWord(token string) bool {
+	switch strings.ToLower(strings.TrimSpace(token)) {
+	case "the", "and", "for", "with", "that", "this", "what", "when", "where", "which", "who", "why",
+		"how", "are", "was", "were", "is", "my", "your", "you", "me", "please", "about", "有冇", "係咪":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeAutoRecallKeywords(keywords []string) []string {

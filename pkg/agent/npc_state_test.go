@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1110,6 +1111,14 @@ type npcStateTestProvider struct {
 	memoryUpdaterCalls atomic.Int32
 	updaterInFlight    atomic.Int32
 	updaterMaxInFlight atomic.Int32
+	stateScripts       []npcUpdaterScript
+	memoryScripts      []npcUpdaterScript
+	scriptMu           sync.Mutex
+}
+
+type npcUpdaterScript struct {
+	content string
+	err     error
 }
 
 func (m *npcStateTestProvider) Chat(
@@ -1143,6 +1152,12 @@ func (m *npcStateTestProvider) Chat(
 				return nil, ctx.Err()
 			case <-time.After(m.updaterDelay):
 			}
+		}
+		if script, ok := m.nextUpdaterScript(isMemoryUpdater); ok {
+			if script.err != nil {
+				return nil, script.err
+			}
+			return &providers.LLMResponse{Content: script.content, ToolCalls: []providers.ToolCall{}}, nil
 		}
 
 		personRef := personRefFromUpdaterInput(messages)
@@ -1197,6 +1212,25 @@ func (m *npcStateTestProvider) Chat(
 	return &providers.LLMResponse{Content: "ok", ToolCalls: []providers.ToolCall{}}, nil
 }
 
+func (m *npcStateTestProvider) nextUpdaterScript(memoryUpdater bool) (npcUpdaterScript, bool) {
+	m.scriptMu.Lock()
+	defer m.scriptMu.Unlock()
+	if memoryUpdater {
+		if len(m.memoryScripts) == 0 {
+			return npcUpdaterScript{}, false
+		}
+		script := m.memoryScripts[0]
+		m.memoryScripts = m.memoryScripts[1:]
+		return script, true
+	}
+	if len(m.stateScripts) == 0 {
+		return npcUpdaterScript{}, false
+	}
+	script := m.stateScripts[0]
+	m.stateScripts = m.stateScripts[1:]
+	return script, true
+}
+
 func (m *npcStateTestProvider) GetDefaultModel() string {
 	return "mock-model"
 }
@@ -1211,6 +1245,117 @@ func (m *npcStateTestProvider) memoryUpdaterCallCount() int {
 
 func (m *npcStateTestProvider) maxConcurrentUpdaters() int {
 	return int(m.updaterMaxInFlight.Load())
+}
+
+func strictAutoProvisionNPCConfig(workspace string) *config.Config {
+	return &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         workspace,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+			AutoProvision: config.AutoProvisionConfig{
+				Enabled:        true,
+				StrictOneToOne: true,
+				ChatTypes:      []string{"direct", "group", "channel"},
+			},
+		},
+	}
+}
+
+func processStrictAutoProvisionTurns(
+	t *testing.T,
+	al *AgentLoop,
+	count int,
+	channel, senderID, chatID string,
+) {
+	t.Helper()
+	for i := 0; i < count; i++ {
+		msg := bus.InboundMessage{
+			Channel:  channel,
+			SenderID: senderID,
+			ChatID:   chatID,
+			Content:  fmt.Sprintf("hello %d", i+1),
+			Peer:     bus.Peer{Kind: "direct", ID: senderID},
+		}
+		response, err := al.processMessageAndSend(context.Background(), msg)
+		if err != nil {
+			t.Fatalf("processMessageAndSend() error: %v", err)
+		}
+		if response != "ok" {
+			t.Fatalf("response = %q, want %q", response, "ok")
+		}
+	}
+}
+
+func strictAutoProvisionAgent(
+	t *testing.T,
+	al *AgentLoop,
+	channel, senderID string,
+) *AgentInstance {
+	t.Helper()
+	route := al.registry.ResolveRoute(routing.RouteInput{
+		Channel: channel,
+		Peer:    &routing.RoutePeer{Kind: "direct", ID: senderID},
+	})
+	if route.MatchedBy != "auto-provision" {
+		t.Fatalf("MatchedBy = %q, want auto-provision", route.MatchedBy)
+	}
+	agent, ok := al.registry.GetAgent(route.AgentID)
+	if !ok {
+		t.Fatalf("expected auto-provisioned agent %q", route.AgentID)
+	}
+	return agent
+}
+
+func scriptedNPCStateMemoryUpdate(note string) string {
+	update := npcStateUpdateResult{
+		State: scriptedNPCState("person_1"),
+		MemoryNotes: []string{
+			note,
+		},
+	}
+	data, _ := json.Marshal(update)
+	return string(data)
+}
+
+func scriptedNPCStateOnlyUpdate() string {
+	data, _ := json.Marshal(scriptedNPCState("person_1"))
+	return string(data)
+}
+
+func scriptedNPCState(personRef string) NPCState {
+	return NPCState{
+		Version:   2,
+		UpdatedAt: "2026-01-01T00:00:00Z",
+		Emotion: NPCEmotion{
+			Name:      "focused",
+			Intensity: NPCEmotionIntensityMid,
+			Reason:    "recovered from updater fallback test",
+		},
+		Location: NPCLocation{
+			Area:     "town",
+			Scene:    "side street",
+			Activity: "checking notes",
+		},
+		People: map[string]NPCPerson{
+			personRef: {DisplayName: "Test User"},
+		},
+		Relationships: map[string]NPCRelationship{
+			personRef: {
+				Affinity:    NPCLevelMid,
+				Trust:       NPCLevelMid,
+				Familiarity: NPCLevelMid,
+			},
+		},
+		RecentEvents: []NPCRecentEvent{{
+			At:      "2026-01-01T00:00:00Z",
+			Type:    "chat",
+			Summary: "recovered from malformed updater JSON",
+		}},
+	}
 }
 
 func personRefFromUpdaterInput(messages []providers.Message) string {
@@ -1360,6 +1505,182 @@ func TestAgentLoop_StrictAutoProvision_UpdatesStateAndMemory(t *testing.T) {
 			return false, fmt.Sprintf("memoryUpdaterCallCount = %d, want 1", provider.memoryUpdaterCallCount())
 		}
 
+		return true, ""
+	})
+}
+
+func TestAgentLoop_StrictAutoProvision_RetriesMalformedStateMemoryUpdater(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+
+	cfg := strictAutoProvisionNPCConfig(filepath.Join(tmpHome, "main-workspace"))
+	provider := &npcStateTestProvider{
+		memoryScripts: []npcUpdaterScript{
+			{content: `{"state":`},
+			{content: scriptedNPCStateMemoryUpdate("retry recovered durable note")},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+
+	processStrictAutoProvisionTurns(t, al, npcUpdaterEveryTurns, "telegram", "retry-user", "retry-chat")
+	agent := strictAutoProvisionAgent(t, al, "telegram", "retry-user")
+
+	waitForCondition(t, 6*time.Second, 40*time.Millisecond, func() (bool, string) {
+		state, err := agent.StateStore.LoadState()
+		if err != nil {
+			return false, fmt.Sprintf("LoadState() error: %v", err)
+		}
+		if state.TrackedTurns != npcUpdaterEveryTurns {
+			return false, fmt.Sprintf("TrackedTurns = %d, want %d", state.TrackedTurns, npcUpdaterEveryTurns)
+		}
+		notes, err := agent.StateStore.LoadMemoryNotes()
+		if err != nil {
+			return false, fmt.Sprintf("LoadMemoryNotes() error: %v", err)
+		}
+		if !containsString(notes, "retry recovered durable note") {
+			return false, fmt.Sprintf("memory notes = %#v, want retry note", notes)
+		}
+		if provider.memoryUpdaterCallCount() != 2 {
+			return false, fmt.Sprintf("memoryUpdaterCallCount = %d, want 2", provider.memoryUpdaterCallCount())
+		}
+		return true, ""
+	})
+}
+
+func TestAgentLoop_StrictAutoProvision_FallsBackToStateOnlyAndPreservesMemoryNotes(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+
+	cfg := strictAutoProvisionNPCConfig(filepath.Join(tmpHome, "main-workspace"))
+	provider := &npcStateTestProvider{
+		memoryScripts: []npcUpdaterScript{
+			{content: `not json`},
+			{content: `{"state":`},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+
+	processStrictAutoProvisionTurns(t, al, npcUpdaterEveryTurns-1, "telegram", "state-user", "state-chat")
+	agent := strictAutoProvisionAgent(t, al, "telegram", "state-user")
+	if err := agent.StateStore.SaveMemoryNotes([]string{"existing durable note"}); err != nil {
+		t.Fatalf("SaveMemoryNotes() error: %v", err)
+	}
+	processStrictAutoProvisionTurns(t, al, 1, "telegram", "state-user", "state-chat")
+
+	waitForCondition(t, 6*time.Second, 40*time.Millisecond, func() (bool, string) {
+		state, err := agent.StateStore.LoadState()
+		if err != nil {
+			return false, fmt.Sprintf("LoadState() error: %v", err)
+		}
+		if state.TrackedTurns != npcUpdaterEveryTurns {
+			return false, fmt.Sprintf("TrackedTurns = %d, want %d", state.TrackedTurns, npcUpdaterEveryTurns)
+		}
+		notes, err := agent.StateStore.LoadMemoryNotes()
+		if err != nil {
+			return false, fmt.Sprintf("LoadMemoryNotes() error: %v", err)
+		}
+		if len(notes) != 1 || notes[0] != "existing durable note" {
+			return false, fmt.Sprintf("memory notes = %#v, want existing note only", notes)
+		}
+		if provider.memoryUpdaterCallCount() != 2 {
+			return false, fmt.Sprintf("memoryUpdaterCallCount = %d, want 2", provider.memoryUpdaterCallCount())
+		}
+		return true, ""
+	})
+}
+
+func TestAgentLoop_StrictAutoProvision_AllUpdaterFailuresUseDeterministicStateFallback(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+
+	cfg := strictAutoProvisionNPCConfig(filepath.Join(tmpHome, "main-workspace"))
+	provider := &npcStateTestProvider{
+		memoryScripts: []npcUpdaterScript{
+			{content: `not json`},
+			{content: `{"state":`},
+		},
+		stateScripts: []npcUpdaterScript{
+			{content: scriptedNPCStateOnlyUpdate()},
+			{content: scriptedNPCStateOnlyUpdate()},
+			{content: scriptedNPCStateOnlyUpdate()},
+			{content: scriptedNPCStateOnlyUpdate()},
+			{err: errors.New("state updater unavailable")},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+
+	processStrictAutoProvisionTurns(t, al, npcUpdaterEveryTurns-1, "telegram", "fallback-user", "fallback-chat")
+	agent := strictAutoProvisionAgent(t, al, "telegram", "fallback-user")
+	if err := agent.StateStore.SaveMemoryNotes([]string{"keep this memory"}); err != nil {
+		t.Fatalf("SaveMemoryNotes() error: %v", err)
+	}
+	processStrictAutoProvisionTurns(t, al, 1, "telegram", "fallback-user", "fallback-chat")
+
+	waitForCondition(t, 6*time.Second, 40*time.Millisecond, func() (bool, string) {
+		state, err := agent.StateStore.LoadState()
+		if err != nil {
+			return false, fmt.Sprintf("LoadState() error: %v", err)
+		}
+		if state.TrackedTurns != npcUpdaterEveryTurns {
+			return false, fmt.Sprintf("TrackedTurns = %d, want %d", state.TrackedTurns, npcUpdaterEveryTurns)
+		}
+		if _, rel := requireRelationshipForIdentifier(t, state, "telegram", "fallback-user"); rel.LastAgentMessageAt == "" {
+			return false, "relationship metadata missing last agent message timestamp"
+		}
+		foundEvent := false
+		for _, event := range state.RecentEvents {
+			if strings.Contains(event.Summary, "hello 1") {
+				foundEvent = true
+				break
+			}
+		}
+		if !foundEvent {
+			return false, fmt.Sprintf("recent events = %#v, want deterministic fallback event", state.RecentEvents)
+		}
+		notes, err := agent.StateStore.LoadMemoryNotes()
+		if err != nil {
+			return false, fmt.Sprintf("LoadMemoryNotes() error: %v", err)
+		}
+		if len(notes) != 1 || notes[0] != "keep this memory" {
+			return false, fmt.Sprintf("memory notes = %#v, want preserved memory", notes)
+		}
+		return true, ""
+	})
+}
+
+func TestAgentLoop_StrictAutoProvision_StateOnlyFailureUsesDeterministicFallback(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+
+	cfg := strictAutoProvisionNPCConfig(filepath.Join(tmpHome, "main-workspace"))
+	provider := &npcStateTestProvider{
+		stateScripts: []npcUpdaterScript{
+			{err: errors.New("state updater unavailable")},
+		},
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+
+	processStrictAutoProvisionTurns(t, al, 1, "telegram", "single-user", "single-chat")
+	agent := strictAutoProvisionAgent(t, al, "telegram", "single-user")
+
+	waitForCondition(t, 6*time.Second, 40*time.Millisecond, func() (bool, string) {
+		state, err := agent.StateStore.LoadState()
+		if err != nil {
+			return false, fmt.Sprintf("LoadState() error: %v", err)
+		}
+		if state.TrackedTurns != 1 {
+			return false, fmt.Sprintf("TrackedTurns = %d, want 1", state.TrackedTurns)
+		}
+		if _, rel := requireRelationshipForIdentifier(t, state, "telegram", "single-user"); rel.LastAgentMessageAt == "" {
+			return false, "relationship metadata missing last agent message timestamp"
+		}
+		if len(state.RecentEvents) == 0 {
+			return false, "recent event missing after deterministic fallback"
+		}
 		return true, ""
 	})
 }
