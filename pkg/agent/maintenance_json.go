@@ -136,13 +136,17 @@ func maintenancePreviewForLog(value string, maxRunes int) string {
 var maintenanceURLPattern = regexp.MustCompile(`https?://[^\s\])}>,]+`)
 var maintenanceAuthBearerPattern = regexp.MustCompile(`(?i)\bauthorization\b\s*[:=]\s*bearer\s+[^"',\s\])}]+`)
 var maintenanceBearerPattern = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+`)
-var maintenanceSecretPattern = regexp.MustCompile(`(?i)\b(api[-_ ]?key|authorization|token|secret|password)\b\s*[:=]\s*["']?[^"',\s\])}]+`)
+var maintenanceSecretPattern = regexp.MustCompile(
+	`(?i)(["']?)` +
+		`([A-Za-z0-9_.-]*(?:api[-_ ]?key|authorization|token|secret|password)[A-Za-z0-9_.-]*)` +
+		`(["']?)\s*[:=]\s*["']?[^"',\s\])}]+["']?`,
+)
 
 func redactSensitiveValuesForLog(value string) string {
 	value = maintenanceURLPattern.ReplaceAllString(value, "<url>")
 	value = maintenanceAuthBearerPattern.ReplaceAllString(value, "authorization=<redacted>")
 	value = maintenanceBearerPattern.ReplaceAllString(value, "bearer <redacted>")
-	return maintenanceSecretPattern.ReplaceAllString(value, "$1=<redacted>")
+	return maintenanceSecretPattern.ReplaceAllString(value, "$1$2$3=<redacted>")
 }
 
 func looksLikeTruncatedJSONObject(value string) bool {
