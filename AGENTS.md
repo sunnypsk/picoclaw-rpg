@@ -46,24 +46,24 @@ runtime workspace.
 | Migrate OpenClaw data | `pkg/migrate/`, `cmd/picoclaw/internal/migrate/` | Dry-run and backup semantics are part of the contract. |
 
 ## CODE MAP
-LSP was unavailable in this session (`gopls` missing), and no `codegraph_*` tool was exposed.
-Reference centrality below is therefore unmeasured; entries are from `ast-grep` and direct file
-inspection.
+Validation refreshed after LSP/codegraph setup: `gopls` is installed through user LSP config,
+`lsp.diagnostics` reports no diagnostics for `cmd/picoclaw/main.go`, and CodeGraph reports an
+up-to-date index with 374 files, 7,036 nodes, and 22,326 edges.
 
-| Symbol | Type | Location | Refs | Role |
-|--------|------|----------|------|------|
-| `NewPicoclawCommand` | function | `cmd/picoclaw/main.go` | unmeasured | Cobra root command and subcommand registry. |
-| `gatewayCmd` | function | `cmd/picoclaw/internal/gateway/helpers.go` | unmeasured | Main long-running gateway bootstrap. |
-| `AgentLoop` | type | `pkg/agent/loop.go` | unmeasured | Central LLM/tool/channel session loop. |
-| `Config` | type | `pkg/config/config.go` | unmeasured | Top-level config schema and env mapping. |
-| `CreateProvider` | function | `pkg/providers/legacy_provider.go` | unmeasured | Runtime provider creation entry. |
-| `CreateProviderFromConfig` | function | `pkg/providers/factory_provider.go` | unmeasured | `model_list` provider factory entry. |
-| `LLMProvider` | interface | `pkg/providers/types.go` | unmeasured | Chat provider contract. |
-| `Channel` | interface | `pkg/channels/base.go` | unmeasured | Start/stop/send contract for platforms. |
-| `Manager` | type | `pkg/channels/manager.go` | unmeasured | Channel orchestration, HTTP server, queues, retry, media. |
-| `Tool` | interface | `pkg/tools/base.go` | unmeasured | LLM tool contract. |
-| `ExecTool` | type | `pkg/tools/shell.go` | unmeasured | Shell execution guard and subprocess wrapper. |
-| `MigrateInstance` | type | `pkg/migrate/migrate.go` | unmeasured | Migration planning and execution coordinator. |
+| Symbol | Type | Location | Signal | Role |
+|--------|------|----------|--------|------|
+| `NewPicoclawCommand` | function | `cmd/picoclaw/main.go` | codegraph-indexed | Cobra root command and subcommand registry. |
+| `gatewayCmd` | function | `cmd/picoclaw/internal/gateway/helpers.go` | codegraph-indexed | Main long-running gateway bootstrap. |
+| `AgentLoop` | type | `pkg/agent/loop.go` | codegraph-indexed | Central LLM/tool/channel session loop. |
+| `Config` | type | `pkg/config/config.go` | codegraph-indexed | Top-level config schema and env mapping. |
+| `CreateProvider` | function | `pkg/providers/legacy_provider.go` | codegraph-indexed | Runtime provider creation entry. |
+| `CreateProviderFromConfig` | function | `pkg/providers/factory_provider.go` | codegraph-indexed | `model_list` provider factory entry. |
+| `LLMProvider` | interface | `pkg/providers/types.go` | codegraph-indexed | Chat provider contract. |
+| `Channel` | interface | `pkg/channels/base.go` | codegraph-indexed | Start/stop/send contract for platforms. |
+| `Manager` | type | `pkg/channels/manager.go` | codegraph-indexed | Channel orchestration, HTTP server, queues, retry, media. |
+| `Tool` | interface | `pkg/tools/base.go` | codegraph-indexed | LLM tool contract. |
+| `ExecTool` | type | `pkg/tools/shell.go` | codegraph-indexed | Shell execution guard and subprocess wrapper. |
+| `MigrateInstance` | type | `pkg/migrate/migrate.go` | codegraph-indexed | Migration planning and execution coordinator. |
 
 ## CONVENTIONS
 - Use Go `1.25.x`; module path is `github.com/sipeed/picoclaw`.
