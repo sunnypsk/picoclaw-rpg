@@ -212,6 +212,7 @@ type AgentDefaults struct {
 	ModelFallbacks            []string           `json:"model_fallbacks,omitempty"`
 	VisionModelName           string             `json:"vision_model_name,omitempty"     env:"PICOCLAW_AGENTS_DEFAULTS_VISION_MODEL_NAME"`
 	VisionModelFallbacks      []string           `json:"vision_model_fallbacks,omitempty"`
+	MaintenanceModelName      string             `json:"maintenance_model_name,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_MAINTENANCE_MODEL_NAME"`
 	ImageModel                string             `json:"image_model,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
 	ImageModelFallbacks       []string           `json:"image_model_fallbacks,omitempty"`
 	MaxTokens                 int                `json:"max_tokens"                      env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
@@ -866,6 +867,10 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
+	if err := cfg.ValidateMaintenanceRouting(); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
 }
 
@@ -1044,6 +1049,24 @@ func (c *Config) ValidateVisionRouting() error {
 				)
 			}
 		}
+	}
+
+	return nil
+}
+
+// ValidateMaintenanceRouting validates optional JSON maintenance model routing.
+func (c *Config) ValidateMaintenanceRouting() error {
+	if c == nil {
+		return nil
+	}
+
+	maintenanceModelName := strings.TrimSpace(c.Agents.Defaults.MaintenanceModelName)
+	if maintenanceModelName == "" {
+		return nil
+	}
+
+	if len(c.findMatches(maintenanceModelName)) == 0 {
+		return fmt.Errorf("agents.defaults.maintenance_model_name %q not found in model_list", maintenanceModelName)
 	}
 
 	return nil

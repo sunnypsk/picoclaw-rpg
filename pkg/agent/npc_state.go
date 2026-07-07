@@ -29,6 +29,8 @@ const (
 	maxNPCMemoryNotes        = 50
 	npcUpdaterEveryTurns     = 5
 	npcUpdaterTimeout        = 5 * time.Minute
+	npcStateOnlyMaxTokens    = 3200
+	npcStateMemoryMaxTokens  = 7000
 	npcStateUpdaterPromptTag = "NPC_STATE_UPDATER_V3"
 	npcUpdaterPromptTag      = "NPC_STATE_MEMORY_UPDATER_V2"
 
@@ -1452,6 +1454,7 @@ func npcUpdaterFallbackFields(agent *AgentInstance, stage string, err error) map
 	if err != nil {
 		fields["error"] = maintenancePreviewForLog(err.Error(), 160)
 	}
+	addMaintenanceJSONResponseFields(fields, err)
 	return fields
 }
 
@@ -1950,7 +1953,8 @@ func (al *AgentLoop) requestNPCStateOnlyUpdate(
 	sessionKey string,
 	assistantReply string,
 ) (NPCState, error) {
-	if agent == nil || agent.Provider == nil {
+	provider, model, candidate := maintenanceCallTarget(agent)
+	if agent == nil || provider == nil {
 		return NPCState{}, fmt.Errorf("agent provider is nil")
 	}
 
@@ -1961,19 +1965,15 @@ func (al *AgentLoop) requestNPCStateOnlyUpdate(
 
 	systemPrompt := buildNPCStateOnlySystemPrompt(relationshipKey)
 
-	response, err := agent.Provider.Chat(
+	response, err := provider.Chat(
 		ctx,
 		[]providers.Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: string(inputJSON)},
 		},
 		nil,
-		agent.Model,
-		map[string]any{
-			"max_tokens":       1600,
-			"temperature":      0.0,
-			"prompt_cache_key": agent.ID + ":npc-state-only",
-		},
+		model,
+		maintenanceLLMOptions(agent, candidate, npcStateOnlyMaxTokens, 0.0, agent.ID+":npc-state-only"),
 	)
 	if err != nil {
 		return NPCState{}, newMaintenanceJSONProviderError("npc state updater provider error", err)
@@ -1984,7 +1984,7 @@ func (al *AgentLoop) requestNPCStateOnlyUpdate(
 
 	nextState, err := decodeNPCStateOnlyResponse(response.Content)
 	if err != nil {
-		return NPCState{}, err
+		return NPCState{}, withMaintenanceJSONResponseMetadata(err, response)
 	}
 	return nextState, nil
 }
@@ -2044,7 +2044,8 @@ func (al *AgentLoop) requestNPCStateUpdateWithPrompt(
 	buildPrompt func(string) string,
 	cacheSuffix string,
 ) (*npcStateUpdateResult, error) {
-	if agent.Provider == nil {
+	provider, model, candidate := maintenanceCallTarget(agent)
+	if agent == nil || provider == nil {
 		return nil, fmt.Errorf("agent provider is nil")
 	}
 
@@ -2055,19 +2056,15 @@ func (al *AgentLoop) requestNPCStateUpdateWithPrompt(
 
 	systemPrompt := buildPrompt(relationshipKey)
 
-	response, err := agent.Provider.Chat(
+	response, err := provider.Chat(
 		ctx,
 		[]providers.Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: string(inputJSON)},
 		},
 		nil,
-		agent.Model,
-		map[string]any{
-			"max_tokens":       3200,
-			"temperature":      0.0,
-			"prompt_cache_key": agent.ID + ":" + cacheSuffix,
-		},
+		model,
+		maintenanceLLMOptions(agent, candidate, npcStateMemoryMaxTokens, 0.0, agent.ID+":"+cacheSuffix),
 	)
 	if err != nil {
 		return nil, newMaintenanceJSONProviderError("npc state/memory updater provider error", err)
@@ -2078,7 +2075,7 @@ func (al *AgentLoop) requestNPCStateUpdateWithPrompt(
 
 	update, err := decodeNPCStateUpdateResponse(response.Content)
 	if err != nil {
-		return nil, err
+		return nil, withMaintenanceJSONResponseMetadata(err, response)
 	}
 	return update, nil
 }

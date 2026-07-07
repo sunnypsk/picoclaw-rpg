@@ -7,6 +7,7 @@ package config
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -252,6 +253,7 @@ func TestFullConfig_JSON_VisionRoutingFields(t *testing.T) {
 				"workspace": "~/.picoclaw/workspace",
 				"model_name": "deepseek",
 				"vision_model_name": "gpt-vision",
+				"maintenance_model_name": "deepseek",
 				"vision_model_fallbacks": ["gemini-vision"]
 			}
 		},
@@ -283,6 +285,9 @@ func TestFullConfig_JSON_VisionRoutingFields(t *testing.T) {
 	if cfg.Agents.Defaults.VisionModelName != "gpt-vision" {
 		t.Fatalf("VisionModelName = %q, want gpt-vision", cfg.Agents.Defaults.VisionModelName)
 	}
+	if cfg.Agents.Defaults.MaintenanceModelName != "deepseek" {
+		t.Fatalf("MaintenanceModelName = %q, want deepseek", cfg.Agents.Defaults.MaintenanceModelName)
+	}
 	if len(cfg.Agents.Defaults.VisionModelFallbacks) != 1 ||
 		cfg.Agents.Defaults.VisionModelFallbacks[0] != "gemini-vision" {
 		t.Fatalf("VisionModelFallbacks = %#v, want [gemini-vision]", cfg.Agents.Defaults.VisionModelFallbacks)
@@ -306,6 +311,9 @@ func TestFullConfig_JSON_VisionRoutingFields(t *testing.T) {
 	if loaded.Agents.Defaults.VisionModelName != "gpt-vision" {
 		t.Fatalf("saved VisionModelName = %q, want gpt-vision", loaded.Agents.Defaults.VisionModelName)
 	}
+	if loaded.Agents.Defaults.MaintenanceModelName != "deepseek" {
+		t.Fatalf("saved MaintenanceModelName = %q, want deepseek", loaded.Agents.Defaults.MaintenanceModelName)
+	}
 	if len(loaded.Agents.Defaults.VisionModelFallbacks) != 1 ||
 		loaded.Agents.Defaults.VisionModelFallbacks[0] != "gemini-vision" {
 		t.Fatalf("saved VisionModelFallbacks = %#v, want [gemini-vision]",
@@ -317,6 +325,34 @@ func TestFullConfig_JSON_VisionRoutingFields(t *testing.T) {
 	}
 	if !loadedVisionCfg.SupportsVision {
 		t.Fatal("saved SupportsVision = false, want true")
+	}
+}
+
+func TestLoadConfig_MaintenanceModelNameFromEnv(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	data := []byte(`{
+		"agents": {
+			"defaults": {
+				"workspace": "./workspace",
+				"model_name": "text"
+			}
+		},
+		"model_list": [
+			{"model_name": "text", "model": "openai/gpt-4o", "api_key": "text-key"},
+			{"model_name": "maintenance", "model": "deepseek/deepseek-chat", "api_key": "maintenance-key"}
+		]
+	}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv("PICOCLAW_AGENTS_DEFAULTS_MAINTENANCE_MODEL_NAME", "maintenance")
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if cfg.Agents.Defaults.MaintenanceModelName != "maintenance" {
+		t.Fatalf("MaintenanceModelName = %q, want maintenance", cfg.Agents.Defaults.MaintenanceModelName)
 	}
 }
 
@@ -519,6 +555,61 @@ func TestConfig_ValidateVisionRouting(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("ValidateVisionRouting() error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestConfig_ValidateMaintenanceRouting(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     *Config
+		wantErr string
+	}{
+		{
+			name: "unset maintenance route is valid",
+			cfg: &Config{
+				ModelList: []ModelConfig{{ModelName: "text", Model: "openai/gpt-4o"}},
+			},
+		},
+		{
+			name: "valid maintenance route",
+			cfg: &Config{
+				Agents: AgentsConfig{
+					Defaults: AgentDefaults{MaintenanceModelName: "maintenance"},
+				},
+				ModelList: []ModelConfig{
+					{ModelName: "text", Model: "openai/gpt-4o"},
+					{ModelName: "maintenance", Model: "deepseek/deepseek-chat"},
+				},
+			},
+		},
+		{
+			name: "missing maintenance model",
+			cfg: &Config{
+				Agents: AgentsConfig{
+					Defaults: AgentDefaults{MaintenanceModelName: "missing"},
+				},
+				ModelList: []ModelConfig{{ModelName: "text", Model: "openai/gpt-4o"}},
+			},
+			wantErr: "not found in model_list",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.ValidateMaintenanceRouting()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateMaintenanceRouting() error = %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("ValidateMaintenanceRouting() expected error containing %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ValidateMaintenanceRouting() error = %v, want containing %q", err, tt.wantErr)
 			}
 		})
 	}

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 type maintenanceJSONStatus string
@@ -24,6 +26,9 @@ type maintenanceJSONError struct {
 	message string
 	preview string
 	err     error
+
+	finishReason string
+	usage        *providers.UsageInfo
 }
 
 func (e *maintenanceJSONError) Error() string {
@@ -115,6 +120,40 @@ func maintenanceJSONPreview(err error) string {
 		return jsonErr.preview
 	}
 	return ""
+}
+
+func withMaintenanceJSONResponseMetadata(err error, response *providers.LLMResponse) error {
+	if err == nil || response == nil {
+		return err
+	}
+
+	var jsonErr *maintenanceJSONError
+	if errors.As(err, &jsonErr) && jsonErr != nil {
+		jsonErr.finishReason = response.FinishReason
+		if response.Usage != nil {
+			usage := *response.Usage
+			jsonErr.usage = &usage
+		}
+	}
+	return err
+}
+
+func addMaintenanceJSONResponseFields(fields map[string]any, err error) {
+	if fields == nil {
+		return
+	}
+	var jsonErr *maintenanceJSONError
+	if !errors.As(err, &jsonErr) || jsonErr == nil {
+		return
+	}
+	if jsonErr.finishReason != "" {
+		fields["finish_reason"] = jsonErr.finishReason
+	}
+	if jsonErr.usage != nil {
+		fields["prompt_tokens"] = jsonErr.usage.PromptTokens
+		fields["completion_tokens"] = jsonErr.usage.CompletionTokens
+		fields["total_tokens"] = jsonErr.usage.TotalTokens
+	}
 }
 
 func maintenancePreviewForLog(value string, maxRunes int) string {

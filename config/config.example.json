@@ -6,6 +6,7 @@
       "persona_preset": "momonga",
       "model_name": "deepseek",
       "vision_model_name": "gpt4",
+      "maintenance_model_name": "deepseek",
       "max_tokens": 8192,
       "temperature": 0.7,
       "max_tool_iterations": 20,

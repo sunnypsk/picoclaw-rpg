@@ -12,9 +12,11 @@ import (
 )
 
 type routeCaptureProvider struct {
-	name  string
-	err   error
-	calls []routeCaptureCall
+	name      string
+	err       error
+	response  *providers.LLMResponse
+	responses []*providers.LLMResponse
+	calls     []routeCaptureCall
 }
 
 type routeCaptureCall struct {
@@ -44,6 +46,15 @@ func (p *routeCaptureProvider) Chat(
 	p.calls = append(p.calls, routeCaptureCall{model: model, media: media, options: capturedOptions})
 	if p.err != nil {
 		return nil, p.err
+	}
+	if len(p.responses) > 0 {
+		response := p.responses[0]
+		p.responses = p.responses[1:]
+		return response, nil
+	}
+	if p.response != nil {
+		response := *p.response
+		return &response, nil
 	}
 	return &providers.LLMResponse{Content: p.name + " response", FinishReason: "stop"}, nil
 }

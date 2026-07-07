@@ -15,7 +15,7 @@ import (
 const (
 	autoRecallKeywordExtractorPromptTag   = "AUTO_RECALL_KEYWORD_EXTRACTOR_V1"
 	autoRecallKeywordExtractionTimeout    = 1 * time.Minute
-	autoRecallKeywordExtractionMaxTokens  = 128
+	autoRecallKeywordExtractionMaxTokens  = 1024
 	autoRecallKeywordExtractionMaxResults = 8
 )
 
@@ -86,6 +86,7 @@ func (al *AgentLoop) extractAutoRecallQuery(ctx context.Context, agent *AgentIns
 	keywordQuery := ""
 	logErr := ""
 	logPreview := ""
+	var logJSONErr error
 	fallbackReason := ""
 	start := time.Now()
 
@@ -114,10 +115,12 @@ func (al *AgentLoop) extractAutoRecallQuery(ctx context.Context, agent *AgentIns
 		if fallbackReason != "" {
 			fields["fallback_reason"] = fallbackReason
 		}
+		addMaintenanceJSONResponseFields(fields, logJSONErr)
 		logger.InfoCF("memory", "Auto recall keyword extraction completed", fields)
 	}()
 
-	if agent == nil || agent.Provider == nil {
+	provider, model, candidate := maintenanceCallTarget(agent)
+	if agent == nil || provider == nil {
 		return ""
 	}
 
@@ -168,19 +171,15 @@ Examples:
 - User: 飛鼠仔好關心你北海道嘅行程
   Output: {"keywords":["北海道","行程","Hokkaido","trip itinerary"]}`, autoRecallKeywordExtractorPromptTag, autoRecallKeywordExtractionMaxResults)
 
-	response, err := agent.Provider.Chat(
+	response, err := provider.Chat(
 		extractCtx,
 		[]providers.Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userMessage},
 		},
 		nil,
-		agent.Model,
-		map[string]any{
-			"max_tokens":       autoRecallKeywordExtractionMaxTokens,
-			"temperature":      0.1,
-			"prompt_cache_key": agent.ID + ":auto-recall-keywords",
-		},
+		model,
+		maintenanceLLMOptions(agent, candidate, autoRecallKeywordExtractionMaxTokens, 0.1, agent.ID+":auto-recall-keywords"),
 	)
 	if err != nil {
 		switch {
@@ -200,6 +199,8 @@ Examples:
 
 	var payload autoRecallKeywordResponse
 	if err := decodeMaintenanceJSON(response.Content, &payload); err != nil {
+		err = withMaintenanceJSONResponseMetadata(err, response)
+		logJSONErr = err
 		status = maintenanceJSONStatusString(err)
 		logErr = err.Error()
 		logPreview = maintenanceJSONPreview(err)

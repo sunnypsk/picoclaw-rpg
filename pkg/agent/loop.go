@@ -1722,18 +1722,18 @@ func (al *AgentLoop) retrySummaryCall(
 	maxRetries int,
 ) (string, error) {
 	var lastErr error
+	provider, model, candidate := maintenanceCallTarget(agent)
+	if agent == nil || provider == nil {
+		return "", errors.New("agent provider is nil")
+	}
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		response, err := agent.Provider.Chat(
+		response, err := provider.Chat(
 			ctx,
 			[]providers.Message{{Role: "user", Content: prompt}},
 			nil,
-			agent.Model,
-			map[string]any{
-				"max_tokens":       summaryMaxTokens(agent),
-				"temperature":      0.3,
-				"prompt_cache_key": agent.ID,
-			},
+			model,
+			maintenanceLLMOptions(agent, candidate, summaryMaxTokens(agent), 0.3, agent.ID),
 		)
 		if err == nil && response != nil {
 			content := strings.TrimSpace(response.Content)

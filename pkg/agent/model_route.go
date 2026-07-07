@@ -77,6 +77,61 @@ func (a *AgentInstance) routeForTurn(hasImageInput bool) modelRoute {
 	return a.TextRoute
 }
 
+func (a *AgentInstance) routeForMaintenance() modelRoute {
+	if a == nil {
+		return modelRoute{Name: "maintenance"}
+	}
+	if a.MaintenanceRoute.configured() {
+		return a.MaintenanceRoute
+	}
+	return a.TextRoute
+}
+
+func maintenanceCallTarget(agent *AgentInstance) (providers.LLMProvider, string, modelRouteCandidate) {
+	if agent == nil {
+		return nil, "", modelRouteCandidate{}
+	}
+
+	candidate := agent.routeForMaintenance().primary()
+	provider := candidate.Provider
+	model := strings.TrimSpace(candidate.Model)
+	if provider == nil {
+		provider = agent.Provider
+	}
+	if model == "" {
+		model = agent.Model
+	}
+	if candidate.Provider == nil {
+		candidate.Provider = provider
+	}
+	if strings.TrimSpace(candidate.Model) == "" {
+		candidate.Model = model
+	}
+	return provider, model, candidate
+}
+
+func maintenanceLLMOptions(
+	agent *AgentInstance,
+	candidate modelRouteCandidate,
+	maxTokens int,
+	temperature float64,
+	cacheKey string,
+) map[string]any {
+	options := map[string]any{
+		"max_tokens":  maxTokens,
+		"temperature": temperature,
+	}
+	if strings.TrimSpace(cacheKey) != "" {
+		options["prompt_cache_key"] = cacheKey
+	} else if agent != nil {
+		options["prompt_cache_key"] = agent.ID
+	}
+	for key, value := range modelSpecificOptions(candidate) {
+		options[key] = value
+	}
+	return options
+}
+
 func buildModelRoute(
 	name string,
 	cfg *config.Config,

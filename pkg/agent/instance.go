@@ -220,6 +220,7 @@ type AgentInstance struct {
 	Candidates                []providers.FallbackCandidate
 	TextRoute                 modelRoute
 	VisionRoute               modelRoute
+	MaintenanceRoute          modelRoute
 }
 
 // NewAgentInstance creates an agent instance from config.
@@ -334,6 +335,29 @@ func NewAgentInstance(
 		}
 	}
 
+	maintenanceRoute := textRoute
+	maintenanceRoute.Name = "maintenance"
+	if strings.TrimSpace(defaults.MaintenanceModelName) != "" {
+		route, err := buildModelRoute(
+			"maintenance",
+			cfg,
+			defaults.Provider,
+			defaults.MaintenanceModelName,
+			nil,
+			provider,
+			false,
+		)
+		if err != nil {
+			logger.WarnCF("agent", "Maintenance model route is unavailable", map[string]any{
+				"agent_id": agentID,
+				"model":    defaults.MaintenanceModelName,
+				"error":    err.Error(),
+			})
+		} else {
+			maintenanceRoute = route
+		}
+	}
+
 	candidates := textRoute.fallbackCandidates()
 	primary := textRoute.primary()
 	if primary.Provider != nil {
@@ -366,6 +390,7 @@ func NewAgentInstance(
 		Candidates:                candidates,
 		TextRoute:                 textRoute,
 		VisionRoute:               visionRoute,
+		MaintenanceRoute:          maintenanceRoute,
 	}
 }
 
