@@ -760,6 +760,8 @@ const i18nData = {
         'field.workspace': 'Workspace',
         'field.rpm': 'RPM Limit',
         'field.requestTimeout': 'Request Timeout (s)',
+        'field.reasoningEffort': 'Reasoning Effort',
+        'field.reasoningEffortHint': 'Optional provider effort level, e.g. low / medium / high / xhigh.',
         // Auth
         'auth.title': 'Provider Authentication',
         'auth.desc': 'Login to providers using OAuth or API tokens. Credentials are stored locally in <code style="font-family:\'JetBrains Mono\',monospace;font-size:12px;background:var(--bg-elevated);padding:2px 6px;border-radius:4px;">~/.picoclaw/auth.json</code>.',
@@ -881,6 +883,8 @@ const i18nData = {
         'field.workspace': '\u5DE5\u4F5C\u533A',
         'field.rpm': 'RPM \u9650\u5236',
         'field.requestTimeout': '\u8BF7\u6C42\u8D85\u65F6 (\u79D2)',
+        'field.reasoningEffort': '\u63A8\u7406\u5F3A\u5EA6',
+        'field.reasoningEffortHint': '\u53EF\u9009\u63D0\u4F9B\u5546\u63A8\u7406\u5F3A\u5EA6\uFF0C\u4F8B\u5982 low / medium / high / xhigh\u3002',
         'auth.title': '\u63D0\u4F9B\u5546\u8BA4\u8BC1',
         'auth.desc': '\u901A\u8FC7 OAuth \u6216 API Token \u767B\u5F55\u63D0\u4F9B\u5546\u3002\u51ED\u8BC1\u5B58\u50A8\u5728\u672C\u5730 <code style="font-family:\'JetBrains Mono\',monospace;font-size:12px;background:var(--bg-elevated);padding:2px 6px;border-radius:4px;">~/.picoclaw/auth.json</code>\u3002',
         'auth.notLoggedIn': '\u672A\u767B\u5F55',
@@ -1280,6 +1284,7 @@ function renderModels() {
         if (m.auth_method) html += `<div class="model-detail"><strong>Auth:</strong> ${esc(m.auth_method)}</div>`;
         if (m.proxy) html += `<div class="model-detail"><strong>Proxy:</strong> ${esc(m.proxy)}</div>`;
         if (m.supports_vision) html += `<div class="model-detail"><strong>${t('field.supportsVision')}:</strong> ${t('yes')}</div>`;
+        if (m.reasoning_effort) html += `<div class="model-detail"><strong>${t('field.reasoningEffort')}:</strong> ${esc(m.reasoning_effort)}</div>`;
 
         html += `<div class="model-actions">`;
         html += `<button class="btn btn-sm" onclick="showEditModelModal(${idx})">${t('edit')}</button>`;
@@ -1369,6 +1374,7 @@ const modelFieldsOptional = [
     { key: 'workspace', labelKey: 'field.workspace', type: 'text', placeholder: 'Workspace path' },
     { key: 'rpm', labelKey: 'field.rpm', type: 'number', placeholder: 'RPM' },
     { key: 'request_timeout', labelKey: 'field.requestTimeout', type: 'number', placeholder: 'Seconds' },
+    { key: 'reasoning_effort', labelKey: 'field.reasoningEffort', type: 'text', placeholder: 'low / medium / high / xhigh', hintKey: 'field.reasoningEffortHint' },
 ];
 const modelFields = [...modelFieldsRequired, ...modelFieldsOptional];
 
@@ -1435,16 +1441,19 @@ function renderModalBody(data) {
 function saveModelFromModal() {
     const inputs = document.querySelectorAll('#modalBody input[data-field]');
     const obj = {};
+    const clearedFields = new Set();
     inputs.forEach(input => {
         const key = input.dataset.field;
         if (input.type === 'checkbox') {
             obj[key] = input.checked;
+            if (!input.checked) clearedFields.add(key);
             return;
         }
         let val = input.value.trim();
         if (input.type === 'number' && val) val = parseInt(val, 10) || 0;
         if (val !== '' && val !== 0) obj[key] = val;
         else if (key === 'model_name' || key === 'model') obj[key] = val;
+        else clearedFields.add(key);
     });
     modelFields.forEach(f => {
         if (f.type === 'checkbox' && !obj[f.key]) delete obj[f.key];
@@ -1461,7 +1470,7 @@ function saveModelFromModal() {
         const previousName = configData.model_list[editingModelIndex].model_name;
         configData.model_list[editingModelIndex] = { ...configData.model_list[editingModelIndex], ...obj };
         modelFields.forEach(f => {
-            if (!f.required && (obj[f.key] === '' || obj[f.key] === 0)) {
+            if (!f.required && clearedFields.has(f.key)) {
                 delete configData.model_list[editingModelIndex][f.key];
             }
             if (f.type === 'checkbox' && !obj[f.key]) {

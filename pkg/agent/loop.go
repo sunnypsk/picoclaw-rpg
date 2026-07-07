@@ -323,7 +323,7 @@ func registerSharedToolsForAgent(
 
 	// Spawn tool with allowlist checker
 	subagentManager := tools.NewSubagentManager(agent.Provider, agent.TextRoute.primary().Model, agent.Workspace, msgBus)
-	subagentManager.SetLLMOptions(agent.MaxTokens, agent.Temperature)
+	subagentManager.SetLLMOptions(agent.MaxTokens, agent.Temperature, modelSpecificOptions(agent.TextRoute.primary()))
 	spawnTool := tools.NewSpawnTool(subagentManager)
 	currentAgentID := agent.ID
 	spawnTool.SetAllowlistChecker(func(targetAgentID string) bool {
@@ -1115,11 +1115,7 @@ func (al *AgentLoop) runLLMIteration(
 							messages,
 							providerToolDefs,
 							model,
-							map[string]any{
-								"max_tokens":       agent.MaxTokens,
-								"temperature":      agent.Temperature,
-								"prompt_cache_key": agent.ID,
-							},
+							llmOptionsForCandidate(agent, candidate),
 						)
 					},
 				)
@@ -1141,11 +1137,7 @@ func (al *AgentLoop) runLLMIteration(
 			if candidate.Provider == nil {
 				return nil, fmt.Errorf("model route %q has no provider", route.Name)
 			}
-			return candidate.Provider.Chat(ctx, messages, providerToolDefs, candidate.Model, map[string]any{
-				"max_tokens":       agent.MaxTokens,
-				"temperature":      agent.Temperature,
-				"prompt_cache_key": agent.ID,
-			})
+			return candidate.Provider.Chat(ctx, messages, providerToolDefs, candidate.Model, llmOptionsForCandidate(agent, candidate))
 		}
 
 		// Retry loop for timeout and context/token errors.
@@ -1437,6 +1429,29 @@ func (al *AgentLoop) runLLMIteration(
 	}
 
 	return finalContent, iteration, nil
+}
+
+func llmOptionsForCandidate(agent *AgentInstance, candidate modelRouteCandidate) map[string]any {
+	options := map[string]any{
+		"max_tokens":       agent.MaxTokens,
+		"temperature":      agent.Temperature,
+		"prompt_cache_key": agent.ID,
+	}
+	for key, value := range modelSpecificOptions(candidate) {
+		options[key] = value
+	}
+	return options
+}
+
+func modelSpecificOptions(candidate modelRouteCandidate) map[string]any {
+	if len(candidate.Reasoning) > 0 {
+		reasoning := make(map[string]any, len(candidate.Reasoning))
+		for key, value := range candidate.Reasoning {
+			reasoning[key] = value
+		}
+		return map[string]any{"reasoning": reasoning}
+	}
+	return nil
 }
 
 // maybeSummarize triggers summarization if the session history exceeds thresholds.

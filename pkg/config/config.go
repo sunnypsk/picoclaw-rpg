@@ -600,10 +600,12 @@ type ModelConfig struct {
 	Workspace   string `json:"workspace,omitempty"`    // Workspace path for CLI-based providers
 
 	// Optional optimizations
-	RPM            int    `json:"rpm,omitempty"`              // Requests per minute limit
-	MaxTokensField string `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
-	RequestTimeout int    `json:"request_timeout,omitempty"`
-	SupportsVision bool   `json:"supports_vision,omitempty"` // Whether this chat model can accept image inputs
+	RPM             int            `json:"rpm,omitempty"`              // Requests per minute limit
+	MaxTokensField  string         `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
+	RequestTimeout  int            `json:"request_timeout,omitempty"`
+	SupportsVision  bool           `json:"supports_vision,omitempty"`  // Whether this chat model can accept image inputs
+	Reasoning       map[string]any `json:"reasoning,omitempty"`        // Provider-specific reasoning options
+	ReasoningEffort string         `json:"reasoning_effort,omitempty"` // Shorthand for reasoning.effort
 }
 
 // Validate checks if the ModelConfig has all required fields.
@@ -614,7 +616,68 @@ func (c *ModelConfig) Validate() error {
 	if c.Model == "" {
 		return fmt.Errorf("model is required")
 	}
+	if err := c.validateReasoning(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (c *ModelConfig) validateReasoning() error {
+	if c == nil {
+		return nil
+	}
+
+	reasoningEffort := strings.TrimSpace(c.ReasoningEffort)
+	if c.ReasoningEffort != "" && reasoningEffort == "" {
+		return fmt.Errorf("reasoning_effort must not be blank")
+	}
+
+	if len(c.Reasoning) == 0 {
+		return nil
+	}
+
+	if effortValue, ok := c.Reasoning["effort"]; ok {
+		effort, ok := effortValue.(string)
+		if !ok {
+			return fmt.Errorf("reasoning.effort must be a string")
+		}
+		effort = strings.TrimSpace(effort)
+		if effort == "" {
+			return fmt.Errorf("reasoning.effort must not be blank")
+		}
+		if reasoningEffort != "" && reasoningEffort != effort {
+			return fmt.Errorf("reasoning_effort conflicts with reasoning.effort")
+		}
+	}
+
+	for key := range c.Reasoning {
+		if strings.TrimSpace(key) == "" {
+			return fmt.Errorf("reasoning contains an empty key")
+		}
+	}
+
+	return nil
+}
+
+// ReasoningOptions returns the provider request reasoning options for this model.
+// reasoning_effort is a shorthand for reasoning.effort and is merged when the
+// explicit reasoning object does not already define effort.
+func (c ModelConfig) ReasoningOptions() map[string]any {
+	out := make(map[string]any, len(c.Reasoning)+1)
+	for key, value := range c.Reasoning {
+		out[key] = value
+	}
+
+	if effort := strings.TrimSpace(c.ReasoningEffort); effort != "" {
+		if _, exists := out["effort"]; !exists {
+			out["effort"] = effort
+		}
+	}
+
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 type GatewayConfig struct {

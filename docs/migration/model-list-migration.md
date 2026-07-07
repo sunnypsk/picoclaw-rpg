@@ -119,6 +119,8 @@ The `model` field uses a protocol prefix format: `[protocol/]model-identifier`
 | `max_tokens_field` | No | Field name for max tokens |
 | `request_timeout` | No | HTTP request timeout in seconds; `<=0` uses default `120s` |
 | `supports_vision` | No | Whether this chat model accepts image inputs |
+| `reasoning_effort` | No | Shorthand for provider reasoning effort, sent as `reasoning.effort` |
+| `reasoning` | No | Provider-specific reasoning object passed to OpenAI-compatible APIs |
 
 *`api_key` is required for HTTP-based protocols unless `api_base` points to a local server.
 
@@ -152,6 +154,48 @@ Use `agents.defaults.vision_model_name` when your normal text backbone should st
 ```
 
 `image_model` remains separate and is for image generation tooling, not image understanding.
+
+## Per-Model Reasoning Options
+
+Use `reasoning_effort` when a model needs a fixed reasoning level:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model_name": "deepseek-v4-pro-thinking-max"
+    }
+  },
+  "model_list": [
+    {
+      "model_name": "deepseek-v4-pro-thinking-max",
+      "model": "openrouter/deepseek/deepseek-v4-pro",
+      "api_key": "sk-or-v1-xxx",
+      "api_base": "https://openrouter.ai/api/v1",
+      "reasoning_effort": "xhigh",
+      "request_timeout": 300
+    }
+  ]
+}
+```
+
+For providers that need a fuller reasoning object, use `reasoning` directly:
+
+```json
+{
+  "model_name": "reasoning-model",
+  "model": "openrouter/provider/model",
+  "api_key": "sk-or-v1-xxx",
+  "api_base": "https://openrouter.ai/api/v1",
+  "reasoning": {
+    "enabled": true,
+    "effort": "high",
+    "max_tokens": 4096
+  }
+}
+```
+
+If both `reasoning_effort` and `reasoning.effort` are set, they must match.
 
 ## Load Balancing
 

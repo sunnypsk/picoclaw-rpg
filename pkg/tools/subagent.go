@@ -35,6 +35,7 @@ type SubagentManager struct {
 	temperature    float64
 	hasMaxTokens   bool
 	hasTemperature bool
+	llmOptions     map[string]any
 	nextID         int
 }
 
@@ -55,14 +56,15 @@ func NewSubagentManager(
 	}
 }
 
-// SetLLMOptions sets max tokens and temperature for subagent LLM calls.
-func (sm *SubagentManager) SetLLMOptions(maxTokens int, temperature float64) {
+// SetLLMOptions sets max tokens, temperature, and model-specific options for subagent LLM calls.
+func (sm *SubagentManager) SetLLMOptions(maxTokens int, temperature float64, extraOptions ...map[string]any) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.maxTokens = maxTokens
 	sm.hasMaxTokens = true
 	sm.temperature = temperature
 	sm.hasTemperature = true
+	sm.llmOptions = mergeLLMOptions(extraOptions...)
 }
 
 // SetTools sets the tool registry for subagent execution.
@@ -151,11 +153,14 @@ After completing the task, provide a clear summary of what was done.`
 	temperature := sm.temperature
 	hasMaxTokens := sm.hasMaxTokens
 	hasTemperature := sm.hasTemperature
+	extraOptions := cloneLLMOptions(sm.llmOptions)
 	sm.mu.RUnlock()
 
-	var llmOptions map[string]any
+	llmOptions := extraOptions
 	if hasMaxTokens || hasTemperature {
-		llmOptions = map[string]any{}
+		if llmOptions == nil {
+			llmOptions = map[string]any{}
+		}
 		if hasMaxTokens {
 			llmOptions["max_tokens"] = maxTokens
 		}
@@ -319,11 +324,14 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	temperature := sm.temperature
 	hasMaxTokens := sm.hasMaxTokens
 	hasTemperature := sm.hasTemperature
+	extraOptions := cloneLLMOptions(sm.llmOptions)
 	sm.mu.RUnlock()
 
-	var llmOptions map[string]any
+	llmOptions := extraOptions
 	if hasMaxTokens || hasTemperature {
-		llmOptions = map[string]any{}
+		if llmOptions == nil {
+			llmOptions = map[string]any{}
+		}
 		if hasMaxTokens {
 			llmOptions["max_tokens"] = maxTokens
 		}
@@ -374,4 +382,35 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		IsError: false,
 		Async:   false,
 	}
+}
+
+func mergeLLMOptions(optionSets ...map[string]any) map[string]any {
+	var out map[string]any
+	for _, options := range optionSets {
+		for key, value := range options {
+			if out == nil {
+				out = map[string]any{}
+			}
+			out[key] = cloneLLMOptionValue(value)
+		}
+	}
+	return out
+}
+
+func cloneLLMOptions(options map[string]any) map[string]any {
+	if len(options) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(options))
+	for key, value := range options {
+		out[key] = cloneLLMOptionValue(value)
+	}
+	return out
+}
+
+func cloneLLMOptionValue(value any) any {
+	if nested, ok := value.(map[string]any); ok {
+		return cloneLLMOptions(nested)
+	}
+	return value
 }

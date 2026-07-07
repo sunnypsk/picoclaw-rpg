@@ -18,8 +18,9 @@ type routeCaptureProvider struct {
 }
 
 type routeCaptureCall struct {
-	model string
-	media []string
+	model   string
+	media   []string
+	options map[string]any
 }
 
 func (p *routeCaptureProvider) Chat(
@@ -33,7 +34,14 @@ func (p *routeCaptureProvider) Chat(
 	for _, message := range messages {
 		media = append(media, message.Media...)
 	}
-	p.calls = append(p.calls, routeCaptureCall{model: model, media: media})
+	capturedOptions := map[string]any(nil)
+	if len(opts) > 0 {
+		capturedOptions = make(map[string]any, len(opts))
+		for key, value := range opts {
+			capturedOptions[key] = value
+		}
+	}
+	p.calls = append(p.calls, routeCaptureCall{model: model, media: media, options: capturedOptions})
 	if p.err != nil {
 		return nil, p.err
 	}
@@ -253,6 +261,33 @@ func TestRunLLMIteration_FallbackCandidatesUseOwnProviders(t *testing.T) {
 	}
 }
 
+func TestRunLLMIteration_PassesReasoningOptionsForRouteCandidate(t *testing.T) {
+	textProvider := &routeCaptureProvider{name: "text"}
+	agent := newRouteTestAgent(textProvider, nil)
+	agent.TextRoute.Candidates[0].Reasoning = map[string]any{"effort": "xhigh"}
+
+	got, _, err := newRouteTestLoop().runLLMIteration(context.Background(), agent, []providers.Message{
+		{Role: "system", Content: "system"},
+		{Role: "user", Content: "hello"},
+	}, processOptions{})
+	if err != nil {
+		t.Fatalf("runLLMIteration() error = %v", err)
+	}
+	if got != "text response" {
+		t.Fatalf("response = %q, want text response", got)
+	}
+	if len(textProvider.calls) != 1 {
+		t.Fatalf("text calls = %d, want 1", len(textProvider.calls))
+	}
+	reasoning, ok := textProvider.calls[0].options["reasoning"].(map[string]any)
+	if !ok {
+		t.Fatalf("reasoning option = %T, want map[string]any", textProvider.calls[0].options["reasoning"])
+	}
+	if reasoning["effort"] != "xhigh" {
+		t.Fatalf("reasoning.effort = %v, want xhigh", reasoning["effort"])
+	}
+}
+
 func TestBuildModelRoute_UsesProviderInstancePerModelConfig(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -293,5 +328,31 @@ func TestBuildModelRoute_UsesProviderInstancePerModelConfig(t *testing.T) {
 	}
 	if textRoute.primary().Provider == visionRoute.primary().Provider {
 		t.Fatal("text and vision routes should use distinct provider instances")
+	}
+}
+
+func TestBuildModelRoute_CarriesReasoningOptionsFromModelConfig(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: t.TempDir()},
+		},
+		ModelList: []config.ModelConfig{
+			{
+				ModelName:       "thinking",
+				Model:           "openrouter/deepseek/deepseek-v4-pro",
+				APIBase:         "https://openrouter.ai/api/v1",
+				ReasoningEffort: "xhigh",
+			},
+		},
+	}
+
+	route, err := buildModelRoute("text", cfg, "", "thinking", nil, &routeCaptureProvider{name: "default"}, false)
+	if err != nil {
+		t.Fatalf("build text route: %v", err)
+	}
+
+	reasoning := route.primary().Reasoning
+	if reasoning["effort"] != "xhigh" {
+		t.Fatalf("reasoning.effort = %v, want xhigh", reasoning["effort"])
 	}
 }

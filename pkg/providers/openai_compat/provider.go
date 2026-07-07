@@ -455,11 +455,11 @@ func normalizeModel(model, apiBase string) string {
 }
 
 func applyReasoningDefaults(requestBody map[string]any, options map[string]any, model, apiBase string) {
-	if !shouldEnableReasoningByDefault(model, apiBase) {
-		return
-	}
 	if reasoning, ok := options["reasoning"]; ok {
 		requestBody["reasoning"] = reasoning
+		return
+	}
+	if !shouldEnableReasoningByDefault(model, apiBase) {
 		return
 	}
 	requestBody["reasoning"] = map[string]any{"enabled": true}

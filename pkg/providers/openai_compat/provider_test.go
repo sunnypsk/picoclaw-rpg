@@ -237,6 +237,48 @@ func TestProviderChat_EnablesReasoningByDefaultForOpenRouterMinimaxM3(t *testing
 	}
 }
 
+func TestProviderChat_UsesExplicitReasoningOption(t *testing.T) {
+	var requestBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message":       map[string]any{"content": "ok"},
+					"finish_reason": "stop",
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := NewProvider("key", server.URL+"/openrouter.ai/api/v1", "")
+	_, err := p.Chat(
+		t.Context(),
+		[]Message{{Role: "user", Content: "hi"}},
+		nil,
+		"deepseek/deepseek-v4-pro",
+		map[string]any{"reasoning": map[string]any{"effort": "xhigh"}},
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	reasoning, ok := requestBody["reasoning"].(map[string]any)
+	if !ok {
+		t.Fatalf("reasoning = %T, want map[string]any", requestBody["reasoning"])
+	}
+	if reasoning["effort"] != "xhigh" {
+		t.Fatalf("reasoning.effort = %v, want xhigh", reasoning["effort"])
+	}
+}
+
 func TestProviderChat_DoesNotEnableReasoningByDefaultForOtherOpenRouterModels(t *testing.T) {
 	var requestBody map[string]any
 

@@ -558,3 +558,71 @@ func TestModelConfig_RequestTimeoutDefaultZeroValue(t *testing.T) {
 		t.Fatalf("RequestTimeout = %d, want 0", cfg.RequestTimeout)
 	}
 }
+
+func TestModelConfig_ReasoningEffortParsing(t *testing.T) {
+	jsonData := `{
+		"model_name": "deepseek-v4-pro",
+		"model": "openrouter/deepseek/deepseek-v4-pro",
+		"api_key": "test-key",
+		"reasoning_effort": "xhigh"
+	}`
+
+	var cfg ModelConfig
+	if err := json.Unmarshal([]byte(jsonData), &cfg); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+
+	if cfg.ReasoningEffort != "xhigh" {
+		t.Fatalf("ReasoningEffort = %q, want xhigh", cfg.ReasoningEffort)
+	}
+	reasoning := cfg.ReasoningOptions()
+	if reasoning["effort"] != "xhigh" {
+		t.Fatalf("ReasoningOptions()[effort] = %v, want xhigh", reasoning["effort"])
+	}
+}
+
+func TestModelConfig_ReasoningObjectParsing(t *testing.T) {
+	jsonData := `{
+		"model_name": "reasoning-model",
+		"model": "openrouter/provider/model",
+		"api_key": "test-key",
+		"reasoning": {
+			"enabled": true,
+			"effort": "high",
+			"max_tokens": 4096
+		}
+	}`
+
+	var cfg ModelConfig
+	if err := json.Unmarshal([]byte(jsonData), &cfg); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+
+	reasoning := cfg.ReasoningOptions()
+	if reasoning["enabled"] != true {
+		t.Fatalf("reasoning.enabled = %v, want true", reasoning["enabled"])
+	}
+	if reasoning["effort"] != "high" {
+		t.Fatalf("reasoning.effort = %v, want high", reasoning["effort"])
+	}
+	if reasoning["max_tokens"] != float64(4096) {
+		t.Fatalf("reasoning.max_tokens = %v, want 4096", reasoning["max_tokens"])
+	}
+}
+
+func TestModelConfig_ReasoningEffortConflict(t *testing.T) {
+	cfg := ModelConfig{
+		ModelName:       "conflict",
+		Model:           "openrouter/provider/model",
+		ReasoningEffort: "xhigh",
+		Reasoning:       map[string]any{"effort": "high"},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() expected reasoning effort conflict")
+	}
+	if !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("Validate() error = %v, want conflict", err)
+	}
+}

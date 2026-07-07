@@ -186,6 +186,10 @@ func (s *appState) modelForm(index int) tview.Primitive {
 	addInput(form, "Max Tokens Field", model.MaxTokensField, func(value string) {
 		model.MaxTokensField = value
 	})
+	addInput(form, "Reasoning Effort", model.ReasoningEffort, func(value string) {
+		model.ReasoningEffort = value
+		s.dirty = true
+	})
 	addIntInput(form, "RPM", model.RPM, func(value int) {
 		model.RPM = value
 	})

@@ -15,6 +15,7 @@ type modelRouteCandidate struct {
 	Model          string
 	Provider       providers.LLMProvider
 	SupportsVision bool
+	Reasoning      map[string]any
 }
 
 func (c modelRouteCandidate) fallbackCandidate() providers.FallbackCandidate {
@@ -148,6 +149,7 @@ func buildModelRouteCandidate(
 				Model:          modelID,
 				Provider:       provider,
 				SupportsVision: cfgCopy.SupportsVision,
+				Reasoning:      cfgCopy.ReasoningOptions(),
 			}, nil
 		}
 	}

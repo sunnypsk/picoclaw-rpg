@@ -1237,6 +1237,21 @@ This design also enables **multi-agent support** with flexible provider selectio
 }
 ```
 
+**OpenRouter with fixed reasoning effort**
+
+```json
+{
+  "model_name": "deepseek-v4-pro-thinking-max",
+  "model": "openrouter/deepseek/deepseek-v4-pro",
+  "api_base": "https://openrouter.ai/api/v1",
+  "api_key": "sk-or-v1-...",
+  "reasoning_effort": "xhigh",
+  "request_timeout": 300
+}
+```
+
+`reasoning_effort` is shorthand for `reasoning.effort`. For provider-specific options, set the full `reasoning` object instead.
+
 **Anthropic (with API key)**
 
 ```json
