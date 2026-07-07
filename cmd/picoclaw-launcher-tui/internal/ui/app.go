@@ -397,7 +397,7 @@ func (s *appState) isGatewayRunning() bool {
 }
 
 func (s *appState) validateAgentModel() error {
-	modelName := strings.TrimSpace(s.config.Agents.Defaults.Model)
+	modelName := strings.TrimSpace(s.config.Agents.Defaults.GetModelName())
 	if modelName == "" {
 		return nil
 	}
@@ -406,7 +406,7 @@ func (s *appState) validateAgentModel() error {
 }
 
 func (s *appState) isActiveModelValid() bool {
-	modelName := strings.TrimSpace(s.config.Agents.Defaults.Model)
+	modelName := strings.TrimSpace(s.config.Agents.Defaults.GetModelName())
 	if modelName == "" {
 		return false
 	}

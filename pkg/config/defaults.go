@@ -189,18 +189,20 @@ func DefaultConfig() *Config {
 
 			// OpenAI - https://platform.openai.com/api-keys
 			{
-				ModelName: "gpt-5.2",
-				Model:     "openai/gpt-5.2",
-				APIBase:   "https://api.openai.com/v1",
-				APIKey:    "",
+				ModelName:      "gpt-5.2",
+				Model:          "openai/gpt-5.2",
+				APIBase:        "https://api.openai.com/v1",
+				APIKey:         "",
+				SupportsVision: true,
 			},
 
 			// Anthropic Claude - https://console.anthropic.com/settings/keys
 			{
-				ModelName: "claude-sonnet-4.6",
-				Model:     "anthropic/claude-sonnet-4.6",
-				APIBase:   "https://api.anthropic.com/v1",
-				APIKey:    "",
+				ModelName:      "claude-sonnet-4.6",
+				Model:          "anthropic/claude-sonnet-4.6",
+				APIBase:        "https://api.anthropic.com/v1",
+				APIKey:         "",
+				SupportsVision: true,
 			},
 
 			// DeepSeek - https://platform.deepseek.com/
@@ -213,10 +215,11 @@ func DefaultConfig() *Config {
 
 			// Google Gemini - https://ai.google.dev/
 			{
-				ModelName: "gemini-2.0-flash",
-				Model:     "gemini/gemini-2.0-flash-exp",
-				APIBase:   "https://generativelanguage.googleapis.com/v1beta",
-				APIKey:    "",
+				ModelName:      "gemini-2.0-flash",
+				Model:          "gemini/gemini-2.0-flash-exp",
+				APIBase:        "https://generativelanguage.googleapis.com/v1beta",
+				APIKey:         "",
+				SupportsVision: true,
 			},
 
 			// Qwen (通义千问) - https://dashscope.console.aliyun.com/apiKey

@@ -234,6 +234,32 @@ func TestClassifyError_ImageSizeError(t *testing.T) {
 	}
 }
 
+func TestIsImageUnsupportedError(t *testing.T) {
+	matches := []string{
+		"model does not support image input",
+		"image input is not supported by this model",
+		"unsupported image_url content",
+		"vision is not supported for this deployment",
+	}
+	for _, msg := range matches {
+		if !IsImageUnsupportedError(msg) {
+			t.Fatalf("IsImageUnsupportedError(%q) = false, want true", msg)
+		}
+	}
+
+	nonMatches := []string{
+		"HTTP 400 bad request",
+		"rate limit exceeded",
+		"image exceeds 20 mb",
+		"image dimensions exceed max allowed",
+	}
+	for _, msg := range nonMatches {
+		if IsImageUnsupportedError(msg) {
+			t.Fatalf("IsImageUnsupportedError(%q) = true, want false", msg)
+		}
+	}
+}
+
 func TestClassifyError_UnknownError(t *testing.T) {
 	err := errors.New("some completely random error")
 	result := ClassifyError(err, "openai", "gpt-4")

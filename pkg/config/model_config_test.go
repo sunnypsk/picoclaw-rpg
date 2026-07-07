@@ -7,6 +7,7 @@ package config
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -244,6 +245,81 @@ func TestFullConfig_JSON_BackwardCompat(t *testing.T) {
 	}
 }
 
+func TestFullConfig_JSON_VisionRoutingFields(t *testing.T) {
+	jsonStr := `{
+		"agents": {
+			"defaults": {
+				"workspace": "~/.picoclaw/workspace",
+				"model_name": "deepseek",
+				"vision_model_name": "gpt-vision",
+				"vision_model_fallbacks": ["gemini-vision"]
+			}
+		},
+		"model_list": [
+			{
+				"model_name": "deepseek",
+				"model": "deepseek/deepseek-chat",
+				"api_key": "text-key"
+			},
+			{
+				"model_name": "gpt-vision",
+				"model": "openai/gpt-4o",
+				"api_key": "vision-key",
+				"supports_vision": true
+			},
+			{
+				"model_name": "gemini-vision",
+				"model": "gemini/gemini-2.0-flash",
+				"api_key": "fallback-key",
+				"supports_vision": true
+			}
+		]
+	}`
+
+	cfg := &Config{}
+	if err := json.Unmarshal([]byte(jsonStr), cfg); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if cfg.Agents.Defaults.VisionModelName != "gpt-vision" {
+		t.Fatalf("VisionModelName = %q, want gpt-vision", cfg.Agents.Defaults.VisionModelName)
+	}
+	if len(cfg.Agents.Defaults.VisionModelFallbacks) != 1 ||
+		cfg.Agents.Defaults.VisionModelFallbacks[0] != "gemini-vision" {
+		t.Fatalf("VisionModelFallbacks = %#v, want [gemini-vision]", cfg.Agents.Defaults.VisionModelFallbacks)
+	}
+	visionCfg, err := cfg.GetModelConfig("gpt-vision")
+	if err != nil {
+		t.Fatalf("GetModelConfig(gpt-vision): %v", err)
+	}
+	if !visionCfg.SupportsVision {
+		t.Fatal("SupportsVision = false, want true")
+	}
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatalf("SaveConfig error: %v", err)
+	}
+	loaded, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig after SaveConfig error: %v", err)
+	}
+	if loaded.Agents.Defaults.VisionModelName != "gpt-vision" {
+		t.Fatalf("saved VisionModelName = %q, want gpt-vision", loaded.Agents.Defaults.VisionModelName)
+	}
+	if len(loaded.Agents.Defaults.VisionModelFallbacks) != 1 ||
+		loaded.Agents.Defaults.VisionModelFallbacks[0] != "gemini-vision" {
+		t.Fatalf("saved VisionModelFallbacks = %#v, want [gemini-vision]",
+			loaded.Agents.Defaults.VisionModelFallbacks)
+	}
+	loadedVisionCfg, err := loaded.GetModelConfig("gpt-vision")
+	if err != nil {
+		t.Fatalf("loaded GetModelConfig(gpt-vision): %v", err)
+	}
+	if !loadedVisionCfg.SupportsVision {
+		t.Fatal("saved SupportsVision = false, want true")
+	}
+}
+
 func TestModelConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -359,6 +435,90 @@ func TestConfig_ValidateModelList(t *testing.T) {
 				if !strings.Contains(err.Error(), tt.errMsg) {
 					t.Errorf("ValidateModelList() error = %v, want error containing %q", err, tt.errMsg)
 				}
+			}
+		})
+	}
+}
+
+func TestConfig_ValidateVisionRouting(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     *Config
+		wantErr string
+	}{
+		{
+			name: "unset vision route is valid",
+			cfg: &Config{
+				ModelList: []ModelConfig{{ModelName: "text", Model: "openai/gpt-4o"}},
+			},
+		},
+		{
+			name: "valid vision route",
+			cfg: &Config{
+				Agents: AgentsConfig{
+					Defaults: AgentDefaults{
+						VisionModelName:      "vision",
+						VisionModelFallbacks: []string{"vision-fallback"},
+					},
+				},
+				ModelList: []ModelConfig{
+					{ModelName: "vision", Model: "openai/gpt-4o", SupportsVision: true},
+					{ModelName: "vision-fallback", Model: "gemini/gemini-2.0-flash", SupportsVision: true},
+				},
+			},
+		},
+		{
+			name: "missing vision model",
+			cfg: &Config{
+				Agents: AgentsConfig{
+					Defaults: AgentDefaults{VisionModelName: "missing"},
+				},
+				ModelList: []ModelConfig{{ModelName: "text", Model: "openai/gpt-4o"}},
+			},
+			wantErr: "not found in model_list",
+		},
+		{
+			name: "vision model must support vision",
+			cfg: &Config{
+				Agents: AgentsConfig{
+					Defaults: AgentDefaults{VisionModelName: "text"},
+				},
+				ModelList: []ModelConfig{{ModelName: "text", Model: "openai/gpt-4o", SupportsVision: false}},
+			},
+			wantErr: "supports_vision=true",
+		},
+		{
+			name: "fallback must support vision",
+			cfg: &Config{
+				Agents: AgentsConfig{
+					Defaults: AgentDefaults{
+						VisionModelName:      "vision",
+						VisionModelFallbacks: []string{"text"},
+					},
+				},
+				ModelList: []ModelConfig{
+					{ModelName: "vision", Model: "openai/gpt-4o", SupportsVision: true},
+					{ModelName: "text", Model: "deepseek/deepseek-chat", SupportsVision: false},
+				},
+			},
+			wantErr: "supports_vision=true",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.ValidateVisionRouting()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateVisionRouting() error = %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("ValidateVisionRouting() expected error containing %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ValidateVisionRouting() error = %v, want containing %q", err, tt.wantErr)
 			}
 		})
 	}

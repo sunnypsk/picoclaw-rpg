@@ -31,7 +31,8 @@ func (s *appState) modelMenu() tview.Primitive {
 			},
 		},
 	)
-	currentModel := strings.TrimSpace(s.config.Agents.Defaults.Model)
+	currentModel := strings.TrimSpace(s.config.Agents.Defaults.GetModelName())
+	visionModel := strings.TrimSpace(s.config.Agents.Defaults.VisionModelName)
 	for i := range s.config.ModelList {
 		index := i
 		model := s.config.ModelList[i]
@@ -46,6 +47,9 @@ func (s *appState) modelMenu() tview.Primitive {
 		label := fmt.Sprintf("%s (%s)", model.ModelName, model.Model)
 		if model.ModelName == currentModel && currentModel != "" {
 			label = "* " + label
+		}
+		if model.ModelName == visionModel && visionModel != "" {
+			label = "[V] " + label
 		}
 		isSelected := model.ModelName == currentModel && currentModel != ""
 		items = append(items, MenuItem{
@@ -79,9 +83,28 @@ func (s *appState) modelMenu() tview.Primitive {
 					)
 					return nil
 				}
-				s.config.Agents.Defaults.Model = model.ModelName
+				s.config.Agents.Defaults.ModelName = model.ModelName
 				s.dirty = true
-				refreshModelMenu(menu, s.config.Agents.Defaults.Model, s.config.ModelList)
+				refreshModelMenu(menu, s.config.Agents.Defaults.GetModelName(), s.config.Agents.Defaults.VisionModelName, s.config.ModelList)
+				refreshMainMenuIfPresent(s)
+			}
+			return nil
+		}
+		if event.Rune() == 'v' {
+			row, _ := menu.GetSelection()
+			if row > 0 && row <= len(s.config.ModelList) {
+				model := s.config.ModelList[row-1]
+				if !model.SupportsVision {
+					s.showMessage("Vision not enabled", "Enable Supports Vision on this model first")
+					return nil
+				}
+				if !isModelValid(model) {
+					s.showMessage("Invalid model", "Select a model with api_key or oauth auth_method")
+					return nil
+				}
+				s.config.Agents.Defaults.VisionModelName = model.ModelName
+				s.dirty = true
+				refreshModelMenu(menu, s.config.Agents.Defaults.GetModelName(), s.config.Agents.Defaults.VisionModelName, s.config.ModelList)
 				refreshMainMenuIfPresent(s)
 			}
 			return nil
@@ -108,6 +131,17 @@ func (s *appState) modelForm(index int) tview.Primitive {
 	})
 	addInput(form, "Model", model.Model, func(value string) {
 		model.Model = value
+		s.dirty = true
+		refreshMainMenuIfPresent(s)
+		if menu, ok := s.menus["model"]; ok {
+			refreshModelMenuFromState(menu, s)
+		}
+	})
+	form.AddCheckbox("Supports Vision", model.SupportsVision, func(checked bool) {
+		model.SupportsVision = checked
+		if !checked && strings.TrimSpace(s.config.Agents.Defaults.VisionModelName) == model.ModelName {
+			s.config.Agents.Defaults.VisionModelName = ""
+		}
 		s.dirty = true
 		refreshMainMenuIfPresent(s)
 		if menu, ok := s.menus["model"]; ok {
@@ -200,7 +234,12 @@ func (s *appState) deleteModel(index int) {
 	if index < 0 || index >= len(s.config.ModelList) {
 		return
 	}
+	name := s.config.ModelList[index].ModelName
 	s.config.ModelList = append(s.config.ModelList[:index], s.config.ModelList[index+1:]...)
+	if strings.TrimSpace(s.config.Agents.Defaults.VisionModelName) == name {
+		s.config.Agents.Defaults.VisionModelName = ""
+	}
+	s.dirty = true
 	s.pop()
 }
 
@@ -213,13 +252,16 @@ func modelStatusColor(valid bool, selected bool) *tcell.Color {
 	return &color
 }
 
-func refreshModelMenu(menu *Menu, currentModel string, models []picoclawconfig.ModelConfig) {
+func refreshModelMenu(menu *Menu, currentModel string, visionModel string, models []picoclawconfig.ModelConfig) {
 	for i, model := range models {
 		row := i + 1
 		label := fmt.Sprintf("%s (%s)", model.ModelName, model.Model)
 		isValid := isModelValid(model)
 		if model.ModelName == currentModel && currentModel != "" {
 			label = "* " + label
+		}
+		if model.ModelName == visionModel && visionModel != "" {
+			label = "[V] " + label
 		}
 		cell := menu.GetCell(row, 0)
 		if cell != nil {
@@ -251,7 +293,8 @@ func refreshModelMenuFromState(menu *Menu, s *appState) {
 			},
 		},
 	)
-	currentModel := strings.TrimSpace(s.config.Agents.Defaults.Model)
+	currentModel := strings.TrimSpace(s.config.Agents.Defaults.GetModelName())
+	visionModel := strings.TrimSpace(s.config.Agents.Defaults.VisionModelName)
 	for i := range s.config.ModelList {
 		index := i
 		model := s.config.ModelList[i]
@@ -266,6 +309,9 @@ func refreshModelMenuFromState(menu *Menu, s *appState) {
 		label := fmt.Sprintf("%s (%s)", model.ModelName, model.Model)
 		if model.ModelName == currentModel && currentModel != "" {
 			label = "* " + label
+		}
+		if model.ModelName == visionModel && visionModel != "" {
+			label = "[V] " + label
 		}
 		isSelected := model.ModelName == currentModel && currentModel != ""
 		items = append(items, MenuItem{

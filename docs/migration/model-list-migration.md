@@ -118,8 +118,40 @@ The `model` field uses a protocol prefix format: `[protocol/]model-identifier`
 | `rpm` | No | Requests per minute limit |
 | `max_tokens_field` | No | Field name for max tokens |
 | `request_timeout` | No | HTTP request timeout in seconds; `<=0` uses default `120s` |
+| `supports_vision` | No | Whether this chat model accepts image inputs |
 
 *`api_key` is required for HTTP-based protocols unless `api_base` points to a local server.
+
+## Media-Aware Backbone Routing
+
+Use `agents.defaults.vision_model_name` when your normal text backbone should stay text-only, but image turns should use a vision-capable chat model. The value must match a `model_list[].model_name` whose entries set `supports_vision: true`.
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model_name": "deepseek",
+      "vision_model_name": "gpt4-vision"
+    }
+  },
+  "model_list": [
+    {
+      "model_name": "deepseek",
+      "model": "deepseek/deepseek-chat",
+      "api_key": "sk-text"
+    },
+    {
+      "model_name": "gpt4-vision",
+      "model": "openai/gpt-5.2",
+      "api_key": "sk-vision",
+      "api_base": "https://api.openai.com/v1",
+      "supports_vision": true
+    }
+  ]
+}
+```
+
+`image_model` remains separate and is for image generation tooling, not image understanding.
 
 ## Load Balancing
 

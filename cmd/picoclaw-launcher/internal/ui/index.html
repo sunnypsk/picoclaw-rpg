@@ -720,6 +720,7 @@ const i18nData = {
         'edit': 'Edit',
         'delete': 'Delete',
         'enabled': 'Enabled',
+        'yes': 'Yes',
         'comingSoon': 'Coming soon',
         // Sidebar
         'sidebar.providers': 'Providers',
@@ -735,8 +736,11 @@ const i18nData = {
         'models.add': '+ Add Custom Model',
         'models.noModels': 'No models configured.',
         'models.primary': 'Primary',
+        'models.vision': 'Vision',
         'models.noKey': 'No Key',
         'models.setPrimary': 'Set Primary',
+        'models.setVision': 'Set Vision',
+        'models.visionRequiresSupport': 'Enable Supports Vision before setting this as the vision model.',
         'models.editModel': 'Edit Model',
         'models.addModel': 'Add Model',
         'models.advancedOptions': 'Advanced Options',
@@ -746,6 +750,8 @@ const i18nData = {
         'field.modelName': 'Model Name',
         'field.modelId': 'Model ID',
         'field.modelIdHint': 'Format: protocol/model-id',
+        'field.supportsVision': 'Supports Vision',
+        'field.supportsVisionHint': 'Allows this chat model to receive image inputs.',
         'field.apiKey': 'API Key',
         'field.apiBase': 'API Base',
         'field.proxy': 'Proxy',
@@ -838,6 +844,7 @@ const i18nData = {
         'edit': '\u7F16\u8F91',
         'delete': '\u5220\u9664',
         'enabled': '\u542F\u7528',
+        'yes': '\u662F',
         'comingSoon': '\u5373\u5C06\u63A8\u51FA',
         'sidebar.providers': '\u63D0\u4F9B\u5546',
         'sidebar.models': '\u6A21\u578B',
@@ -851,8 +858,11 @@ const i18nData = {
         'models.add': '+ \u6DFB\u52A0\u81EA\u5B9A\u4E49\u6A21\u578B',
         'models.noModels': '\u6682\u65E0\u6A21\u578B\u914D\u7F6E\u3002',
         'models.primary': '\u4E3B\u6A21\u578B',
+        'models.vision': '\u89C6\u89C9',
         'models.noKey': '\u65E0 Key',
         'models.setPrimary': '\u8BBE\u4E3A\u4E3B\u6A21\u578B',
+        'models.setVision': '\u8BBE\u4E3A\u89C6\u89C9\u6A21\u578B',
+        'models.visionRequiresSupport': '\u8BF7\u5148\u542F\u7528\u201C\u652F\u6301\u89C6\u89C9\u201D\u518D\u8BBE\u4E3A\u89C6\u89C9\u6A21\u578B\u3002',
         'models.editModel': '\u7F16\u8F91\u6A21\u578B',
         'models.addModel': '\u6DFB\u52A0\u6A21\u578B',
         'models.advancedOptions': '\u9AD8\u7EA7\u9009\u9879',
@@ -861,6 +871,8 @@ const i18nData = {
         'field.modelName': '\u6A21\u578B\u540D\u79F0',
         'field.modelId': '\u6A21\u578B ID',
         'field.modelIdHint': '\u683C\u5F0F\uFF1A\u534F\u8BAE/\u6A21\u578B\u6807\u8BC6',
+        'field.supportsVision': '\u652F\u6301\u89C6\u89C9',
+        'field.supportsVisionHint': '\u5141\u8BB8\u6B64\u804A\u5929\u6A21\u578B\u63A5\u6536\u56FE\u7247\u8F93\u5165\u3002',
         'field.apiKey': 'API Key',
         'field.apiBase': 'API \u5730\u5740',
         'field.proxy': '\u4EE3\u7406',
@@ -1227,13 +1239,19 @@ function renderModels() {
     const primaryModelName = (configData.agents && configData.agents.defaults)
         ? (configData.agents.defaults.model_name || configData.agents.defaults.model || '')
         : '';
+    const visionModelName = (configData.agents && configData.agents.defaults)
+        ? (configData.agents.defaults.vision_model_name || '')
+        : '';
 
     // Build index array sorted: primary first, then the rest in original order
     const indices = configData.model_list.map((_, i) => i);
     indices.sort((a, b) => {
         const ap = configData.model_list[a].model_name === primaryModelName ? 0 : 1;
         const bp = configData.model_list[b].model_name === primaryModelName ? 0 : 1;
-        return ap !== bp ? ap - bp : a - b;
+        if (ap !== bp) return ap - bp;
+        const av = configData.model_list[a].model_name === visionModelName ? 0 : 1;
+        const bv = configData.model_list[b].model_name === visionModelName ? 0 : 1;
+        return av !== bv ? av - bv : a - b;
     });
 
     const isModelAvailable = isModelAvailableGlobal;
@@ -1243,6 +1261,7 @@ function renderModels() {
         const m = configData.model_list[idx];
         const available = isModelAvailable(m);
         const isPrimary = m.model_name === primaryModelName;
+        const isVision = m.model_name === visionModelName;
         const protocol = m.model ? m.model.split('/')[0] : '';
 
         html += `<div class="model-card ${available ? '' : 'unavailable'}">`;
@@ -1251,6 +1270,7 @@ function renderModels() {
         if (protocol) html += ` <span class="model-protocol">${esc(protocol)}</span>`;
         html += `</div>`;
         if (isPrimary) html += `<span class="badge-primary">${t('models.primary')}</span>`;
+        if (isVision) html += `<span class="badge-primary">${t('models.vision')}</span>`;
         else if (!available) html += `<span class="badge-nokey">${t('models.noKey')}</span>`;
         html += `</div>`;
 
@@ -1259,11 +1279,15 @@ function renderModels() {
         if (m.api_key) html += `<div class="model-detail"><strong>API Key:</strong> ${maskKey(m.api_key)}</div>`;
         if (m.auth_method) html += `<div class="model-detail"><strong>Auth:</strong> ${esc(m.auth_method)}</div>`;
         if (m.proxy) html += `<div class="model-detail"><strong>Proxy:</strong> ${esc(m.proxy)}</div>`;
+        if (m.supports_vision) html += `<div class="model-detail"><strong>${t('field.supportsVision')}:</strong> ${t('yes')}</div>`;
 
         html += `<div class="model-actions">`;
         html += `<button class="btn btn-sm" onclick="showEditModelModal(${idx})">${t('edit')}</button>`;
         if (available && !isPrimary) {
             html += `<button class="btn btn-sm btn-success" onclick="setPrimaryModel(${idx})">${t('models.setPrimary')}</button>`;
+        }
+        if (available && m.supports_vision && !isVision) {
+            html += `<button class="btn btn-sm btn-success" onclick="setVisionModel(${idx})">${t('models.setVision')}</button>`;
         }
         html += `<button class="btn btn-sm btn-danger" onclick="deleteModel(${idx})">${t('delete')}</button>`;
         html += `</div></div>`;
@@ -1279,11 +1303,26 @@ function setPrimaryModel(idx) {
     saveConfig().then(renderModels);
 }
 
+function setVisionModel(idx) {
+    if (!configData || !configData.model_list[idx]) return;
+    if (!configData.model_list[idx].supports_vision) {
+        showStatus(t('models.visionRequiresSupport'), 'error');
+        return;
+    }
+    if (!configData.agents) configData.agents = {};
+    if (!configData.agents.defaults) configData.agents.defaults = {};
+    configData.agents.defaults.vision_model_name = configData.model_list[idx].model_name;
+    saveConfig().then(renderModels);
+}
+
 function deleteModel(idx) {
     if (!configData || !configData.model_list) return;
     const name = configData.model_list[idx].model_name;
     if (!confirm(t('models.deleteConfirm', { name }))) return;
     configData.model_list.splice(idx, 1);
+    if (configData.agents && configData.agents.defaults && configData.agents.defaults.vision_model_name === name) {
+        delete configData.agents.defaults.vision_model_name;
+    }
     saveConfig().then(renderModels);
 }
 
@@ -1291,6 +1330,7 @@ function deleteModel(idx) {
 const modelFieldsRequired = [
     { key: 'model_name', labelKey: 'field.modelName', type: 'text', placeholder: 'e.g. gpt-4o', required: true },
     { key: 'model', labelKey: 'field.modelId', type: 'text', placeholder: 'e.g. openai/gpt-4o', required: true, hintKey: 'field.modelIdHint' },
+    { key: 'supports_vision', labelKey: 'field.supportsVision', type: 'checkbox', hintKey: 'field.supportsVisionHint' },
     { key: 'api_key', labelKey: 'field.apiKey', type: 'password', placeholder: 'API key' },
     { key: 'api_base', labelKey: 'field.apiBase', type: 'text', placeholder: 'https://api.openai.com/v1' },
 ];
@@ -1333,6 +1373,15 @@ function renderModalBody(data) {
         const val = data[f.key] !== undefined && data[f.key] !== null ? data[f.key] : '';
         const label = t(f.labelKey);
         let h = `<div class="form-group">`;
+        if (f.type === 'checkbox') {
+            h += `<label class="form-label" style="display:flex;align-items:center;gap:8px;min-height:44px;">`;
+            h += `<input type="checkbox" data-field="${f.key}" ${val ? 'checked' : ''}>`;
+            h += `<span>${label}</span>`;
+            h += `</label>`;
+            if (f.hintKey) h += `<div class="form-hint">${t(f.hintKey)}</div>`;
+            h += `</div>`;
+            return h;
+        }
         h += `<label class="form-label">${label}${f.required ? ' *' : ''}</label>`;
         h += `<input class="form-input ${f.type === 'number' ? 'form-input-number' : ''}" `;
         h += `type="${f.type === 'password' ? 'password' : f.type === 'number' ? 'number' : 'text'}" `;
@@ -1360,10 +1409,17 @@ function saveModelFromModal() {
     const obj = {};
     inputs.forEach(input => {
         const key = input.dataset.field;
+        if (input.type === 'checkbox') {
+            obj[key] = input.checked;
+            return;
+        }
         let val = input.value.trim();
         if (input.type === 'number' && val) val = parseInt(val, 10) || 0;
         if (val !== '' && val !== 0) obj[key] = val;
         else if (key === 'model_name' || key === 'model') obj[key] = val;
+    });
+    modelFields.forEach(f => {
+        if (f.type === 'checkbox' && !obj[f.key]) delete obj[f.key];
     });
 
     if (!obj.model_name || !obj.model) {
@@ -1374,12 +1430,21 @@ function saveModelFromModal() {
     if (!configData.model_list) configData.model_list = [];
 
     if (editingModelIndex >= 0) {
+        const previousName = configData.model_list[editingModelIndex].model_name;
         configData.model_list[editingModelIndex] = { ...configData.model_list[editingModelIndex], ...obj };
         modelFields.forEach(f => {
             if (!f.required && (obj[f.key] === '' || obj[f.key] === 0)) {
                 delete configData.model_list[editingModelIndex][f.key];
             }
+            if (f.type === 'checkbox' && !obj[f.key]) {
+                delete configData.model_list[editingModelIndex][f.key];
+            }
         });
+        if (configData.agents && configData.agents.defaults &&
+            configData.agents.defaults.vision_model_name === previousName &&
+            !configData.model_list[editingModelIndex].supports_vision) {
+            delete configData.agents.defaults.vision_model_name;
+        }
     } else {
         configData.model_list.push(obj);
         // Auto-set as primary model

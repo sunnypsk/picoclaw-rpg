@@ -150,7 +150,7 @@ func NewAgentLoop(
 	turtleSoup := newTurtleSoupEngine(cfg)
 
 	// Register shared tools to all agents
-	registerSharedTools(cfg, msgBus, registry, provider, nil, turtleSoup)
+	registerSharedTools(cfg, msgBus, registry, nil, turtleSoup)
 
 	// Set up shared fallback chain
 	cooldown := providers.NewCooldownTracker()
@@ -191,12 +191,11 @@ func registerSharedTools(
 	cfg *config.Config,
 	msgBus *bus.MessageBus,
 	registry *AgentRegistry,
-	provider providers.LLMProvider,
 	store media.MediaStore,
 	turtleSoup *turtlesoup.Engine,
 ) {
 	for _, agentID := range registry.ListAgentIDs() {
-		registerSharedToolsForAgent(cfg, msgBus, registry, provider, store, turtleSoup, agentID)
+		registerSharedToolsForAgent(cfg, msgBus, registry, store, turtleSoup, agentID)
 	}
 }
 
@@ -204,7 +203,6 @@ func registerSharedToolsForAgent(
 	cfg *config.Config,
 	msgBus *bus.MessageBus,
 	registry *AgentRegistry,
-	provider providers.LLMProvider,
 	store media.MediaStore,
 	turtleSoup *turtlesoup.Engine,
 	agentID string,
@@ -306,7 +304,7 @@ func registerSharedToolsForAgent(
 	agent.Tools.Register(presentationTool)
 	agentRef := agent
 	turtleSoupTool := tools.NewTurtleSoupToolWithModelResolver(turtleSoup, agent.Provider, func() string {
-		return agentRef.Model
+		return agentRef.TextRoute.primary().Model
 	})
 	turtleSoupTool.SetStartIllustrationTool(imageTool)
 	agent.Tools.Register(turtleSoupTool)
@@ -324,7 +322,7 @@ func registerSharedToolsForAgent(
 	agent.Tools.Register(tools.NewInstallSkillTool(registryMgr, agent.Workspace))
 
 	// Spawn tool with allowlist checker
-	subagentManager := tools.NewSubagentManager(provider, agent.Model, agent.Workspace, msgBus)
+	subagentManager := tools.NewSubagentManager(agent.Provider, agent.TextRoute.primary().Model, agent.Workspace, msgBus)
 	subagentManager.SetLLMOptions(agent.MaxTokens, agent.Temperature)
 	spawnTool := tools.NewSpawnTool(subagentManager)
 	currentAgentID := agent.ID
@@ -586,7 +584,7 @@ func (al *AgentLoop) resolveAgentForRoute(route routing.ResolvedRoute) *AgentIns
 		created := false
 		agent, created = al.registry.GetOrCreateAgent(route.AgentID)
 		if created {
-			registerSharedToolsForAgent(al.cfg, al.bus, al.registry, al.registry.provider, al.mediaStore, al.turtleSoup, route.AgentID)
+			registerSharedToolsForAgent(al.cfg, al.bus, al.registry, al.mediaStore, al.turtleSoup, route.AgentID)
 		}
 		al.registerGlobalToolsForAgent(agent)
 	} else {
@@ -1055,6 +1053,12 @@ func (al *AgentLoop) runLLMIteration(
 ) (string, int, error) {
 	iteration := 0
 	var finalContent string
+	hasImageInput := len(opts.CurrentImageMedia) > 0
+	currentRoute := agent.routeForTurn(hasImageInput)
+	if !currentRoute.configured() {
+		return "", iteration, fmt.Errorf("agent %q has no configured model route", agent.ID)
+	}
+	usedVisionRetry := false
 
 	for iteration < agent.MaxIterations {
 		iteration++
@@ -1074,7 +1078,8 @@ func (al *AgentLoop) runLLMIteration(
 			map[string]any{
 				"agent_id":          agent.ID,
 				"iteration":         iteration,
-				"model":             agent.Model,
+				"model":             currentRoute.primary().Model,
+				"route":             currentRoute.Name,
 				"messages_count":    len(messages),
 				"tools_count":       len(providerToolDefs),
 				"max_tokens":        agent.MaxTokens,
@@ -1095,12 +1100,17 @@ func (al *AgentLoop) runLLMIteration(
 		var err error
 
 		callLLM := func() (*providers.LLMResponse, error) {
-			if len(agent.Candidates) > 1 && al.fallback != nil {
+			route := currentRoute
+			if len(route.Candidates) > 1 && al.fallback != nil {
 				fbResult, fbErr := al.fallback.Execute(
 					ctx,
-					agent.Candidates,
+					route.fallbackCandidates(),
 					func(ctx context.Context, provider, model string) (*providers.LLMResponse, error) {
-						return agent.Provider.Chat(
+						candidate, ok := route.find(provider, model)
+						if !ok || candidate.Provider == nil {
+							return nil, fmt.Errorf("model route %q has no provider for %s/%s", route.Name, provider, model)
+						}
+						return candidate.Provider.Chat(
 							ctx,
 							messages,
 							providerToolDefs,
@@ -1119,14 +1129,19 @@ func (al *AgentLoop) runLLMIteration(
 				if fbResult.Provider != "" && len(fbResult.Attempts) > 0 {
 					logger.InfoCF(
 						"agent",
-						fmt.Sprintf("Fallback: succeeded with %s/%s after %d attempts",
-							fbResult.Provider, fbResult.Model, len(fbResult.Attempts)+1),
-						map[string]any{"agent_id": agent.ID, "iteration": iteration},
+						fmt.Sprintf("Fallback: route %s succeeded with %s/%s after %d attempts",
+							route.Name, fbResult.Provider, fbResult.Model, len(fbResult.Attempts)+1),
+						map[string]any{"agent_id": agent.ID, "iteration": iteration, "route": route.Name},
 					)
 				}
 				return fbResult.Response, nil
 			}
-			return agent.Provider.Chat(ctx, messages, providerToolDefs, agent.Model, map[string]any{
+
+			candidate := route.primary()
+			if candidate.Provider == nil {
+				return nil, fmt.Errorf("model route %q has no provider", route.Name)
+			}
+			return candidate.Provider.Chat(ctx, messages, providerToolDefs, candidate.Model, map[string]any{
 				"max_tokens":       agent.MaxTokens,
 				"temperature":      agent.Temperature,
 				"prompt_cache_key": agent.ID,
@@ -1142,6 +1157,21 @@ func (al *AgentLoop) runLLMIteration(
 			}
 
 			errMsg := strings.ToLower(err.Error())
+			if currentRoute.Name == "text" &&
+				agent.VisionRoute.configured() &&
+				!usedVisionRetry &&
+				currentRoute.primary().SupportsVision &&
+				providers.IsImageUnsupportedError(errMsg) {
+				usedVisionRetry = true
+				currentRoute = agent.VisionRoute
+				logger.WarnCF("agent", "Retrying image turn with vision model route", map[string]any{
+					"agent_id": agent.ID,
+					"error":    err.Error(),
+					"route":    currentRoute.Name,
+					"model":    currentRoute.primary().Model,
+				})
+				continue
+			}
 
 			// Check if this is a network/HTTP timeout — not a context window error.
 			timeoutErr := classifyTimeoutRetryError(err)

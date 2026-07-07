@@ -41,3 +41,38 @@ Example snippet:
 ```
 
 Get your key at [OpenRouter Keys](https://openrouter.ai/keys).
+
+## Image inputs fail with a text-only backbone model
+
+**Symptom:** Text chat works, but messages with image attachments fail with an API error such as `model does not support image input`, `image input is not supported`, or `unsupported image_url`.
+
+**Cause:** The normal backbone model in `agents.defaults.model_name` is used for text turns. If the current turn includes images and `vision_model_name` is configured, PicoClaw routes that turn to the vision model instead. Without a vision route, image media is sent to the selected backbone and text-only models may reject it.
+
+**Fix:** Configure a vision-capable chat model and mark it with `supports_vision: true`:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model_name": "deepseek",
+      "vision_model_name": "gpt4-vision"
+    }
+  },
+  "model_list": [
+    {
+      "model_name": "deepseek",
+      "model": "deepseek/deepseek-chat",
+      "api_key": "sk-text"
+    },
+    {
+      "model_name": "gpt4-vision",
+      "model": "openai/gpt-5.2",
+      "api_key": "sk-vision",
+      "api_base": "https://api.openai.com/v1",
+      "supports_vision": true
+    }
+  ]
+}
+```
+
+Do not use `image_model` for this purpose. `image_model` is reserved for image generation tooling, while `vision_model_name` is for reading uploaded images in chat.

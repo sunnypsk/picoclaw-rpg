@@ -210,6 +210,8 @@ type AgentDefaults struct {
 	ModelName                 string             `json:"model_name,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
 	Model                     string             `json:"model"                           env:"PICOCLAW_AGENTS_DEFAULTS_MODEL"` // Deprecated: use model_name instead
 	ModelFallbacks            []string           `json:"model_fallbacks,omitempty"`
+	VisionModelName           string             `json:"vision_model_name,omitempty"     env:"PICOCLAW_AGENTS_DEFAULTS_VISION_MODEL_NAME"`
+	VisionModelFallbacks      []string           `json:"vision_model_fallbacks,omitempty"`
 	ImageModel                string             `json:"image_model,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
 	ImageModelFallbacks       []string           `json:"image_model_fallbacks,omitempty"`
 	MaxTokens                 int                `json:"max_tokens"                      env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
@@ -601,6 +603,7 @@ type ModelConfig struct {
 	RPM            int    `json:"rpm,omitempty"`              // Requests per minute limit
 	MaxTokensField string `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
 	RequestTimeout int    `json:"request_timeout,omitempty"`
+	SupportsVision bool   `json:"supports_vision,omitempty"` // Whether this chat model can accept image inputs
 }
 
 // Validate checks if the ModelConfig has all required fields.
@@ -796,6 +799,10 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
+	if err := cfg.ValidateVisionRouting(); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
 }
 
@@ -929,5 +936,52 @@ func (c *Config) ValidateModelList() error {
 			return fmt.Errorf("model_list[%d]: %w", i, err)
 		}
 	}
+	return nil
+}
+
+// ValidateVisionRouting validates optional media-aware backbone routing.
+func (c *Config) ValidateVisionRouting() error {
+	if c == nil {
+		return nil
+	}
+
+	visionModelName := strings.TrimSpace(c.Agents.Defaults.VisionModelName)
+	if visionModelName == "" {
+		return nil
+	}
+
+	matches := c.findMatches(visionModelName)
+	if len(matches) == 0 {
+		return fmt.Errorf("agents.defaults.vision_model_name %q not found in model_list", visionModelName)
+	}
+
+	for _, match := range matches {
+		if !match.SupportsVision {
+			return fmt.Errorf(
+				"agents.defaults.vision_model_name %q must reference model_list entries with supports_vision=true",
+				visionModelName,
+			)
+		}
+	}
+
+	for _, fallback := range c.Agents.Defaults.VisionModelFallbacks {
+		fallback = strings.TrimSpace(fallback)
+		if fallback == "" {
+			continue
+		}
+		fallbackMatches := c.findMatches(fallback)
+		if len(fallbackMatches) == 0 {
+			return fmt.Errorf("agents.defaults.vision_model_fallbacks contains %q, not found in model_list", fallback)
+		}
+		for _, match := range fallbackMatches {
+			if !match.SupportsVision {
+				return fmt.Errorf(
+					"agents.defaults.vision_model_fallbacks contains %q, but its model_list entries do not all have supports_vision=true",
+					fallback,
+				)
+			}
+		}
+	}
+
 	return nil
 }

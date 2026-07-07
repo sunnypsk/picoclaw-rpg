@@ -96,6 +96,20 @@ var (
 		rxp(`image exceeds.*mb`),
 	}
 
+	imageUnsupportedPatterns = []errorPattern{
+		rxp(`model.*does not support.*image`),
+		rxp(`model.*doesn't support.*image`),
+		rxp(`model.*cannot.*image`),
+		rxp(`image.*not supported`),
+		rxp(`image.*unsupported`),
+		rxp(`vision.*not supported`),
+		rxp(`multimodal.*not supported`),
+		rxp(`does not support.*image_url`),
+		rxp(`unsupported.*image_url`),
+		rxp(`does not support.*input_image`),
+		rxp(`unsupported.*input_image`),
+	}
+
 	// Transient HTTP status codes that map to timeout (server-side failures).
 	transientStatusCodes = map[int]bool{
 		500: true, 502: true, 503: true,
@@ -226,6 +240,11 @@ func IsImageDimensionError(msg string) bool {
 // IsImageSizeError returns true if the message indicates an image file size error.
 func IsImageSizeError(msg string) bool {
 	return matchesAny(msg, imageSizePatterns)
+}
+
+// IsImageUnsupportedError returns true for explicit image/vision unsupported errors.
+func IsImageUnsupportedError(msg string) bool {
+	return matchesAny(strings.ToLower(msg), imageUnsupportedPatterns)
 }
 
 // matchesAny checks if msg matches any of the patterns.

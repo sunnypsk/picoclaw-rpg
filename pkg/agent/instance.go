@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/memorysearch"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
@@ -217,6 +218,8 @@ type AgentInstance struct {
 	Subagents                 *config.SubagentsConfig
 	SkillsFilter              []string
 	Candidates                []providers.FallbackCandidate
+	TextRoute                 modelRoute
+	VisionRoute               modelRoute
 }
 
 // NewAgentInstance creates an agent instance from config.
@@ -297,52 +300,48 @@ func NewAgentInstance(
 		summarizeTokenPercent = 75
 	}
 
-	// Resolve fallback candidates
-	modelCfg := providers.ModelConfig{
-		Primary:   model,
-		Fallbacks: fallbacks,
-	}
-	resolveFromModelList := func(raw string) (string, bool) {
-		ensureProtocol := func(model string) string {
-			model = strings.TrimSpace(model)
-			if model == "" {
-				return ""
-			}
-			if strings.Contains(model, "/") {
-				return model
-			}
-			return "openai/" + model
+	textRoute, err := buildModelRoute("text", cfg, defaults.Provider, model, fallbacks, provider, false)
+	if err != nil || !textRoute.configured() {
+		if err != nil {
+			logger.WarnCF("agent", "Falling back to legacy text model route", map[string]any{
+				"agent_id": agentID,
+				"model":    model,
+				"error":    err.Error(),
+			})
 		}
-
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			return "", false
-		}
-
-		if cfg != nil {
-			if mc, err := cfg.GetModelConfig(raw); err == nil && mc != nil && strings.TrimSpace(mc.Model) != "" {
-				return ensureProtocol(mc.Model), true
-			}
-
-			for i := range cfg.ModelList {
-				fullModel := strings.TrimSpace(cfg.ModelList[i].Model)
-				if fullModel == "" {
-					continue
-				}
-				if fullModel == raw {
-					return ensureProtocol(fullModel), true
-				}
-				_, modelID := providers.ExtractProtocol(fullModel)
-				if modelID == raw {
-					return ensureProtocol(fullModel), true
-				}
-			}
-		}
-
-		return "", false
+		textRoute = legacyModelRoute("text", defaults.Provider, model, fallbacks, provider)
 	}
 
-	candidates := providers.ResolveCandidatesWithLookup(modelCfg, defaults.Provider, resolveFromModelList)
+	visionRoute := modelRoute{Name: "vision"}
+	if strings.TrimSpace(defaults.VisionModelName) != "" {
+		route, err := buildModelRoute(
+			"vision",
+			cfg,
+			defaults.Provider,
+			defaults.VisionModelName,
+			defaults.VisionModelFallbacks,
+			provider,
+			true,
+		)
+		if err != nil {
+			logger.WarnCF("agent", "Vision model route is unavailable", map[string]any{
+				"agent_id": agentID,
+				"model":    defaults.VisionModelName,
+				"error":    err.Error(),
+			})
+		} else {
+			visionRoute = route
+		}
+	}
+
+	candidates := textRoute.fallbackCandidates()
+	primary := textRoute.primary()
+	if primary.Provider != nil {
+		provider = primary.Provider
+	}
+	if primary.Model != "" {
+		model = primary.Model
+	}
 
 	return &AgentInstance{
 		ID:                        agentID,
@@ -365,7 +364,29 @@ func NewAgentInstance(
 		Subagents:                 subagents,
 		SkillsFilter:              skillsFilter,
 		Candidates:                candidates,
+		TextRoute:                 textRoute,
+		VisionRoute:               visionRoute,
 	}
+}
+
+func legacyModelRoute(
+	name string,
+	defaultProvider string,
+	primary string,
+	fallbacks []string,
+	provider providers.LLMProvider,
+) modelRoute {
+	route := modelRoute{Name: name}
+	modelCfg := providers.ModelConfig{Primary: primary, Fallbacks: fallbacks}
+	for _, candidate := range providers.ResolveCandidates(modelCfg, defaultProvider) {
+		route.Candidates = append(route.Candidates, modelRouteCandidate{
+			Alias:        candidate.Model,
+			ProviderName: candidate.Provider,
+			Model:        candidate.Model,
+			Provider:     provider,
+		})
+	}
+	return route
 }
 
 // resolveAgentWorkspace determines the workspace directory for an agent.
