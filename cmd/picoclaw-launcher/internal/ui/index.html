@@ -1325,8 +1325,10 @@ function deleteModel(idx) {
     const name = configData.model_list[idx].model_name;
     if (!confirm(t('models.deleteConfirm', { name }))) return;
     configData.model_list.splice(idx, 1);
-    if (configData.agents && configData.agents.defaults && configData.agents.defaults.vision_model_name === name) {
-        delete configData.agents.defaults.vision_model_name;
+    if (configData.agents && configData.agents.defaults) {
+        const defaults = configData.agents.defaults;
+        if (defaults.vision_model_name === name) delete defaults.vision_model_name;
+        if (defaults.maintenance_model_name === name) delete defaults.maintenance_model_name;
     }
     saveConfig().then(renderModels);
 }
@@ -1351,6 +1353,10 @@ function syncEditedModelReferences(previousName, model, index) {
         if (defaults.vision_model_name === previousName) {
             if (model.supports_vision && newName) defaults.vision_model_name = newName;
             else delete defaults.vision_model_name;
+        }
+        if (defaults.maintenance_model_name === previousName) {
+            if (newName) defaults.maintenance_model_name = newName;
+            else delete defaults.maintenance_model_name;
         }
     }
 

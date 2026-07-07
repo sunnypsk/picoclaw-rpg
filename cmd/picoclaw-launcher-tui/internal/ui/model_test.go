@@ -46,8 +46,9 @@ func TestSyncRenamedModelReferencesUpdatesSelectedAliases(t *testing.T) {
 		config: &picoclawconfig.Config{
 			Agents: picoclawconfig.AgentsConfig{
 				Defaults: picoclawconfig.AgentDefaults{
-					ModelName:       "old",
-					VisionModelName: "old",
+					ModelName:            "old",
+					VisionModelName:      "old",
+					MaintenanceModelName: "old",
 				},
 			},
 			ModelList: []picoclawconfig.ModelConfig{
@@ -64,6 +65,9 @@ func TestSyncRenamedModelReferencesUpdatesSelectedAliases(t *testing.T) {
 	if got := state.config.Agents.Defaults.VisionModelName; got != "new" {
 		t.Fatalf("VisionModelName = %q, want new", got)
 	}
+	if got := state.config.Agents.Defaults.MaintenanceModelName; got != "new" {
+		t.Fatalf("MaintenanceModelName = %q, want new", got)
+	}
 }
 
 func TestSyncRenamedModelReferencesKeepsAliasWhenLoadBalanceEntryRemains(t *testing.T) {
@@ -71,8 +75,9 @@ func TestSyncRenamedModelReferencesKeepsAliasWhenLoadBalanceEntryRemains(t *test
 		config: &picoclawconfig.Config{
 			Agents: picoclawconfig.AgentsConfig{
 				Defaults: picoclawconfig.AgentDefaults{
-					ModelName:       "shared",
-					VisionModelName: "shared",
+					ModelName:            "shared",
+					VisionModelName:      "shared",
+					MaintenanceModelName: "shared",
 				},
 			},
 			ModelList: []picoclawconfig.ModelConfig{
@@ -89,5 +94,39 @@ func TestSyncRenamedModelReferencesKeepsAliasWhenLoadBalanceEntryRemains(t *test
 	}
 	if got := state.config.Agents.Defaults.VisionModelName; got != "shared" {
 		t.Fatalf("VisionModelName = %q, want shared", got)
+	}
+	if got := state.config.Agents.Defaults.MaintenanceModelName; got != "shared" {
+		t.Fatalf("MaintenanceModelName = %q, want shared", got)
+	}
+}
+
+func TestDeleteModelClearsSelectedMaintenanceAlias(t *testing.T) {
+	state := &appState{
+		config: &picoclawconfig.Config{
+			Agents: picoclawconfig.AgentsConfig{
+				Defaults: picoclawconfig.AgentDefaults{
+					ModelName:            "text",
+					VisionModelName:      "vision",
+					MaintenanceModelName: "maintenance",
+				},
+			},
+			ModelList: []picoclawconfig.ModelConfig{
+				{ModelName: "text", Model: "openai/gpt-5.2"},
+				{ModelName: "vision", Model: "openai/gpt-5.2", SupportsVision: true},
+				{ModelName: "maintenance", Model: "deepseek/deepseek-chat"},
+			},
+		},
+	}
+
+	state.deleteModel(2)
+
+	if got := state.config.Agents.Defaults.ModelName; got != "text" {
+		t.Fatalf("ModelName = %q, want text", got)
+	}
+	if got := state.config.Agents.Defaults.VisionModelName; got != "vision" {
+		t.Fatalf("VisionModelName = %q, want vision", got)
+	}
+	if got := state.config.Agents.Defaults.MaintenanceModelName; got != "" {
+		t.Fatalf("MaintenanceModelName = %q, want empty", got)
 	}
 }

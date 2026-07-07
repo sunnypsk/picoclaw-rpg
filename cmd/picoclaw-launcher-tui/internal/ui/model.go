@@ -242,8 +242,12 @@ func (s *appState) deleteModel(index int) {
 	}
 	name := s.config.ModelList[index].ModelName
 	s.config.ModelList = append(s.config.ModelList[:index], s.config.ModelList[index+1:]...)
-	if strings.TrimSpace(s.config.Agents.Defaults.VisionModelName) == name {
-		s.config.Agents.Defaults.VisionModelName = ""
+	defaults := &s.config.Agents.Defaults
+	if strings.TrimSpace(defaults.VisionModelName) == name {
+		defaults.VisionModelName = ""
+	}
+	if strings.TrimSpace(defaults.MaintenanceModelName) == name {
+		defaults.MaintenanceModelName = ""
 	}
 	s.dirty = true
 	s.pop()
@@ -273,6 +277,9 @@ func (s *appState) syncRenamedModelReferences(previousName string, index int) {
 		} else {
 			defaults.VisionModelName = ""
 		}
+	}
+	if strings.TrimSpace(defaults.MaintenanceModelName) == previousName {
+		defaults.MaintenanceModelName = newName
 	}
 }
 
