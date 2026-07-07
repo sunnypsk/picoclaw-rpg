@@ -1326,6 +1326,34 @@ function deleteModel(idx) {
     saveConfig().then(renderModels);
 }
 
+function modelNameExistsExcept(name, exceptIndex) {
+    name = String(name || '').trim();
+    if (!name || !configData || !configData.model_list) return false;
+    return configData.model_list.some((m, i) => i !== exceptIndex && String(m.model_name || '').trim() === name);
+}
+
+function syncEditedModelReferences(previousName, model, index) {
+    if (!configData || !configData.agents || !configData.agents.defaults || !model) return;
+    previousName = String(previousName || '').trim();
+    const newName = String(model.model_name || '').trim();
+    if (!previousName) return;
+
+    const defaults = configData.agents.defaults;
+    const renamed = previousName !== newName;
+    if (renamed && !modelNameExistsExcept(previousName, index)) {
+        if (defaults.model_name === previousName) defaults.model_name = newName;
+        if (!defaults.model_name && defaults.model === previousName) defaults.model = newName;
+        if (defaults.vision_model_name === previousName) {
+            if (model.supports_vision && newName) defaults.vision_model_name = newName;
+            else delete defaults.vision_model_name;
+        }
+    }
+
+    if (!renamed && defaults.vision_model_name === previousName && !model.supports_vision) {
+        delete defaults.vision_model_name;
+    }
+}
+
 // ── Model Modal ─────────────────────────────────────
 const modelFieldsRequired = [
     { key: 'model_name', labelKey: 'field.modelName', type: 'text', placeholder: 'e.g. gpt-4o', required: true },
@@ -1440,11 +1468,7 @@ function saveModelFromModal() {
                 delete configData.model_list[editingModelIndex][f.key];
             }
         });
-        if (configData.agents && configData.agents.defaults &&
-            configData.agents.defaults.vision_model_name === previousName &&
-            !configData.model_list[editingModelIndex].supports_vision) {
-            delete configData.agents.defaults.vision_model_name;
-        }
+        syncEditedModelReferences(previousName, configData.model_list[editingModelIndex], editingModelIndex);
     } else {
         configData.model_list.push(obj);
         // Auto-set as primary model

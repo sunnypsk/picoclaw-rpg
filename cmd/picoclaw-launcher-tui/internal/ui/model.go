@@ -13,6 +13,8 @@ import (
 	picoclawconfig "github.com/sipeed/picoclaw/pkg/config"
 )
 
+const modelMenuStaticRows = 2
+
 func (s *appState) modelMenu() tview.Primitive {
 	items := make([]MenuItem, 0, 2+len(s.config.ModelList))
 	items = append(items,
@@ -73,9 +75,8 @@ func (s *appState) modelMenu() tview.Primitive {
 			return nil
 		}
 		if event.Rune() == ' ' {
-			row, _ := menu.GetSelection()
-			if row > 0 && row <= len(s.config.ModelList) {
-				model := s.config.ModelList[row-1]
+			if index, ok := selectedModelIndex(menu, len(s.config.ModelList)); ok {
+				model := s.config.ModelList[index]
 				if !isModelValid(model) {
 					s.showMessage(
 						"Invalid model",
@@ -91,9 +92,8 @@ func (s *appState) modelMenu() tview.Primitive {
 			return nil
 		}
 		if event.Rune() == 'v' {
-			row, _ := menu.GetSelection()
-			if row > 0 && row <= len(s.config.ModelList) {
-				model := s.config.ModelList[row-1]
+			if index, ok := selectedModelIndex(menu, len(s.config.ModelList)); ok {
+				model := s.config.ModelList[index]
 				if !model.SupportsVision {
 					s.showMessage("Vision not enabled", "Enable Supports Vision on this model first")
 					return nil
@@ -122,7 +122,9 @@ func (s *appState) modelForm(index int) tview.Primitive {
 	form.SetButtonTextColor(tcell.NewRGBColor(12, 13, 22))
 
 	addInput(form, "Model Name", model.ModelName, func(value string) {
+		previousName := model.ModelName
 		model.ModelName = value
+		s.syncRenamedModelReferences(previousName, index)
 		s.dirty = true
 		refreshMainMenuIfPresent(s)
 		if menu, ok := s.menus["model"]; ok {
@@ -243,6 +245,61 @@ func (s *appState) deleteModel(index int) {
 	s.pop()
 }
 
+func (s *appState) syncRenamedModelReferences(previousName string, index int) {
+	if s == nil || s.config == nil || index < 0 || index >= len(s.config.ModelList) {
+		return
+	}
+	previousName = strings.TrimSpace(previousName)
+	model := s.config.ModelList[index]
+	newName := strings.TrimSpace(model.ModelName)
+	if previousName == "" || previousName == newName || modelNameExistsExcept(s.config.ModelList, previousName, index) {
+		return
+	}
+
+	defaults := &s.config.Agents.Defaults
+	if strings.TrimSpace(defaults.ModelName) == previousName {
+		defaults.ModelName = newName
+	}
+	if strings.TrimSpace(defaults.ModelName) == "" && strings.TrimSpace(defaults.Model) == previousName {
+		defaults.Model = newName
+	}
+	if strings.TrimSpace(defaults.VisionModelName) == previousName {
+		if model.SupportsVision {
+			defaults.VisionModelName = newName
+		} else {
+			defaults.VisionModelName = ""
+		}
+	}
+}
+
+func modelNameExistsExcept(models []picoclawconfig.ModelConfig, name string, except int) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	for i := range models {
+		if i == except {
+			continue
+		}
+		if strings.TrimSpace(models[i].ModelName) == name {
+			return true
+		}
+	}
+	return false
+}
+
+func selectedModelIndex(menu *Menu, modelCount int) (int, bool) {
+	if menu == nil {
+		return 0, false
+	}
+	row, _ := menu.GetSelection()
+	index := row - modelMenuStaticRows
+	if index < 0 || index >= modelCount {
+		return 0, false
+	}
+	return index, true
+}
+
 func modelStatusColor(valid bool, selected bool) *tcell.Color {
 	if valid {
 		color := tview.Styles.PrimaryTextColor
@@ -254,7 +311,7 @@ func modelStatusColor(valid bool, selected bool) *tcell.Color {
 
 func refreshModelMenu(menu *Menu, currentModel string, visionModel string, models []picoclawconfig.ModelConfig) {
 	for i, model := range models {
-		row := i + 1
+		row := i + modelMenuStaticRows
 		label := fmt.Sprintf("%s (%s)", model.ModelName, model.Model)
 		isValid := isModelValid(model)
 		if model.ModelName == currentModel && currentModel != "" {
