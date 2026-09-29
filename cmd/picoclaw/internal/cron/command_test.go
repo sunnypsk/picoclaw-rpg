@@ -35,6 +35,7 @@ func TestNewCronCommand(t *testing.T) {
 		"remove",
 		"enable",
 		"disable",
+		"repair",
 	}
 
 	subcommands := cmd.Commands()

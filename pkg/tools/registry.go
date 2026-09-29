@@ -53,10 +53,21 @@ func (r *ToolRegistry) ExecuteWithContext(
 	mediaRefs []string,
 	asyncCallback AsyncCallback,
 ) *ToolResult {
+	if _, constrained := ctx.Value(evidenceKey{}).(*WebEvidence); constrained {
+		switch name {
+		case "web_fetch", "web_search", "message":
+		default:
+			return ErrorResult("This verified news run only permits web_fetch, web_search and buffered message output")
+		}
+	}
+	logArgs := args
+	if name == "web_fetch" {
+		logArgs = nil
+	}
 	logger.InfoCF("tool", "Tool execution started",
 		map[string]any{
 			"tool": name,
-			"args": args,
+			"args": logArgs,
 		})
 
 	tool, ok := r.Get(name)
@@ -90,11 +101,15 @@ func (r *ToolRegistry) ExecuteWithContext(
 
 	// Log based on result type
 	if result.IsError {
+		logError := result.ForLLM
+		if name == "web_fetch" {
+			logError = "web fetch failed; see bounded tool result"
+		}
 		logger.ErrorCF("tool", "Tool execution failed",
 			map[string]any{
 				"tool":     name,
 				"duration": duration.Milliseconds(),
-				"error":    result.ForLLM,
+				"error":    logError,
 			})
 	} else if result.Async {
 		logger.InfoCF("tool", "Tool started (async)",

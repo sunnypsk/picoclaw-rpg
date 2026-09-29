@@ -48,21 +48,50 @@ jobs:
           images: ${{ steps.image.outputs.name }}
           tags: |
             type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
-            type=sha,prefix=sha-
+            type=sha,prefix=sha-,format=long
             type=ref,event=tag
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
 
+      - name: Build metadata
+        id: buildmeta
+        shell: bash
+        run: |
+          echo "version=sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Build and push image
+        id: publish
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile
+          build-args: |
+            VERSION=${{ steps.buildmeta.outputs.version }}
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ steps.buildmeta.outputs.time }}
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Verify published metadata
+        shell: bash
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}@${{ steps.publish.outputs.digest }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          for platform in linux/amd64 linux/arm64; do
+            docker pull --platform "$platform" "$IMAGE"
+            revision=$(docker image inspect "$IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
+            test "$revision" = "$EXPECTED_SHA"
+            output=$(docker run --rm --platform "$platform" --entrypoint /usr/local/bin/picoclaw "$IMAGE" version)
+            echo "$output"
+            echo "$output" | grep -F "git: $EXPECTED_SHA"
+            echo "$output" | grep -F 'go1.26.8'
+            ! echo "$output" | grep -E 'git: (dev|unknown)|picoclaw dev'
+          done

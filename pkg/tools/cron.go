@@ -14,6 +14,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/cron"
+	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -33,12 +34,14 @@ type JobExecutor interface {
 
 // ScheduledReminderRequest describes a reminder firing that should be handled by the agent loop.
 type ScheduledReminderRequest struct {
-	JobID      string
-	Content    string
-	Channel    string
-	ChatID     string
-	SessionKey string
-	Deliver    bool
+	MinVerifiedSources int
+	SourcePeer         *routing.RoutePeer
+	JobID              string
+	Content            string
+	Channel            string
+	ChatID             string
+	SessionKey         string
+	Deliver            bool
 }
 
 // CronTool provides scheduling capabilities for the agent
@@ -156,7 +159,7 @@ func (t *CronTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult {
 	channel := ToolChannel(ctx)
 	chatID := ToolChatID(ctx)
-	sessionKey := ToolSessionKey(ctx)
+	sessionKey := ToolSourceSession(ctx)
 
 	if channel == "" || chatID == "" {
 		return ErrorResult("no session context (channel/chat_id not set). Use this tool in an active conversation.")
@@ -215,6 +218,7 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 		channel,
 		chatID,
 		sessionKey,
+		ToolSourcePeer(ctx),
 	)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("Error adding job: %v", err))
@@ -641,6 +645,14 @@ func (t *CronTool) enableJob(args map[string]any, enable bool) *ToolResult {
 
 // ExecuteJob executes a cron job through the agent
 func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
+	result, err := t.ExecuteJobWithError(ctx, job)
+	if err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	return result
+}
+
+func (t *CronTool) ExecuteJobWithError(ctx context.Context, job *cron.CronJob) (string, error) {
 	// Get channel/chatID from job payload
 	channel := job.Payload.Channel
 	chatID := job.Payload.To
@@ -669,41 +681,52 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 
 		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer pubCancel()
-		t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
+		publishErr := t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
 			Channel: channel,
 			ChatID:  chatID,
 			Content: output,
 		})
-		return "ok"
+		if publishErr != nil {
+			return "", publishErr
+		}
+		if result.IsError {
+			return "", fmt.Errorf("scheduled command failed: %s", result.ForLLM)
+		}
+		return "ok", nil
 	}
 
 	if t.executor == nil {
 		if job.Payload.Deliver {
 			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer pubCancel()
-			t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
+			publishErr := t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
 				Channel: channel,
 				ChatID:  chatID,
 				Content: job.Payload.Message,
 			})
-			return "ok"
+			if publishErr != nil {
+				return "", publishErr
+			}
+			return "ok", nil
 		}
-		return "Error: scheduled reminder executor not configured"
+		return "", fmt.Errorf("scheduled reminder executor not configured")
 	}
 
 	response, err := t.executor.ProcessScheduledReminder(ctx, ScheduledReminderRequest{
-		JobID:      job.ID,
-		Content:    job.Payload.Message,
-		Channel:    channel,
-		ChatID:     chatID,
-		SessionKey: job.Payload.SessionKey,
-		Deliver:    job.Payload.Deliver,
+		JobID:              job.ID,
+		MinVerifiedSources: job.Payload.MinVerifiedSources,
+		SourcePeer:         job.Payload.SourcePeer,
+		Content:            job.Payload.Message,
+		Channel:            channel,
+		ChatID:             chatID,
+		SessionKey:         job.Payload.SessionKey,
+		Deliver:            job.Payload.Deliver,
 	})
 	if err != nil {
-		return fmt.Sprintf("Error: %v", err)
+		return "", err
 	}
 
 	// Response is automatically sent via MessageBus by AgentLoop
 	_ = response // Will be sent by AgentLoop
-	return "ok"
+	return "ok", nil
 }

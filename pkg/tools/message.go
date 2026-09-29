@@ -104,10 +104,27 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		}
 	}
 
-	t.sentInRound.Store(true)
+	if state, ok := ctx.Value(sendStateKey{}).(*atomic.Bool); ok {
+		state.Store(true)
+	} else {
+		t.sentInRound.Store(true)
+	}
 	// Silent: user already received the message directly
 	return &ToolResult{
 		ForLLM: fmt.Sprintf("Message sent to %s:%s", channel, chatID),
 		Silent: true,
 	}
+}
+
+type sendStateKey struct{}
+
+func WithSendState(ctx context.Context) context.Context {
+	if _, ok := ctx.Value(sendStateKey{}).(*atomic.Bool); ok {
+		return ctx
+	}
+	return context.WithValue(ctx, sendStateKey{}, &atomic.Bool{})
+}
+func MessageSent(ctx context.Context) bool {
+	state, ok := ctx.Value(sendStateKey{}).(*atomic.Bool)
+	return ok && state.Load()
 }

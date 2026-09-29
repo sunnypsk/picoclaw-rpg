@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -21,11 +23,11 @@ import (
 
 func testPNGBytes(t *testing.T) []byte {
 	t.Helper()
-	data, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
-	if err != nil {
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
 		t.Fatal(err)
 	}
-	return data
+	return buf.Bytes()
 }
 
 func TestGenerateImageTool_RequiresEnv(t *testing.T) {
@@ -349,7 +351,7 @@ func TestGenerateImageTool_IncludesNestedWorkspaceImageAndOptionsInChatPayload(t
 	if err := os.MkdirAll(filepath.Dir(sourceImage), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(sourceImage, []byte("input-image"), 0o600); err != nil {
+	if err := os.WriteFile(sourceImage, testPNGBytes(t), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -576,7 +578,7 @@ func TestGenerateImageTool_UsesExactTuzhiEditURL(t *testing.T) {
 	workspace := t.TempDir()
 	store := media.NewFileMediaStore()
 	sourceImage := filepath.Join(workspace, "source.png")
-	if err := os.WriteFile(sourceImage, []byte("input-image"), 0o600); err != nil {
+	if err := os.WriteFile(sourceImage, testPNGBytes(t), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -807,7 +809,7 @@ func TestGenerateImageTool_UsesImagesEditEndpointForImageAPIModels(t *testing.T)
 	workspace := t.TempDir()
 	store := media.NewFileMediaStore()
 	sourceImage := filepath.Join(workspace, "source.png")
-	if err := os.WriteFile(sourceImage, []byte("input-image"), 0o600); err != nil {
+	if err := os.WriteFile(sourceImage, testPNGBytes(t), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -844,7 +846,7 @@ func TestGenerateImageTool_UsesImagesEditEndpointForImageAPIModels(t *testing.T)
 		if err != nil {
 			t.Fatalf("read multipart image: %v", err)
 		}
-		if string(data) != "input-image" {
+		if !bytes.Equal(data, testPNGBytes(t)) {
 			t.Fatalf("unexpected multipart image bytes: %q", string(data))
 		}
 		w.Header().Set("Content-Type", "application/json")

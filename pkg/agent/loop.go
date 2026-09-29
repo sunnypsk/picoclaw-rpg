@@ -55,6 +55,7 @@ type AgentLoop struct {
 
 // processOptions configures how a message is processed
 type processOptions struct {
+	QuotedMessageID    string
 	SessionKey         string   // Session identifier for persistence/tool traces
 	ContextSessionKey  string   // Optional session identifier to read history/summary from
 	Channel            string   // Target channel for tool execution
@@ -263,7 +264,7 @@ func registerSharedToolsForAgent(
 			})
 			return nil
 		}
-		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		pubCtx, pubCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer pubCancel()
 		err := msgBus.PublishOutbound(pubCtx, msg)
 		if err == nil {
@@ -279,7 +280,7 @@ func registerSharedToolsForAgent(
 			return channel == "whatsapp_native"
 		})
 		sendFileTool.SetSendCallback(func(ctx context.Context, msg bus.OutboundMediaMessage) error {
-			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			pubCtx, pubCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer pubCancel()
 			return msgBus.PublishOutboundMedia(pubCtx, msg)
 		})
@@ -290,7 +291,7 @@ func registerSharedToolsForAgent(
 			return channel == "whatsapp_native"
 		})
 		reactTool.SetSendCallback(func(ctx context.Context, msg bus.OutboundReactionMessage) error {
-			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			pubCtx, pubCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer pubCancel()
 			return msgBus.PublishOutboundReaction(pubCtx, msg)
 		})
@@ -660,6 +661,7 @@ func (al *AgentLoop) processMessageCore(
 	sessionKey := al.resolveSessionKey(route, msg)
 	turnTracker := &replyStateTracker{}
 	turnCtx := withReplyStateTracker(ctx, turnTracker)
+	turnCtx = tools.WithSourcePeer(turnCtx, extractPeer(msg))
 	turnCtx = tools.WithToolExecutionContext(
 		turnCtx,
 		msg.Channel,
@@ -734,6 +736,7 @@ func (al *AgentLoop) processMessageCore(
 		SenderID:           toolSenderID(msg),
 		UserMessage:        liveUserMessage,
 		SessionUserMessage: attributedUserMessage,
+		QuotedMessageID:    msg.Metadata["reply_to_message_id"],
 		AutoRecallQuery:    msg.Content,
 		Media:              msg.Media,
 		DefaultResponse:    defaultResponse,
@@ -879,6 +882,13 @@ func (al *AgentLoop) runAgentLoop(
 	agent *AgentInstance,
 	opts processOptions,
 ) (string, error) {
+	ctx = tools.WithSendState(ctx)
+	sourceSession := opts.ContextSessionKey
+	if sourceSession == "" {
+		sourceSession = opts.SessionKey
+	}
+	ctx = tools.WithSourceSession(ctx, sourceSession)
+
 	sessionUserMessage := opts.SessionUserMessage
 	if strings.TrimSpace(sessionUserMessage) == "" {
 		sessionUserMessage = opts.UserMessage
@@ -918,6 +928,25 @@ func (al *AgentLoop) runAgentLoop(
 				dailyLogEventSessionStarted,
 				nil,
 			)
+		}
+	}
+	if store, ok := al.mediaStore.(*media.FileMediaStore); ok {
+		origin := media.ImageOrigin{Channel: opts.Channel, Chat: opts.ChatID, Sender: opts.SenderID, MessageID: opts.MessageID}
+		for _, ref := range opts.Media {
+			if err := store.RememberImage(ref, origin); err != nil {
+				logger.DebugCF("media", "Inbound attachment not retained as image", map[string]any{"error": err.Error()})
+			}
+			if release, err := store.AcquireImage(ref, origin); err == nil {
+				defer release()
+			}
+		}
+		recent := store.RecentImages(origin)
+		recent = append(store.ImagesForMessage(origin, opts.QuotedMessageID), recent...)
+		if len(recent) > 0 {
+			opts.UserMessage += "\nAvailable recent images from this sender in this conversation (use exact ref; ask if ambiguous; never search files for a substitute):"
+			for _, r := range recent {
+				opts.UserMessage += fmt.Sprintf("\n%s message_id=%s expires=%s", r.Ref, r.Origin.MessageID, r.Expires.Format(time.RFC3339))
+			}
 		}
 	}
 	opts.CurrentImageMedia = currentTurnImageMediaRefs(opts.Media, al.mediaStore)
@@ -965,7 +994,7 @@ func (al *AgentLoop) runAgentLoop(
 
 	// 7. Optional: send response via bus
 	if opts.SendResponse {
-		if !agentMessageAlreadySent(agent) {
+		if !tools.MessageSent(ctx) {
 			al.publishAgentMessage(ctx, agent, opts.Channel, opts.ChatID, finalContent, false)
 		} else {
 			logger.DebugCF("agent", "Skipped outbound final response (message tool already sent)", map[string]any{

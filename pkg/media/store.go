@@ -13,6 +13,7 @@ import (
 
 // MediaMeta holds metadata about a stored media file.
 type MediaMeta struct {
+	Origin      *ImageOrigin
 	Filename    string
 	ContentType string
 	Source      string // "telegram", "discord", "tool:image-gen", etc.
@@ -54,10 +55,13 @@ type MediaCleanerConfig struct {
 // FileMediaStore is a pure in-memory implementation of MediaStore.
 // Files are expected to already exist on disk (e.g. in /tmp/picoclaw_media/).
 type FileMediaStore struct {
-	mu          sync.RWMutex
-	refs        map[string]mediaEntry
-	scopeToRefs map[string]map[string]struct{}
-	refToScope  map[string]string
+	persistentDir string
+	saved         map[string]SavedImage
+	inUse         map[string]int
+	mu            sync.RWMutex
+	refs          map[string]mediaEntry
+	scopeToRefs   map[string]map[string]struct{}
+	refToScope    map[string]string
 
 	cleanerCfg MediaCleanerConfig
 	stop       chan struct{}
@@ -118,6 +122,9 @@ func (s *FileMediaStore) Resolve(ref string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("media store: unknown ref: %s", ref)
 	}
+	if saved, ok := s.saved[ref]; ok && !s.nowFunc().Before(saved.Expires) && s.inUse[ref] == 0 {
+		return "", fmt.Errorf("media store: image expired")
+	}
 	return entry.path, nil
 }
 
@@ -129,6 +136,9 @@ func (s *FileMediaStore) ResolveWithMeta(ref string) (string, MediaMeta, error) 
 	entry, ok := s.refs[ref]
 	if !ok {
 		return "", MediaMeta{}, fmt.Errorf("media store: unknown ref: %s", ref)
+	}
+	if saved, ok := s.saved[ref]; ok && !s.nowFunc().Before(saved.Expires) && s.inUse[ref] == 0 {
+		return "", MediaMeta{}, fmt.Errorf("media store: image expired")
 	}
 	return entry.path, entry.meta, nil
 }
@@ -148,6 +158,9 @@ func (s *FileMediaStore) ReleaseAll(scope string) error {
 	}
 
 	for ref := range refs {
+		if _, durable := s.saved[ref]; durable || s.inUse[ref] > 0 {
+			continue
+		}
 		if entry, exists := s.refs[ref]; exists {
 			if entry.meta.Owned {
 				paths = append(paths, entry.path)
@@ -192,7 +205,12 @@ func (s *FileMediaStore) CleanExpired() int {
 	var expired []expiredEntry
 
 	for ref, entry := range s.refs {
-		if entry.storedAt.Before(cutoff) {
+		expiredNow := entry.storedAt.Before(cutoff)
+		if r, ok := s.saved[ref]; ok {
+			expiredNow = !s.nowFunc().Before(r.Expires)
+		}
+		if expiredNow && s.inUse[ref] == 0 {
+			delete(s.saved, ref)
 			expired = append(expired, expiredEntry{ref: ref, path: entry.path, owned: entry.meta.Owned})
 
 			if scope, ok := s.refToScope[ref]; ok {
@@ -207,6 +225,9 @@ func (s *FileMediaStore) CleanExpired() int {
 			delete(s.refs, ref)
 			delete(s.refToScope, ref)
 		}
+	}
+	if err := s.saveIndexLocked(); err != nil {
+		logger.ErrorCF("media", "image index cleanup failed", map[string]any{"error": err.Error()})
 	}
 	s.mu.Unlock()
 

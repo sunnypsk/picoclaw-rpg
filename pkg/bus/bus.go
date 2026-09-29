@@ -61,6 +61,15 @@ func (mb *MessageBus) ConsumeInbound(ctx context.Context) (InboundMessage, bool)
 }
 
 func (mb *MessageBus) PublishOutbound(ctx context.Context, msg OutboundMessage) error {
+	if b, ok := ctx.Value(bufferKey{}).(*OutputBuffer); ok {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		b.messages = append(b.messages, msg)
+		return nil
+	}
+	if msg.TraceID == "" {
+		msg.TraceID = Trace(ctx)
+	}
 	if mb.closed.Load() {
 		return ErrBusClosed
 	}
@@ -69,6 +78,7 @@ func (mb *MessageBus) PublishOutbound(ctx context.Context, msg OutboundMessage) 
 	}
 	select {
 	case mb.outbound <- msg:
+		logger.InfoCF("bus", "Outbound queued", map[string]any{"trace_id": msg.TraceID, "channel": msg.Channel})
 		return nil
 	case <-mb.done:
 		return ErrBusClosed
@@ -89,6 +99,12 @@ func (mb *MessageBus) SubscribeOutbound(ctx context.Context) (OutboundMessage, b
 }
 
 func (mb *MessageBus) PublishOutboundMedia(ctx context.Context, msg OutboundMediaMessage) error {
+	if _, ok := ctx.Value(bufferKey{}).(*OutputBuffer); ok {
+		return errors.New("media unavailable during verified news run")
+	}
+	if msg.TraceID == "" {
+		msg.TraceID = Trace(ctx)
+	}
 	if mb.closed.Load() {
 		return ErrBusClosed
 	}
@@ -117,6 +133,9 @@ func (mb *MessageBus) SubscribeOutboundMedia(ctx context.Context) (OutboundMedia
 }
 
 func (mb *MessageBus) PublishOutboundReaction(ctx context.Context, msg OutboundReactionMessage) error {
+	if _, ok := ctx.Value(bufferKey{}).(*OutputBuffer); ok {
+		return errors.New("reactions unavailable during verified news run")
+	}
 	if mb.closed.Load() {
 		return ErrBusClosed
 	}

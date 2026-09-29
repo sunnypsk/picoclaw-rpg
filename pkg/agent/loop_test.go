@@ -1,9 +1,12 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"slices"
@@ -2246,12 +2249,11 @@ func TestNormalizeInboundPromptMedia_StagesAudioAndKeepsImages(t *testing.T) {
 	}
 
 	imagePath := filepath.Join(srcDir, "photo.png")
-	pngHeader := []byte{
-		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
-		0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
+	var imageBuffer bytes.Buffer
+	if err := png.Encode(&imageBuffer, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
 	}
+	pngHeader := imageBuffer.Bytes()
 	if err := os.WriteFile(imagePath, pngHeader, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -2325,12 +2327,11 @@ func TestNormalizeInboundPromptMedia_ListsCurrentImageRefsInStableOrder(t *testi
 
 	firstPath := filepath.Join(srcDir, "first.png")
 	secondPath := filepath.Join(srcDir, "second.png")
-	pngHeader := []byte{
-		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
-		0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE,
+	var imageBuffer bytes.Buffer
+	if err := png.Encode(&imageBuffer, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
 	}
+	pngHeader := imageBuffer.Bytes()
 	if err := os.WriteFile(firstPath, pngHeader, 0o644); err != nil {
 		t.Fatal(err)
 	}

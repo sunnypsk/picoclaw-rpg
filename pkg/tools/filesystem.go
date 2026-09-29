@@ -40,6 +40,9 @@ func validatePath(path, workspace string, restrict bool) (string, error) {
 		}
 	}
 
+	if err := checkPrivateMediaPath(absPath); err != nil {
+		return "", err
+	}
 	if restrict {
 		if !isWithinWorkspace(absPath, absWorkspace) {
 			return "", fmt.Errorf("access denied: path is outside the workspace")
@@ -407,6 +410,9 @@ type fileSystem interface {
 type hostFs struct{}
 
 func (h *hostFs) ReadFile(path string) ([]byte, error) {
+	if err := checkPrivateMediaPath(path); err != nil {
+		return nil, err
+	}
 	content, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -421,16 +427,25 @@ func (h *hostFs) ReadFile(path string) ([]byte, error) {
 }
 
 func (h *hostFs) ReadDir(path string) ([]os.DirEntry, error) {
+	if err := checkPrivateMediaPath(path); err != nil {
+		return nil, err
+	}
 	return os.ReadDir(path)
 }
 
 func (h *hostFs) WriteFile(path string, data []byte) error {
+	if err := checkPrivateMediaPath(path); err != nil {
+		return err
+	}
 	// Use unified atomic write utility with explicit sync for flash storage reliability.
 	// Using 0o600 (owner read/write only) for secure default permissions.
 	return fileutil.WriteFileAtomic(path, data, 0o600)
 }
 
 func (h *hostFs) Open(path string) (fs.File, error) {
+	if err := checkPrivateMediaPath(path); err != nil {
+		return nil, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -465,6 +480,9 @@ func (r *sandboxFs) execute(path string, fn func(root *os.Root, relPath string) 
 		return err
 	}
 
+	if err := checkPrivateMediaPath(filepath.Join(r.workspace, relPath)); err != nil {
+		return err
+	}
 	return fn(root, relPath)
 }
 

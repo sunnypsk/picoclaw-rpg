@@ -33,6 +33,7 @@ func NewCronCommand() *cobra.Command {
 	}
 
 	cmd.AddCommand(
+		newRepairCommand(func() string { return storePath }),
 		newListCommand(func() string { return storePath }),
 		newAddCommand(func() string { return storePath }),
 		newRemoveCommand(func() string { return storePath }),

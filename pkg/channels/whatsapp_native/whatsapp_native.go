@@ -42,9 +42,6 @@ const (
 	sqliteDriver   = "sqlite"
 	whatsappDBName = "store.db"
 
-	reconnectInitial      = 5 * time.Second
-	reconnectMax          = 5 * time.Minute
-	reconnectMultiplier   = 2.0
 	typingRefreshInterval = 4 * time.Second
 	typingStopTimeout     = 2 * time.Second
 )
@@ -52,18 +49,19 @@ const (
 // WhatsAppNativeChannel implements the WhatsApp channel using whatsmeow (in-process, no external bridge).
 type WhatsAppNativeChannel struct {
 	*channels.BaseChannel
-	config       config.WhatsAppConfig
-	storePath    string
-	client       *whatsmeow.Client
-	isConnected  func(client *whatsmeow.Client) bool
-	container    *sqlstore.Container
-	mu           sync.Mutex
-	runCtx       context.Context
-	runCancel    context.CancelFunc
-	reconnectMu  sync.Mutex
-	reconnecting bool
-	stopping     atomic.Bool    // set once Stop begins; prevents new wg.Add calls
-	wg           sync.WaitGroup // tracks background goroutines (QR handler, reconnect)
+	config          config.WhatsAppConfig
+	storePath       string
+	client          *whatsmeow.Client
+	isConnected     func(client *whatsmeow.Client) bool
+	sendMessageHook func(context.Context, types.JID, *waE2E.Message) (whatsmeow.SendResponse, error)
+	uploadHook      func(context.Context, []byte, whatsmeow.MediaType) (whatsmeow.UploadResponse, error)
+	container       *sqlstore.Container
+	mu              sync.Mutex
+	runCtx          context.Context
+	runCancel       context.CancelFunc
+	lifecycleMu     sync.Mutex
+	stopping        atomic.Bool    // set once Stop begins; prevents new wg.Add calls
+	wg              sync.WaitGroup // tracks background goroutines (QR handler)
 }
 
 type incomingMediaAttachment struct {
@@ -107,12 +105,11 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 	logger.InfoCF("whatsapp", "Starting WhatsApp native channel (whatsmeow)", map[string]any{"store": c.storePath})
 
 	// Reset lifecycle state from any previous Stop() so a restarted channel
-	// behaves correctly.  Use reconnectMu to be consistent with eventHandler
-	// and Stop() which coordinate under the same lock.
-	c.reconnectMu.Lock()
+	// behaves correctly.  Use lifecycleMu to coordinate QR setup
+	// and Stop() under the same lock.
+	c.lifecycleMu.Lock()
 	c.stopping.Store(false)
-	c.reconnecting = false
-	c.reconnectMu.Unlock()
+	c.lifecycleMu.Unlock()
 
 	if err := os.MkdirAll(c.storePath, 0o700); err != nil {
 		return fmt.Errorf("create session store dir: %w", err)
@@ -151,6 +148,7 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 	// goroutines so that Stop() can cancel them at any time, including during
 	// the QR-login flow.
 	c.runCtx, c.runCancel = context.WithCancel(ctx)
+	client.BackgroundEventCtx = c.runCtx
 
 	client.AddEventHandler(c.eventHandler)
 
@@ -188,16 +186,16 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 		// Handle QR events in a background goroutine so Start() returns
 		// promptly.  The goroutine is tracked via c.wg and respects
 		// c.runCtx for cancellation.
-		// Guard wg.Add with reconnectMu + stopping check (same protocol
+		// Guard wg.Add with lifecycleMu + stopping check (same protocol
 		// as eventHandler) so a concurrent Stop() cannot enter wg.Wait()
 		// while we call wg.Add(1).
-		c.reconnectMu.Lock()
+		c.lifecycleMu.Lock()
 		if c.stopping.Load() {
-			c.reconnectMu.Unlock()
+			c.lifecycleMu.Unlock()
 			return fmt.Errorf("channel stopped during QR setup")
 		}
 		c.wg.Add(1)
-		c.reconnectMu.Unlock()
+		c.lifecycleMu.Unlock()
 		go func() {
 			defer c.wg.Done()
 			for {
@@ -236,14 +234,14 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 func (c *WhatsAppNativeChannel) Stop(ctx context.Context) error {
 	logger.InfoC("whatsapp", "Stopping WhatsApp native channel")
 
-	// Mark as stopping under reconnectMu so the flag is visible to
+	// Mark as stopping under lifecycleMu so the flag is visible to
 	// eventHandler atomically with respect to its wg.Add(1) call.
 	// This closes the TOCTOU window where eventHandler could check
 	// stopping (false), then Stop sets it true + enters wg.Wait,
 	// then eventHandler calls wg.Add(1) — causing a panic.
-	c.reconnectMu.Lock()
+	c.lifecycleMu.Lock()
 	c.stopping.Store(true)
-	c.reconnectMu.Unlock()
+	c.lifecycleMu.Unlock()
 
 	if c.runCancel != nil {
 		c.runCancel()
@@ -260,7 +258,7 @@ func (c *WhatsAppNativeChannel) Stop(ctx context.Context) error {
 		client.Disconnect()
 	}
 
-	// Wait for background goroutines (QR handler, reconnect) to finish in a
+	// Wait for background goroutines (QR handler) to finish in a
 	// context-aware way so Stop can be bounded by ctx.
 	done := make(chan struct{})
 	go func() {
@@ -294,72 +292,7 @@ func (c *WhatsAppNativeChannel) eventHandler(evt any) {
 	case *events.Message:
 		c.handleIncoming(evt.(*events.Message))
 	case *events.Disconnected:
-		logger.InfoCF("whatsapp", "WhatsApp disconnected, will attempt reconnection", nil)
-		c.reconnectMu.Lock()
-		if c.reconnecting {
-			c.reconnectMu.Unlock()
-			return
-		}
-		// Check stopping while holding the lock so the check and wg.Add
-		// are atomic with respect to Stop() setting the flag + calling
-		// wg.Wait(). This prevents the TOCTOU race.
-		if c.stopping.Load() {
-			c.reconnectMu.Unlock()
-			return
-		}
-		c.reconnecting = true
-		c.wg.Add(1)
-		c.reconnectMu.Unlock()
-		go func() {
-			defer c.wg.Done()
-			c.reconnectWithBackoff()
-		}()
-	}
-}
-
-func (c *WhatsAppNativeChannel) reconnectWithBackoff() {
-	defer func() {
-		c.reconnectMu.Lock()
-		c.reconnecting = false
-		c.reconnectMu.Unlock()
-	}()
-
-	backoff := reconnectInitial
-	for {
-		select {
-		case <-c.runCtx.Done():
-			return
-		default:
-		}
-
-		c.mu.Lock()
-		client := c.client
-		c.mu.Unlock()
-		if client == nil {
-			return
-		}
-
-		logger.InfoCF("whatsapp", "WhatsApp reconnecting", map[string]any{"backoff": backoff.String()})
-		err := client.Connect()
-		if err == nil {
-			logger.InfoC("whatsapp", "WhatsApp reconnected")
-			return
-		}
-
-		logger.WarnCF("whatsapp", "WhatsApp reconnect failed", map[string]any{"error": err.Error()})
-
-		select {
-		case <-c.runCtx.Done():
-			return
-		case <-time.After(backoff):
-			if backoff < reconnectMax {
-				next := time.Duration(float64(backoff) * reconnectMultiplier)
-				if next > reconnectMax {
-					next = reconnectMax
-				}
-				backoff = next
-			}
-		}
+		logger.InfoCF("whatsapp", "WhatsApp disconnected; native auto-reconnect owns recovery", nil)
 	}
 }
 
@@ -742,11 +675,13 @@ func (c *WhatsAppNativeChannel) Send(ctx context.Context, msg bus.OutboundMessag
 	}
 
 	waMsg := buildWhatsAppTextMessage(msg, to)
-	logWhatsAppOutboundPreparation("text", to, msg.ReplyToMessageID, whatsAppContextInfo(waMsg), nil)
+	logWhatsAppOutboundPreparation("text", to, msg.ReplyToMessageID, whatsAppContextInfo(waMsg), map[string]any{"trace_id": msg.TraceID})
 
-	if _, err = client.SendMessage(ctx, to, waMsg); err != nil {
+	response, err := c.sendMessage(ctx, client, to, waMsg)
+	if err != nil {
 		return fmt.Errorf("whatsapp send: %w", channels.ErrTemporary)
 	}
+	logger.InfoCF("whatsapp", "WhatsApp API accepted", map[string]any{"message_id": response.ID, "trace_id": msg.TraceID})
 	return nil
 }
 
@@ -784,39 +719,41 @@ func (c *WhatsAppNativeChannel) SendMedia(ctx context.Context, msg bus.OutboundM
 	replyContext := buildWhatsAppReplyContext(to, msg.ReplyToMessageID, msg.ReplyToSenderID)
 	logWhatsAppOutboundPreparation("media", to, msg.ReplyToMessageID, replyContext, map[string]any{
 		"media_parts": len(msg.Parts),
+		"trace_id":    msg.TraceID,
 	})
 
+	type preparedMedia struct {
+		part resolvedWhatsAppMediaPart
+		data []byte
+	}
+	prepared := make([]preparedMedia, 0, len(msg.Parts))
 	for _, part := range msg.Parts {
 		localPath, meta, err := store.ResolveWithMeta(part.Ref)
 		if err != nil {
-			logger.ErrorCF("whatsapp", "Failed to resolve media ref", map[string]any{
-				"ref":   part.Ref,
-				"error": err.Error(),
-			})
-			continue
+			return fmt.Errorf("resolve outbound media: %w", channels.ErrSendFailed)
 		}
-
-		resolvedPart := resolveWhatsAppMediaPart(part, localPath, meta)
 		data, err := os.ReadFile(localPath)
 		if err != nil {
-			logger.ErrorCF("whatsapp", "Failed to read media file", map[string]any{
-				"path":  localPath,
-				"error": err.Error(),
-			})
-			continue
+			return fmt.Errorf("read outbound media: %w", channels.ErrSendFailed)
 		}
+		prepared = append(prepared, preparedMedia{resolveWhatsAppMediaPart(part, localPath, meta), data})
+	}
+	for _, item := range prepared {
+		resolvedPart, data := item.part, item.data
 
 		uploadType, _ := buildWhatsAppMediaMessage(resolvedPart, whatsmeow.UploadResponse{}, replyContext)
-		uploadResp, err := client.Upload(ctx, data, uploadType)
+		uploadResp, err := c.upload(ctx, client, data, uploadType)
 		if err != nil {
 			return fmt.Errorf("whatsapp upload media: %w", channels.ErrTemporary)
 		}
 
 		_, waMsg := buildWhatsAppMediaMessage(resolvedPart, uploadResp, replyContext)
 
-		if _, err = client.SendMessage(ctx, to, waMsg); err != nil {
+		response, err := c.sendMessage(ctx, client, to, waMsg)
+		if err != nil {
 			return fmt.Errorf("whatsapp send media: %w", channels.ErrTemporary)
 		}
+		logger.InfoCF("whatsapp", "WhatsApp API accepted media", map[string]any{"message_id": response.ID, "trace_id": msg.TraceID})
 	}
 
 	return nil
@@ -1043,7 +980,8 @@ func (c *WhatsAppNativeChannel) SendReaction(ctx context.Context, msg bus.Outbou
 		return err
 	}
 
-	if _, err = client.SendMessage(ctx, to, waMsg); err != nil {
+	_, err = c.sendMessage(ctx, client, to, waMsg)
+	if err != nil {
 		return fmt.Errorf("whatsapp send reaction: %w", channels.ErrTemporary)
 	}
 	return nil
@@ -1183,4 +1121,17 @@ func normalizeWhatsAppJID(s string) string {
 		return strings.TrimSpace(id)
 	}
 	return s
+}
+
+func (c *WhatsAppNativeChannel) sendMessage(ctx context.Context, client *whatsmeow.Client, to types.JID, msg *waE2E.Message) (whatsmeow.SendResponse, error) {
+	if c.sendMessageHook != nil {
+		return c.sendMessageHook(ctx, to, msg)
+	}
+	return client.SendMessage(ctx, to, msg)
+}
+func (c *WhatsAppNativeChannel) upload(ctx context.Context, client *whatsmeow.Client, data []byte, kind whatsmeow.MediaType) (whatsmeow.UploadResponse, error) {
+	if c.uploadHook != nil {
+		return c.uploadHook(ctx, data, kind)
+	}
+	return client.Upload(ctx, data, kind)
 }

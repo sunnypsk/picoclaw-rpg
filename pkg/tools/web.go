@@ -631,7 +631,11 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("request failed: %v", err))
+		kind := "request_error"
+		if errors.Is(err, context.DeadlineExceeded) {
+			kind = "timeout"
+		}
+		return webFetchFailure(kind, 0, err.Error())
 	}
 
 	resp.Body = http.MaxBytesReader(nil, resp.Body, t.fetchLimitBytes)
@@ -670,18 +674,39 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		extractor = "raw"
 	}
 
+	state := "ok"
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		state = "http_error"
+	} else if strings.TrimSpace(text) == "" {
+		state = "empty_body"
+	} else {
+		lower := strings.ToLower(string(body))
+		for _, marker := range []string{"cf-chl-", "<title>just a moment", "<title>attention required", "g-recaptcha", "verify you are human"} {
+			if strings.Contains(lower, marker) {
+				state = "blocked"
+				break
+			}
+		}
+	}
+	if state != "ok" && maxChars > 1024 {
+		maxChars = 1024
+	}
+	if state == "ok" {
+		recordWebEvidence(ctx, urlStr, resp.Request.URL.String())
+	}
 	truncated := len(text) > maxChars
 	if truncated {
 		text = text[:maxChars]
 	}
 
 	result := map[string]any{
-		"url":       urlStr,
-		"status":    resp.StatusCode,
-		"extractor": extractor,
-		"truncated": truncated,
-		"length":    len(text),
-		"text":      text,
+		"url":         urlStr,
+		"status":      resp.StatusCode,
+		"fetch_state": state,
+		"extractor":   extractor,
+		"truncated":   truncated,
+		"length":      len(text),
+		"text":        text,
 	}
 
 	resultJSON, _ := json.MarshalIndent(result, "", "  ")
@@ -700,6 +725,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	return &ToolResult{
 		ForLLM:  string(resultJSON),
 		ForUser: forUser,
+		IsError: state != "ok",
 	}
 }
 

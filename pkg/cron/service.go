@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/adhocore/gronx"
 
 	"github.com/sipeed/picoclaw/pkg/fileutil"
+	"github.com/sipeed/picoclaw/pkg/routing"
 )
 
 type CronSchedule struct {
@@ -24,13 +26,15 @@ type CronSchedule struct {
 }
 
 type CronPayload struct {
-	Kind       string `json:"kind"`
-	Message    string `json:"message"`
-	Command    string `json:"command,omitempty"`
-	Deliver    bool   `json:"deliver"`
-	Channel    string `json:"channel,omitempty"`
-	To         string `json:"to,omitempty"`
-	SessionKey string `json:"session_key,omitempty"`
+	MinVerifiedSources int                `json:"min_verified_sources,omitempty"`
+	SourcePeer         *routing.RoutePeer `json:"source_peer,omitempty"`
+	Kind               string             `json:"kind"`
+	Message            string             `json:"message"`
+	Command            string             `json:"command,omitempty"`
+	Deliver            bool               `json:"deliver"`
+	Channel            string             `json:"channel,omitempty"`
+	To                 string             `json:"to,omitempty"`
+	SessionKey         string             `json:"session_key,omitempty"`
 }
 
 type CronJobState struct {
@@ -267,6 +271,13 @@ func (cs *CronService) computeNextRun(schedule *CronSchedule, nowMS int64) *int6
 
 		// Use gronx to calculate next run time
 		now := time.UnixMilli(nowMS)
+		if schedule.TZ != "" {
+			loc, err := time.LoadLocation(schedule.TZ)
+			if err != nil {
+				return nil
+			}
+			now = now.In(loc)
+		}
 		nextTime, err := gronx.NextTickAfter(schedule.Expr, now, false)
 		if err != nil {
 			log.Printf("[cron] failed to compute next run for expr '%s': %v", schedule.Expr, err)
@@ -347,6 +358,7 @@ func (cs *CronService) AddJob(
 	message string,
 	deliver bool,
 	channel, to, sessionKey string,
+	sourcePeers ...*routing.RoutePeer,
 ) (*CronJob, error) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
@@ -356,6 +368,18 @@ func (cs *CronService) AddJob(
 	// One-time tasks (at) should be deleted after execution
 	deleteAfterRun := (schedule.Kind == "at")
 
+	kind := "direct"
+	if strings.HasSuffix(to, "@g.us") {
+		kind = "group"
+	}
+	peer := &routing.RoutePeer{Kind: kind, ID: to}
+	if len(sourcePeers) > 0 && sourcePeers[0] != nil && sourcePeers[0].ID == to {
+		value := *sourcePeers[0]
+		peer = &value
+	}
+	if strings.HasSuffix(to, "@g.us") {
+		peer.Kind = "group"
+	}
 	job := CronJob{
 		ID:       generateID(),
 		Name:     name,
@@ -368,6 +392,7 @@ func (cs *CronService) AddJob(
 			Channel:    channel,
 			To:         to,
 			SessionKey: sessionKey,
+			SourcePeer: peer,
 		},
 		State: CronJobState{
 			NextRunAtMS: cs.computeNextRun(&schedule, now),

@@ -591,11 +591,12 @@ func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWork
 	}
 
 	// All retries exhausted or permanent failure
-	logger.ErrorCF("channels", "Send failed", map[string]any{
-		"channel": name,
-		"chat_id": msg.ChatID,
-		"error":   lastErr.Error(),
-		"retries": maxRetries,
+	logger.ErrorCF("channels", "Send finally failed", map[string]any{
+		"trace_id": msg.TraceID,
+		"channel":  name,
+		"chat_id":  msg.ChatID,
+		"error":    lastErr.Error(),
+		"retries":  maxRetries,
 	})
 }
 
@@ -790,11 +791,12 @@ func (m *Manager) sendMediaWithRetry(ctx context.Context, name string, w *channe
 	}
 
 	// All retries exhausted or permanent failure
-	logger.ErrorCF("channels", "SendMedia failed", map[string]any{
-		"channel": name,
-		"chat_id": msg.ChatID,
-		"error":   lastErr.Error(),
-		"retries": maxRetries,
+	logger.ErrorCF("channels", "SendMedia finally failed", map[string]any{
+		"trace_id": msg.TraceID,
+		"channel":  name,
+		"chat_id":  msg.ChatID,
+		"error":    lastErr.Error(),
+		"retries":  maxRetries,
 	})
 }
 

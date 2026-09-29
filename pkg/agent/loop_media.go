@@ -63,6 +63,13 @@ func normalizeInboundPromptMedia(
 		}
 
 		mediaType := utils.InferMediaType(meta.Filename, meta.ContentType)
+		if input, validationErr := media.ReadImage(localPath); validationErr == nil {
+			mediaType = "image"
+			meta.ContentType = input.MIME
+		} else if mediaType == "image" {
+			promptNotes = append(promptNotes, "Attachment is not a valid supported image. Ask the sender to resend the original JPEG, PNG or WebP; do not search for substitute files.")
+			continue
+		}
 		switch mediaType {
 		case "image":
 			keptMedia = append(keptMedia, ref)

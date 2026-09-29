@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"github.com/sipeed/picoclaw/pkg/routing"
 	"strings"
 )
 
@@ -178,4 +179,41 @@ func ToolToSchema(tool Tool) map[string]any {
 			"parameters":  tool.Parameters(),
 		},
 	}
+}
+
+var sourceSessionKey = &toolCtxKey{"sourceSession"}
+
+func WithSourceSession(ctx context.Context, session string) context.Context {
+	return context.WithValue(ctx, sourceSessionKey, session)
+}
+func ToolSourceSession(ctx context.Context) string {
+	if v, ok := ctx.Value(sourceSessionKey).(string); ok {
+		if strings.Contains(v, ":scheduled-reminder:") || strings.Contains(v, ":heartbeat") {
+			return ""
+		}
+		return v
+	}
+	v := ToolSessionKey(ctx)
+	if strings.Contains(v, ":scheduled-reminder:") || strings.Contains(v, ":heartbeat") {
+		return ""
+	}
+	return v
+}
+
+var sourcePeerKey = &toolCtxKey{"sourcePeer"}
+
+func WithSourcePeer(ctx context.Context, peer *routing.RoutePeer) context.Context {
+	if peer == nil {
+		return ctx
+	}
+	copyPeer := *peer
+	return context.WithValue(ctx, sourcePeerKey, &copyPeer)
+}
+func ToolSourcePeer(ctx context.Context) *routing.RoutePeer {
+	peer, _ := ctx.Value(sourcePeerKey).(*routing.RoutePeer)
+	if peer == nil {
+		return nil
+	}
+	copyPeer := *peer
+	return &copyPeer
 }

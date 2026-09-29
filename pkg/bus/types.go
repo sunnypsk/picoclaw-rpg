@@ -36,6 +36,7 @@ type InboundMessage struct {
 }
 
 type OutboundMessage struct {
+	TraceID          string `json:"trace_id,omitempty"`
 	Channel          string `json:"channel"`
 	ChatID           string `json:"chat_id"`
 	Content          string `json:"content"`
@@ -54,6 +55,7 @@ type MediaPart struct {
 
 // OutboundMediaMessage carries media attachments from Agent to channels via the bus.
 type OutboundMediaMessage struct {
+	TraceID          string      `json:"trace_id,omitempty"`
 	Channel          string      `json:"channel"`
 	ChatID           string      `json:"chat_id"`
 	Parts            []MediaPart `json:"parts"`

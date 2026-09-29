@@ -13,12 +13,17 @@ RUN go mod download
 
 # Copy source and build
 COPY . .
-RUN make build
+ARG VERSION=local
+ARG GIT_COMMIT=unknown
+ARG BUILD_TIME=unknown
+RUN make build VERSION="$VERSION" GIT_COMMIT="$GIT_COMMIT" BUILD_TIME="$BUILD_TIME"
 
 # ============================================================
 # Stage 2: Standard runtime image
 # ============================================================
 FROM alpine:3.24
+ARG GIT_COMMIT=unknown
+LABEL org.opencontainers.image.revision=$GIT_COMMIT
 
 ENV VIRTUAL_ENV=/opt/picoclaw-python
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"

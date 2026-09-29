@@ -233,7 +233,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Start(); err != nil {
+	if err := startWithMediaProtection(cmd); err != nil {
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
 	}
 
@@ -307,6 +307,14 @@ func (t *ExecTool) userOutput(output string, showOutput bool) string {
 
 func (t *ExecTool) guardCommand(command, cwd string) string {
 	cmd := strings.TrimSpace(command)
+	for _, raw := range extractAbsoluteCommandPaths(cmd) {
+		if err := checkPrivateMediaPath(raw); err != nil {
+			return "Command blocked: private managed media"
+		}
+	}
+	if err := checkPrivateMediaPath(cwd); err != nil {
+		return "Command blocked: private managed media"
+	}
 	lower := strings.ToLower(cmd)
 
 	// Custom allow patterns exempt a command from deny checks.

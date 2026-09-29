@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
+	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
@@ -20,12 +22,13 @@ func (al *AgentLoop) ProcessScheduledReminder(
 		ctx = context.Background()
 	}
 
+	ctx = bus.WithTrace(ctx, "cron:"+req.JobID+":"+uuid.NewString())
 	agent, routedSessionKey := al.resolveScheduledReminderTarget(req)
 	if agent == nil {
 		return "", fmt.Errorf("no agent available for scheduled reminder")
 	}
 
-	if req.Deliver {
+	if req.Deliver && req.MinVerifiedSources == 0 {
 		sendCtx := ctx
 		mirrorToSession := false
 		if routedSessionKey != "" {
@@ -44,13 +47,22 @@ func (al *AgentLoop) ProcessScheduledReminder(
 		}
 	}
 
-	reminderCtx := ctx
+	reminderCtx := tools.WithSendState(ctx)
+	if source, ok := scheduledReminderRouteInput(req, req.SessionKey); ok {
+		reminderCtx = tools.WithSourcePeer(reminderCtx, source.Peer)
+	}
 	capture := &proactiveOutputCapture{}
 	if routedSessionKey != "" {
 		reminderCtx = withMirroredSessionKey(reminderCtx, routedSessionKey)
 		reminderCtx = withMirroredOutboundCapture(reminderCtx, capture)
 	}
 
+	var evidence *tools.WebEvidence
+	if req.MinVerifiedSources > 0 {
+		reminderCtx, _ = bus.WithOutputBuffer(reminderCtx)
+		reminderCtx, evidence = tools.WithWebEvidence(reminderCtx)
+		req.Content += newsInstruction + fmt.Sprintf("\nRequired independent sites: %d", req.MinVerifiedSources)
+	}
 	response, err := al.runAgentLoop(reminderCtx, agent, processOptions{
 		SessionKey:        scheduledReminderSessionKey(agent.ID, req.JobID),
 		ContextSessionKey: routedSessionKey,
@@ -63,6 +75,20 @@ func (al *AgentLoop) ProcessScheduledReminder(
 		SendResponse:      false,
 		PersistSession:    false,
 	})
+	if req.MinVerifiedSources > 0 {
+		final := ""
+		if err == nil {
+			final, err = validateNews(response, req.MinVerifiedSources, evidence)
+		}
+		if err != nil {
+			final = newsFailure
+		}
+		sendCtx := withMirroredSessionKey(ctx, routedSessionKey)
+		if !al.publishAgentMessage(sendCtx, agent, req.Channel, req.ChatID, final, routedSessionKey != "") {
+			return "", fmt.Errorf("failed to publish final news result")
+		}
+		return final, err
+	}
 	if err != nil {
 		return "", err
 	}
@@ -75,7 +101,7 @@ func (al *AgentLoop) ProcessScheduledReminder(
 		}
 	}
 
-	if agentMessageAlreadySent(agent) {
+	if tools.MessageSent(reminderCtx) {
 		return "ok", nil
 	}
 
@@ -100,37 +126,21 @@ func (al *AgentLoop) ProcessScheduledReminder(
 func (al *AgentLoop) resolveScheduledReminderTarget(
 	req tools.ScheduledReminderRequest,
 ) (*AgentInstance, string) {
-	sessionKey := strings.ToLower(strings.TrimSpace(req.SessionKey))
-	if parsed := routing.ParseAgentSessionKey(sessionKey); parsed != nil {
-		routedSessionKey := al.resolveRotatedSessionKey(parsed.AgentID, sessionKey)
-		if agent, ok := al.registry.GetAgent(parsed.AgentID); ok && agent != nil {
-			return agent, routedSessionKey
-		}
-		if route, ok := al.scheduledReminderRoute(req, sessionKey); ok {
-			if agent := al.resolveAgentForRoute(route); agent != nil {
-				return agent, routedSessionKey
-			}
-		}
-		if strings.HasPrefix(parsed.AgentID, "auto-") {
-			if agent := al.resolveAgentForRoute(routing.ResolvedRoute{
-				AgentID:   parsed.AgentID,
-				MatchedBy: "auto-provision",
-			}); agent != nil {
-				return agent, routedSessionKey
-			}
-		}
-		if agent := al.registry.GetDefaultAgent(); agent != nil {
-			return agent, routedSessionKey
-		}
-	}
 
-	if route, ok := al.scheduledReminderRoute(req, ""); ok {
+	if route, ok := al.scheduledReminderRoute(req, req.SessionKey); ok {
 		if agent := al.resolveAgentForRoute(route); agent != nil {
-			return agent, ""
+			session := route.SessionKey
+			if parsed := routing.ParseAgentSessionKey(req.SessionKey); parsed != nil && parsed.AgentID == agent.ID {
+				parts := strings.Split(parsed.Rest, ":")
+				if len(parts) == 3 && parts[0] == req.Channel && parts[2] == strings.ToLower(req.ChatID) && parts[1] == scheduledPeerKind(req.ChatID) {
+					session = req.SessionKey
+				}
+			}
+			return agent, al.resolveRotatedSessionKey(agent.ID, session)
 		}
 	}
-
 	return al.registry.GetDefaultAgent(), ""
+
 }
 
 func (al *AgentLoop) scheduledReminderRoute(
@@ -148,40 +158,8 @@ func scheduledReminderRouteInput(
 	req tools.ScheduledReminderRequest,
 	sessionKey string,
 ) (routing.RouteInput, bool) {
-	input := routing.RouteInput{
-		Channel: strings.ToLower(strings.TrimSpace(req.Channel)),
-	}
-
-	if parsed := routing.ParseAgentSessionKey(strings.ToLower(strings.TrimSpace(sessionKey))); parsed != nil {
-		parts := strings.Split(strings.ToLower(strings.TrimSpace(parsed.Rest)), ":")
-		switch {
-		case len(parts) == 2 && parts[0] == "direct":
-			input.Peer = &routing.RoutePeer{Kind: "direct", ID: parts[1]}
-		case len(parts) == 3 && isScheduledReminderPeerKind(parts[1]):
-			if input.Channel == "" {
-				input.Channel = parts[0]
-			}
-			input.Peer = &routing.RoutePeer{Kind: parts[1], ID: parts[2]}
-		case len(parts) == 4 && parts[2] == "direct":
-			if input.Channel == "" {
-				input.Channel = parts[0]
-			}
-			input.AccountID = parts[1]
-			input.Peer = &routing.RoutePeer{Kind: "direct", ID: parts[3]}
-		}
-	}
-
-	if input.Peer == nil {
-		chatID := strings.TrimSpace(req.ChatID)
-		if chatID != "" {
-			input.Peer = &routing.RoutePeer{Kind: "direct", ID: chatID}
-		}
-	}
-
-	if input.Channel == "" {
-		return routing.RouteInput{}, false
-	}
-	return input, true
+	input := routing.ScheduledSourceInput(req.Channel, req.ChatID, sessionKey, req.SourcePeer)
+	return input, input.Channel != ""
 }
 
 func isScheduledReminderPeerKind(kind string) bool {
@@ -200,4 +178,11 @@ func scheduledReminderSessionKey(agentID, jobID string) string {
 		normalizedAgentID = routing.NormalizeAgentID("main")
 	}
 	return fmt.Sprintf("agent:%s:scheduled-reminder:%s", normalizedAgentID, replacer.Replace(strings.TrimSpace(jobID)))
+}
+
+func scheduledPeerKind(chat string) string {
+	if strings.HasSuffix(chat, "@g.us") {
+		return "group"
+	}
+	return "direct"
 }

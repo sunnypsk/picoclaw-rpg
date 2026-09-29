@@ -136,6 +136,40 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]any) *T
 	client := *t.httpClient
 	client.Timeout = timeout
 
+	if store, ok := t.mediaStore.(*media.FileMediaStore); ok {
+		var refs []string
+		for _, key := range []string{"image", "input_image"} {
+			if v, ok := args[key].(string); ok {
+				refs = append(refs, v)
+			}
+		}
+		switch values := args["input_images"].(type) {
+		case []any:
+			for _, v := range values {
+				if r, ok := v.(string); ok {
+					refs = append(refs, r)
+				}
+			}
+		case []string:
+			refs = append(refs, values...)
+		}
+		for _, ref := range append([]string(nil), refs...) {
+			if strings.TrimSpace(ref) == "media://current" {
+				refs = append(refs, ToolMediaRefs(ctx)...)
+			}
+		}
+		for _, ref := range refs {
+			ref = strings.TrimSpace(ref)
+			if !strings.HasPrefix(ref, "media://") || ref == "media://current" {
+				continue
+			}
+			release, err := store.AcquireImage(ref, media.ImageOrigin{Channel: ToolChannel(ctx), Chat: ToolChatID(ctx), Sender: ToolSenderID(ctx)})
+			if err != nil {
+				return ErrorResult(err.Error())
+			}
+			defer release()
+		}
+	}
 	resolvedInputs, err := t.resolveInputImages(ctx, args)
 	if err != nil {
 		return ErrorResult(err.Error())
@@ -342,7 +376,16 @@ func (t *GenerateImageTool) resolveInputRefWithContext(ctx context.Context, valu
 			return "", fmt.Errorf("resolve input media %q: multiple current inbound images are available; pass one exact media:// ref from this turn", value)
 		}
 	}
-	return t.resolveInputRef(value)
+	path, err := t.resolveInputRef(value)
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(value, "media://") {
+		if store, ok := t.mediaStore.(*media.FileMediaStore); ok && store.IsManagedPath(path) {
+			return "", fmt.Errorf("managed images require their scoped media reference")
+		}
+	}
+	return path, nil
 }
 
 func (t *GenerateImageTool) resolveInputRef(value string) (string, error) {
@@ -405,27 +448,11 @@ func buildImagePayload(model, prompt string, inputImages []string, args map[stri
 }
 
 func encodeImageAsDataURL(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	input, err := media.ReadImage(path)
 	if err != nil {
-		return "", fmt.Errorf("read input image %s: %w", path, err)
+		return "", err
 	}
-	contentType := detectInputImageContentType(path, data)
-	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
-}
-
-func detectInputImageContentType(path string, data []byte) string {
-	if contentType := normalizeMIMEType(mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))); isImageMIME(contentType) {
-		return contentType
-	}
-	if contentType := normalizeMIMEType(http.DetectContentType(data)); isImageMIME(contentType) {
-		return contentType
-	}
-	if ext := utils.PreferredExtensionForBytes(data); ext != "" {
-		if contentType := normalizeMIMEType(mime.TypeByExtension(ext)); isImageMIME(contentType) {
-			return contentType
-		}
-	}
-	return "image/png"
+	return "data:" + input.MIME + ";base64," + base64.StdEncoding.EncodeToString(input.Data), nil
 }
 
 func normalizeMIMEType(value string) string {
@@ -565,38 +592,22 @@ func buildImageAPIRequestWithOverrides(
 }
 
 func addMultipartImage(writer *multipart.Writer, fieldName, path string) error {
-	file, err := os.Open(path)
+	input, err := media.ReadImage(path)
 	if err != nil {
-		return fmt.Errorf("open input image %s: %w", path, err)
+		return err
 	}
-	defer file.Close()
-
-	sample := make([]byte, 512)
-	n, readErr := file.Read(sample)
-	if readErr != nil && !errors.Is(readErr, io.EOF) {
-		return fmt.Errorf("read input image header %s: %w", path, readErr)
-	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("rewind input image %s: %w", path, err)
-	}
-
 	header := make(textproto.MIMEHeader)
 	header.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{
 		"name":     fieldName,
-		"filename": filepath.Base(path),
+		"filename": strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)) + input.Extension,
 	}))
-	header.Set("Content-Type", detectInputImageContentType(path, sample[:n]))
-
+	header.Set("Content-Type", input.MIME)
 	part, err := writer.CreatePart(header)
 	if err != nil {
-		return fmt.Errorf("create multipart image part for %s: %w", path, err)
+		return err
 	}
-
-	if _, err := io.Copy(part, file); err != nil {
-		return fmt.Errorf("copy input image %s: %w", path, err)
-	}
-
-	return nil
+	_, err = part.Write(input.Data)
+	return err
 }
 
 func (t *GenerateImageTool) sendImageProviderRequest(
@@ -887,6 +898,7 @@ func (t *GenerateImageTool) storeOutput(ctx context.Context, output imageOutput)
 		Filename:    filename,
 		ContentType: contentType,
 		Source:      "tool:generate_image",
+		Origin:      &media.ImageOrigin{Channel: ToolChannel(ctx), Chat: ToolChatID(ctx), Sender: ToolSenderID(ctx)},
 		Owned:       true,
 	}, scope)
 	if err != nil {

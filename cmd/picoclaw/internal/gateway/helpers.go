@@ -128,6 +128,13 @@ func gatewayCmd(debug bool) error {
 		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
 		Interval: time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute,
 	})
+	imageStoreDir := filepath.Join(internal.GetPicoclawHome(), "private-media", "images")
+	if err := tools.ProtectMediaDirectory(imageStoreDir); err != nil {
+		return err
+	}
+	if err := mediaStore.EnablePersistence(imageStoreDir); err != nil {
+		return fmt.Errorf("restore image references: %w", err)
+	}
 	mediaStore.Start()
 
 	channelManager, err := channels.NewManager(cfg, msgBus, mediaStore)
@@ -239,8 +246,7 @@ func setupCronTool(
 
 	// Set the onJob handler
 	cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
-		result := cronTool.ExecuteJob(context.Background(), job)
-		return result, nil
+		return cronTool.ExecuteJobWithError(context.Background(), job)
 	})
 
 	return cronService

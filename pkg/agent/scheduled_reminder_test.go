@@ -119,7 +119,7 @@ func routedReminderSessionKey(agentID string) string {
 	return strings.ToLower(routing.BuildAgentPeerSessionKey(routing.SessionKeyParams{
 		AgentID: agentID,
 		Channel: "telegram",
-		Peer:    &routing.RoutePeer{Kind: "direct", ID: "user1"},
+		Peer:    &routing.RoutePeer{Kind: "direct", ID: "chat1"},
 		DMScope: routing.DMScopePerChannelPeer,
 	}))
 }
@@ -162,7 +162,7 @@ func TestProcessScheduledReminder_DirectDeliveryMirrorsToRoutedSession(t *testin
 	}
 }
 
-func TestProcessScheduledReminder_DirectDeliveryWithoutSessionKeyDoesNotMirror(t *testing.T) {
+func TestProcessScheduledReminder_DirectDeliveryReconstructsSession(t *testing.T) {
 	al, agent, msgBus := newScheduledReminderLoop(t, &mockProvider{})
 
 	routedSessionKey := routedReminderSessionKey(agent.ID)
@@ -187,8 +187,8 @@ func TestProcessScheduledReminder_DirectDeliveryWithoutSessionKeyDoesNotMirror(t
 	}
 
 	history := agent.Sessions.GetHistory(routedSessionKey)
-	if len(history) != 1 {
-		t.Fatalf("expected routed history to remain unchanged without session key, got %+v", history)
+	if len(history) != 2 {
+		t.Fatalf("expected reconstructed routed history to include reminder, got %+v", history)
 	}
 }
 
@@ -230,8 +230,8 @@ func TestResolveScheduledReminderTarget_UsesChannelRouteWithoutSessionKey(t *tes
 	if agent.ID != "telegram-bot" {
 		t.Fatalf("resolved agent = %q, want telegram-bot", agent.ID)
 	}
-	if routedSessionKey != "" {
-		t.Fatalf("expected no routed session key without stored session, got %q", routedSessionKey)
+	if routedSessionKey == "" {
+		t.Fatalf("expected reconstructed conversation session, got %q", routedSessionKey)
 	}
 }
 
@@ -258,7 +258,7 @@ func TestResolveScheduledReminderTarget_RecreatesAutoProvisionedAgentFromSession
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
 	route := al.registry.ResolveRoute(routing.RouteInput{
 		Channel: "telegram",
-		Peer:    &routing.RoutePeer{Kind: "direct", ID: "user1"},
+		Peer:    &routing.RoutePeer{Kind: "direct", ID: "chat1"},
 	})
 	if route.MatchedBy != "auto-provision" {
 		t.Fatalf("route matched_by = %q, want auto-provision", route.MatchedBy)
@@ -269,7 +269,7 @@ func TestResolveScheduledReminderTarget_RecreatesAutoProvisionedAgentFromSession
 
 	agent, routedSessionKey := al.resolveScheduledReminderTarget(tools.ScheduledReminderRequest{
 		Channel:    "telegram",
-		ChatID:     "user1",
+		ChatID:     "chat1",
 		SessionKey: route.SessionKey,
 	})
 	if agent == nil {
