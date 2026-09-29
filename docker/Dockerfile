@@ -1,7 +1,7 @@
 # ============================================================
 # Stage 1: Build the picoclaw binary
 # ============================================================
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26.8-alpine3.24 AS builder
 
 RUN apk add --no-cache git make
 
@@ -18,7 +18,7 @@ RUN make build
 # ============================================================
 # Stage 2: Standard runtime image
 # ============================================================
-FROM alpine:3.23
+FROM alpine:3.24
 
 ENV VIRTUAL_ENV=/opt/picoclaw-python
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
@@ -26,9 +26,9 @@ ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 RUN apk add --no-cache ca-certificates tzdata curl nodejs npm python3 py3-pip && \
     python3 -m venv "${VIRTUAL_ENV}" && \
     "${VIRTUAL_ENV}/bin/pip" install --no-cache-dir \
-      gradio_client==2.2.0 \
-      openpyxl \
-      pypdf && \
+      gradio_client==2.7.1 \
+      openpyxl==3.1.5 \
+      pypdf==6.19.0 && \
     ln -sf "${VIRTUAL_ENV}/bin/python" /usr/local/bin/python3 && \
     ln -sf "${VIRTUAL_ENV}/bin/pip" /usr/local/bin/pip3
 

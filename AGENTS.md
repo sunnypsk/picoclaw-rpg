@@ -5,7 +5,7 @@ Commit: ca3d1c0
 Branch: main
 
 ## OVERVIEW
-PicoClaw is a Go 1.25 personal AI agent runtime with a Cobra CLI, gateway bot process,
+PicoClaw is a Go 1.26 personal AI agent runtime with a Cobra CLI, gateway bot process,
 web/TUI launchers, provider adapters, channel integrations, tools, skills, and migration
 support. This repo is closer to a runtime platform than a small CLI wrapper.
 
@@ -66,7 +66,7 @@ up-to-date index with 374 files, 7,036 nodes, and 22,326 edges.
 | `MigrateInstance` | type | `pkg/migrate/migrate.go` | codegraph-indexed | Migration planning and execution coordinator. |
 
 ## CONVENTIONS
-- Use Go `1.25.x`; module path is `github.com/sipeed/picoclaw`.
+- Use Go `1.26.8` or a later `1.26.x` patch; module path is `github.com/sipeed/picoclaw`.
 - Keep Go lines within 120 chars; `.golangci.yaml` enables `gci`, `gofmt`, `gofumpt`,
   `goimports`, and `golines` formatting.
 - Many `golangci-lint` rules are disabled intentionally for now; do not assume lint is strict.

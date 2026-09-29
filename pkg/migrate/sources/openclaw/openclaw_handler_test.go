@@ -164,7 +164,7 @@ func TestResolveSourceHomeWithTilde(t *testing.T) {
 
 	result, err := resolveSourceHome("~/openclaw")
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(home, "openclaw"), result)
+	assert.Equal(t, filepath.Join(home, "openclaw"), filepath.Clean(result))
 }
 
 func TestFindSourceConfig(t *testing.T) {

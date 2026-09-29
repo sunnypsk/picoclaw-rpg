@@ -1,11 +1,93 @@
 package slack
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
+	"sync"
 	"testing"
+
+	slacksdk "github.com/slack-go/slack"
+	"github.com/stretchr/testify/require"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/media"
 )
+
+func TestSendMediaExternalUpload(t *testing.T) {
+	content := "attachment contents"
+	var calls []string
+	var callsMu sync.Mutex
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callsMu.Lock()
+		calls = append(calls, r.URL.Path)
+		callsMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/files.getUploadURLExternal":
+			if r.FormValue("length") != strconv.Itoa(len(content)) || r.FormValue("filename") != "test.txt" {
+				t.Error("upload must include the file size and filename")
+			}
+			fmt.Fprintf(w, `{"ok":true,"upload_url":%q,"file_id":"F123"}`, server.URL+"/upload")
+		case "/upload":
+			file, _, err := r.FormFile("file")
+			if err != nil {
+				t.Error(err)
+				http.Error(w, "missing file", http.StatusBadRequest)
+				return
+			}
+			defer file.Close()
+			data, err := io.ReadAll(file)
+			if err != nil || string(data) != content {
+				t.Errorf("unexpected uploaded contents: %q, %v", data, err)
+			}
+			fmt.Fprint(w, `{"ok":true}`)
+		case "/files.completeUploadExternal":
+			if r.FormValue("channel_id") != "C123" {
+				t.Error("upload completed in the wrong channel")
+			}
+			var files []slacksdk.FileSummary
+			if err := json.Unmarshal([]byte(r.FormValue("files")), &files); err != nil ||
+				len(files) != 1 || files[0].ID != "F123" || files[0].Title != "caption" {
+				t.Errorf("unexpected completion metadata: %v, %v", files, err)
+			}
+			fmt.Fprint(w, `{"ok":true,"files":[{"id":"F123","title":"caption"}]}`)
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	channel, err := NewSlackChannel(config.SlackConfig{BotToken: "test", AppToken: "test"}, bus.NewMessageBus())
+	require.NoError(t, err)
+	channel.api = slacksdk.New("test",
+		slacksdk.OptionAPIURL(server.URL+"/"), slacksdk.OptionHTTPClient(server.Client()))
+	channel.SetRunning(true)
+	store := media.NewFileMediaStore()
+	channel.SetMediaStore(store)
+	path := filepath.Join(t.TempDir(), "test.txt")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	ref, err := store.Store(path, media.MediaMeta{Filename: "test.txt"}, "test")
+	require.NoError(t, err)
+	err = channel.SendMedia(context.Background(), bus.OutboundMediaMessage{
+		ChatID: "C123",
+		Parts:  []bus.MediaPart{{Ref: ref, Filename: "test.txt", Caption: "caption"}},
+	})
+	require.NoError(t, err)
+	want := []string{"/files.getUploadURLExternal", "/upload", "/files.completeUploadExternal"}
+	callsMu.Lock()
+	defer callsMu.Unlock()
+	require.Equal(t, want, calls)
+}
 
 func TestParseSlackChatID(t *testing.T) {
 	tests := []struct {

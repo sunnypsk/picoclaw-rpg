@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	copilot "github.com/github/copilot-sdk/go"
+	copilotrpc "github.com/github/copilot-sdk/go/rpc"
 )
 
 type GitHubCopilotProvider struct {
@@ -30,9 +31,7 @@ func NewGitHubCopilotProvider(uri string, connectMode string, model string) (*Gi
 		// See https://github.com/github/copilot-sdk/blob/main/docs/getting-started.md for details
 		return nil, fmt.Errorf("stdio mode not implemented for GitHub Copilot provider; please use 'grpc' mode instead")
 	case "grpc":
-		client := copilot.NewClient(&copilot.ClientOptions{
-			CLIUrl: uri,
-		})
+		client := copilot.NewClient(copilotClientOptions(uri))
 		if err := client.Start(context.Background()); err != nil {
 			return nil, fmt.Errorf(
 				"can't connect to Github Copilot: %w; `https://github.com/github/copilot-sdk/blob/main/docs/getting-started.md#connecting-to-an-external-cli-server` for details",
@@ -40,10 +39,7 @@ func NewGitHubCopilotProvider(uri string, connectMode string, model string) (*Gi
 			)
 		}
 
-		session, err := client.CreateSession(context.Background(), &copilot.SessionConfig{
-			Model: model,
-			Hooks: &copilot.SessionHooks{},
-		})
+		session, err := client.CreateSession(context.Background(), copilotSessionConfig(model))
 		if err != nil {
 			client.Stop()
 			return nil, fmt.Errorf("create session failed: %w", err)
@@ -107,18 +103,42 @@ func (p *GitHubCopilotProvider) Chat(
 	if err != nil {
 		return nil, fmt.Errorf("failed to send message to copilot: %w", err)
 	}
+	return parseCopilotResponse(resp)
+}
 
+func copilotClientOptions(uri string) *copilot.ClientOptions {
+	options := &copilot.ClientOptions{Connection: copilot.StdioConnection{Path: "copilot"}}
+	if uri != "" {
+		options.Connection = copilot.URIConnection{URL: uri}
+	}
+	return options
+}
+
+func copilotSessionConfig(model string) *copilot.SessionConfig {
+	return &copilot.SessionConfig{
+		Model: model,
+		Hooks: &copilot.SessionHooks{},
+		// Preserve the old SDK's denial when no user can approve a tool request.
+		OnPermissionRequest: func(
+			copilot.PermissionRequest, copilot.PermissionInvocation,
+		) (copilotrpc.PermissionDecision, error) {
+			return &copilotrpc.PermissionDecisionUserNotAvailable{}, nil
+		},
+	}
+}
+
+func parseCopilotResponse(resp *copilot.SessionEvent) (*LLMResponse, error) {
 	if resp == nil {
 		return nil, fmt.Errorf("empty response from copilot")
 	}
-	if resp.Data.Content == nil {
+	message, ok := resp.Data.(*copilot.AssistantMessageData)
+	if !ok || message == nil {
 		return nil, fmt.Errorf("no content in copilot response")
 	}
-	content := *resp.Data.Content
 
 	return &LLMResponse{
 		FinishReason: "stop",
-		Content:      content,
+		Content:      message.Content,
 	}, nil
 }
 

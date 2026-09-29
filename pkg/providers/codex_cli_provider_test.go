@@ -398,21 +398,30 @@ func TestCodexCliProvider_GetDefaultModel(t *testing.T) {
 
 // --- Mock CLI Integration Test ---
 
+// Run the test executable as the mock CLI so these tests also work without a Unix shell.
+func TestMain(m *testing.M) {
+	events := os.Getenv("PICOCLAW_TEST_CODEX_EVENTS")
+	if events != "" && len(os.Args) > 1 && os.Args[1] == "exec" {
+		if path := os.Getenv("PICOCLAW_TEST_CODEX_ARGS"); path != "" {
+			if err := os.WriteFile(path, []byte(strings.Join(os.Args[1:], " ")), 0o600); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
+		fmt.Println(events)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
 func createMockCodexCLI(t *testing.T, events []string) string {
 	t.Helper()
-	tmpDir := t.TempDir()
-	scriptPath := filepath.Join(tmpDir, "codex")
-
-	var sb strings.Builder
-	sb.WriteString("#!/bin/bash\n")
-	for _, event := range events {
-		sb.WriteString(fmt.Sprintf("echo '%s'\n", event))
-	}
-
-	if err := os.WriteFile(scriptPath, []byte(sb.String()), 0o755); err != nil {
+	t.Setenv("PICOCLAW_TEST_CODEX_EVENTS", strings.Join(events, "\n"))
+	executable, err := os.Executable()
+	if err != nil {
 		t.Fatal(err)
 	}
-	return scriptPath
+	return executable
 }
 
 func TestCodexCliProvider_MockCLI_Success(t *testing.T) {
@@ -471,18 +480,12 @@ func TestCodexCliProvider_MockCLI_Error(t *testing.T) {
 }
 
 func TestCodexCliProvider_MockCLI_WithModel(t *testing.T) {
-	// Mock script that captures args to verify model flag is passed
 	tmpDir := t.TempDir()
-	scriptPath := filepath.Join(tmpDir, "codex")
-	script := `#!/bin/bash
-# Write args to a file for verification
-echo "$@" > "` + filepath.Join(tmpDir, "args.txt") + `"
-echo '{"type":"item.completed","item":{"id":"1","type":"agent_message","text":"ok"}}'
-echo '{"type":"turn.completed"}'`
-
-	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("PICOCLAW_TEST_CODEX_ARGS", filepath.Join(tmpDir, "args.txt"))
+	scriptPath := createMockCodexCLI(t, []string{
+		`{"type":"item.completed","item":{"id":"1","type":"agent_message","text":"ok"}}`,
+		`{"type":"turn.completed"}`,
+	})
 
 	p := &CodexCliProvider{
 		command:   scriptPath,
@@ -517,14 +520,7 @@ echo '{"type":"turn.completed"}'`
 }
 
 func TestCodexCliProvider_MockCLI_ContextCancel(t *testing.T) {
-	// Script that sleeps forever
-	tmpDir := t.TempDir()
-	scriptPath := filepath.Join(tmpDir, "codex")
-	script := "#!/bin/bash\nsleep 60"
-
-	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	scriptPath := createMockCodexCLI(t, []string{`{"type":"turn.completed"}`})
 
 	p := &CodexCliProvider{
 		command:   scriptPath,

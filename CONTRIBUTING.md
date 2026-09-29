@@ -56,7 +56,7 @@ For substantial new features, please open an issue first to discuss the design b
 
 ### Prerequisites
 
-- Go 1.25 or later
+- Go 1.26.8 or later
 - `make`
 
 ### Build

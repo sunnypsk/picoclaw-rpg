@@ -3,6 +3,7 @@ package auth
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -92,6 +93,9 @@ func TestStoreRoundtrip(t *testing.T) {
 }
 
 func TestStoreFilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes do not represent Windows ACLs")
+	}
 	tmpDir := setTestPicoclawHome(t)
 
 	cred := &AuthCredential{

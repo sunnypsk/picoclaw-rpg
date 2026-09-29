@@ -6,10 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestWriteFileToolDescriptionMentionsReadBackVerification(t *testing.T) {
@@ -374,17 +376,20 @@ func TestFilesystemTool_WriteFile_Restricted_CreateDir(t *testing.T) {
 
 // TestHostRW_Read_PermissionDenied verifies that hostRW.Read surfaces access denied errors.
 func TestHostRW_Read_PermissionDenied(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod cannot deny read access on Windows")
+	}
 	if os.Getuid() == 0 {
 		t.Skip("skipping permission test: running as root")
 	}
 	tmpDir := t.TempDir()
 	protected := filepath.Join(tmpDir, "protected.txt")
 	err := os.WriteFile(protected, []byte("secret"), 0o000)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer os.Chmod(protected, 0o644) // ensure cleanup
 
 	_, err = (&hostFs{}).ReadFile(protected)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "access denied")
 }
 

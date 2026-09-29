@@ -218,7 +218,7 @@ func buildCodexParams(
 			if msg.ToolCallID != "" {
 				inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
 					OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
-						CallID: msg.ToolCallID,
+						CallID: openai.Opt(msg.ToolCallID),
 						Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
 							OfString: openai.Opt(msg.Content),
 						},
@@ -269,7 +269,7 @@ func buildCodexParams(
 		case "tool":
 			inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
 				OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
-					CallID: msg.ToolCallID,
+					CallID: openai.Opt(msg.ToolCallID),
 					Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
 						OfString: openai.Opt(msg.Content),
 					},
@@ -374,9 +374,10 @@ func parseCodexResponse(resp *responses.Response) *LLMResponse {
 				}
 			}
 		case "function_call":
+			functionCall := item.AsFunctionCall()
 			var args map[string]any
-			if err := json.Unmarshal([]byte(item.Arguments), &args); err != nil {
-				args = map[string]any{"raw": item.Arguments}
+			if err := json.Unmarshal([]byte(functionCall.Arguments), &args); err != nil {
+				args = map[string]any{"raw": functionCall.Arguments}
 			}
 			toolCalls = append(toolCalls, ToolCall{
 				ID:        item.CallID,
