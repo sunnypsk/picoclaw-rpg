@@ -85,11 +85,20 @@ jobs:
           IMAGE: ${{ steps.image.outputs.name }}@${{ steps.publish.outputs.digest }}
           EXPECTED_SHA: ${{ github.sha }}
         run: |
+          manifest=$(docker buildx imagetools inspect "$IMAGE" --raw)
           for platform in linux/amd64 linux/arm64; do
-            docker pull --platform "$platform" "$IMAGE"
-            revision=$(docker image inspect "$IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
+            # Classic Docker stores cannot associate both architectures with one index digest.
+            digest=$(jq -er --arg arch "${platform#linux/}" '
+              [.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch)]
+              | if length == 1 then .[0].digest else error("expected exactly one platform manifest") end
+            ' <<< "$manifest")
+            platform_image="${IMAGE%@*}@$digest"
+            docker pull --platform "$platform" "$platform_image"
+            actual_platform=$(docker image inspect "$platform_image" --format '{{.Os}}/{{.Architecture}}')
+            test "$actual_platform" = "$platform"
+            revision=$(docker image inspect "$platform_image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
             test "$revision" = "$EXPECTED_SHA"
-            output=$(docker run --rm --platform "$platform" --entrypoint /usr/local/bin/picoclaw "$IMAGE" version)
+            output=$(docker run --rm --platform "$platform" --entrypoint /usr/local/bin/picoclaw "$platform_image" version)
             echo "$output"
             echo "$output" | grep -F "git: $EXPECTED_SHA"
             echo "$output" | grep -F 'go1.26.8'
